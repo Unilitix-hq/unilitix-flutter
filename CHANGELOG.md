@@ -1,3 +1,8 @@
+## 1.0.1
+
+* Fix: sampleRate type mismatch — Float vs Double
+  in Android native module
+
 ## 1.0.0
 
 * Initial release of the Unilitix Flutter SDK

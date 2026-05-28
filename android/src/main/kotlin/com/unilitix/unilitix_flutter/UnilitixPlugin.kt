@@ -42,7 +42,7 @@ class UnilitixPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                         call.argument<Int>("flushIntervalSeconds")?.let { flushIntervalSeconds = it }
                         call.argument<Int>("sessionTimeoutSeconds")?.let { sessionTimeoutSeconds = it }
                         call.argument<Boolean>("maskInputs")?.let { maskInputs = it }
-                        call.argument<Double>("sampleRate")?.let { sampleRate = it.toFloat() }
+                        call.argument<Double>("sampleRate")?.let { sampleRate = it }
                     }
                     result.success(null)
                 } catch (e: Exception) {
