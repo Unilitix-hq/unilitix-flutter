@@ -1,0 +1,33 @@
+# Everything from .gitignore (which pub no longer reads once .pubignore exists)
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+*.iml
+*.ipr
+*.iws
+.idea/
+pubspec.lock
+**/doc/api/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+build/
+
+# Stale scaffold files from initial plugin generation
+lib/unilitix_flutter_method_channel.dart
+lib/unilitix_flutter_platform_interface.dart
+
+# Scaffold Android unit test (not part of the published SDK)
+android/src/test/
+
+# CI / contributor-only files
+.github/

@@ -130,8 +130,7 @@ class ProfileScreen extends StatelessWidget {
             const Text('Profile Screen'),
             const SizedBox(height: 16),
             ElevatedButton(
-              onPressed: () =>
-                  Navigator.pushNamed(context, '/settings'),
+              onPressed: () => Navigator.pushNamed(context, '/settings'),
               child: const Text('Go to Settings'),
             ),
           ],

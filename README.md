@@ -56,7 +56,7 @@ Unilitix.track('purchase_completed', {
 In debug mode, Unilitix prints a verification log to your console
 within 5 seconds of launch:
 
-```
+```text
 [Unilitix] ✅ SDK initialized
 [Unilitix] ✅ Session started
 [Unilitix] ⚠️ No screen events detected. Did you add Unilitix.observer
@@ -117,7 +117,7 @@ Unilitix.optIn();
 | Platform | Minimum version      |
 |----------|----------------------|
 | Android  | API 21 (Android 5.0) |
-| iOS      | Coming soon          |
+| iOS      | Planned — [follow progress](https://github.com/Unilitix-hq/unilitix-flutter/issues) |
 
 ## Support
 

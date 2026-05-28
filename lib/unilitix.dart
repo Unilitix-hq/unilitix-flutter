@@ -299,6 +299,9 @@ class Unilitix {
     return '${key.substring(0, 4)}****${key.substring(key.length - 4)}';
   }
 
+  /// Whether the SDK has been successfully initialized.
   static bool get isInitialized => _initialized;
+
+  /// The active [UnilitixConfig] set during [init].
   static UnilitixConfig get config => _config;
 }
