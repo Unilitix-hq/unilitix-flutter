@@ -3,7 +3,7 @@ description: >-
   Official Flutter SDK for Unilitix — African-first mobile UX
   analytics. Auto-tracks sessions, screens, taps, crashes and
   rage taps with a single line of code.
-version: 1.0.5
+version: 1.0.6
 homepage: https://unilitix.com
 repository: https://github.com/Unilitix-hq/unilitix-flutter
 issue_tracker: https://github.com/Unilitix-hq/unilitix-flutter/issues

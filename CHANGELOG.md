@@ -1,3 +1,9 @@
+## [1.0.6] - 2026-05-28
+
+* CI: bump `actions/checkout` to v5 (Node 24-compatible, ahead of
+  June 2 deprecation deadline)
+* CI: add Dependabot config to auto-bump GitHub Actions weekly
+
 ## [1.0.5] - 2026-05-28
 
 * Added `topics:` to pubspec.yaml for pub.dev discoverability
