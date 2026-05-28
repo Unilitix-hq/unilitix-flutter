@@ -11,7 +11,7 @@ with a single line of code.
 
 ```bash
 flutter pub add unilitix
-# pubspec.yaml — adds unilitix: ^1.0.2
+# pubspec.yaml — adds unilitix: ^1.0.3
 ```
 
 ## Quick start
