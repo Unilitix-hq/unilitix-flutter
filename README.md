@@ -11,7 +11,7 @@ with a single line of code.
 
 ```bash
 flutter pub add unilitix
-# pubspec.yaml — adds unilitix: ^1.0.3
+# pubspec.yaml — adds unilitix: ^1.0.4
 ```
 
 ## Quick start
@@ -50,6 +50,21 @@ Unilitix.track('purchase_completed', {
   'currency': 'NGN',
 });
 ```
+
+## Verify your integration
+
+In debug mode, Unilitix prints a verification log to your console
+within 5 seconds of launch:
+
+```
+[Unilitix] ✅ SDK initialized
+[Unilitix] ✅ Session started
+[Unilitix] ⚠️ No screen events detected. Did you add Unilitix.observer
+to your MaterialApp navigatorObservers?
+```
+
+The `⚠️` warning only appears if `Unilitix.observer` is missing from
+`navigatorObservers`. It is silent in production builds.
 
 ## Identify users
 
