@@ -29,6 +29,8 @@ class Unilitix {
   static bool _initialized = false;
   static UnilitixConfig _config = const UnilitixConfig();
   static late UnilitixObserver _observer;
+  static bool _observerAttached = false;
+  static bool _screenEventReceived = false;
 
   // ── Init ──────────────────────────────────────────────
 
@@ -53,7 +55,7 @@ class Unilitix {
     _config = config;
     UnilitixLogger.enabled = config.debug || kDebugMode;
 
-    _log('Initializing Unilitix SDK v1.0.0...');
+    _log('Initializing Unilitix SDK v1.0.2...');
 
     try {
       await _channel.invokeMethod<void>('init', {
@@ -73,11 +75,30 @@ class Unilitix {
       _observer = UnilitixObserver._();
       _initialized = true;
 
-      _log('✓ SDK initialized');
-      _log('✓ API key: ${_obscureKey(apiKey)}');
-      _log('✓ Endpoint: ${config.endpoint}');
-      _log('✓ Auto screen tracking: ${config.autoTrackScreens}');
-      _log('✓ Debug mode: ${config.debug}');
+      _log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      _log('SDK initialized  ✅');
+      _log('Session started  ✅');
+      _log(
+        _observerAttached
+            ? 'Observer         ✅'
+            : 'Observer         ⚠️  not yet — add Unilitix.observer '
+                'to MaterialApp.navigatorObservers',
+      );
+      _log('API key:         ${_obscureKey(apiKey)}');
+      _log('Endpoint:        ${config.endpoint}');
+      _log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+      if (UnilitixLogger.enabled) {
+        Future.delayed(const Duration(seconds: 5), () {
+          if (!_screenEventReceived) {
+            _log(
+              '⚠️  No screen events detected. Did you add '
+              'Unilitix.observer to MaterialApp.navigatorObservers?',
+              isError: true,
+            );
+          }
+        });
+      }
     } on PlatformException catch (e) {
       _log('✗ Init failed: ${e.message}', isError: true);
       rethrow;
@@ -145,6 +166,7 @@ class Unilitix {
   /// ```
   static Future<void> screen(String screenName) async {
     _assertInitialized('screen');
+    _screenEventReceived = true;
     _log('→ Screen: $screenName');
     try {
       await _channel.invokeMethod<void>('screen', {

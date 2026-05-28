@@ -11,6 +11,7 @@ with a single line of code.
 
 ```bash
 flutter pub add unilitix
+# pubspec.yaml — adds unilitix: ^1.0.2
 ```
 
 ## Quick start
@@ -18,6 +19,8 @@ flutter pub add unilitix
 ### 1. Initialize in `main.dart`
 
 ```dart
+import 'package:unilitix/unilitix.dart';
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Unilitix.init('your_api_key');

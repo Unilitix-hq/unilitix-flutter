@@ -17,6 +17,7 @@ class UnilitixObserver extends NavigatorObserver {
   @override
   void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
     super.didPush(route, previousRoute);
+    Unilitix._observerAttached = true;
     _trackRoute(route);
   }
 

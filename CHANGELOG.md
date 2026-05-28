@@ -1,3 +1,20 @@
+## 1.0.3
+
+* Removed stale scaffold plugin file from Android directory
+* README: added import line to Quick Start snippet
+* README: added version comment to install block
+
+## 1.0.2
+
+* Debug verification log after `Unilitix.init()`: shows SDK
+  initialized ✅, session started ✅, and observer attachment
+  status ⚠️
+* After 5 s in debug mode, warns if no screen events were
+  received — prompts developer to add `Unilitix.observer` to
+  `MaterialApp.navigatorObservers`
+* `UnilitixObserver` now sets an attached flag on first route
+  push so the init summary can reflect live observer status
+
 ## 1.0.1
 
 * Fix: sampleRate type mismatch — Float vs Double
