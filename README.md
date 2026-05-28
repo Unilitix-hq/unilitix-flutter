@@ -4,14 +4,15 @@ African-first mobile UX analytics for Flutter.
 Track sessions, screens, events and crashes
 with a single line of code.
 
-[![pub.dev](https://img.shields.io/pub/v/unilitix.svg)](https://pub.dev/packages/unilitix)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![pub package](https://img.shields.io/pub/v/unilitix.svg)](https://pub.dev/packages/unilitix)
+[![pub points](https://img.shields.io/pub/points/unilitix)](https://pub.dev/packages/unilitix/score)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![CI](https://github.com/Unilitix-hq/unilitix-flutter/actions/workflows/publish.yml/badge.svg)](https://github.com/Unilitix-hq/unilitix-flutter/actions/workflows/publish.yml)
 
 ## Install
 
 ```bash
 flutter pub add unilitix
-# pubspec.yaml — adds unilitix: ^1.0.4
 ```
 
 ## Quick start
