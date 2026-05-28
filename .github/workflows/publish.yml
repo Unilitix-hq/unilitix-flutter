@@ -1,25 +1,19 @@
 name: Publish to pub.dev
 
-# Triggers on any tag matching vX.Y.Z, e.g. v1.0.5
 on:
   push:
-    tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
 
 jobs:
   publish:
-    name: Verify & publish
-    runs-on: ubuntu-latest
-
-    # Required for pub.dev OIDC publishing (no secret tokens needed).
-    # Set up a trusted publisher at pub.dev → Admin → Automated publishing
-    # before this workflow can push to pub.dev.
     permissions:
-      id-token: write
-      contents: read
+      id-token: write   # Required for OIDC auth to pub.dev
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
+
+      - uses: dart-lang/setup-dart@v1   # MUST come before publish — enables OIDC
 
       - uses: subosito/flutter-action@v2
         with:
@@ -29,13 +23,13 @@ jobs:
         run: flutter pub get
 
       - name: Verify formatting
-        run: dart format --output=none --set-exit-if-changed lib/
+        run: dart format --output=none --set-exit-if-changed .
 
-      - name: Static analysis
-        run: flutter analyze
+      - name: Analyze
+        run: dart analyze --fatal-infos --fatal-warnings
 
-      - name: Tests
+      - name: Run tests
         run: flutter test
 
-      - name: Publish
+      - name: Publish to pub.dev
         run: dart pub publish --force
