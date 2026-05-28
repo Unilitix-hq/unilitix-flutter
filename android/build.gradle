@@ -43,5 +43,5 @@ android {
 }
 
 dependencies {
-    implementation 'com.github.Unilitix-hq:unilitix-android:1.4.0'
+    implementation 'com.github.Unilitix-hq:unilitix-android:1.4.1'
 }

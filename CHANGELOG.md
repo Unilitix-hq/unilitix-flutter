@@ -1,3 +1,9 @@
+## 1.0.4
+
+* Bumped Android SDK dependency to 1.4.1
+* Android: debug verification log now automatic in debug builds
+* Android: removed dead UnilitixWorkerFactory
+
 ## 1.0.3
 
 * Removed stale scaffold plugin file from Android directory
