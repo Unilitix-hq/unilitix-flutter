@@ -11,6 +11,7 @@ class SnapshotCapture {
   final int intervalMs;
   final bool maskInputs;
 
+  int _ordinal = 0;
   Timer? _timer;
 
   SnapshotCapture({
@@ -29,16 +30,24 @@ class SnapshotCapture {
     _timer = null;
   }
 
+  void resetOrdinal() => _ordinal = 0;
+
   void _capture() {
     try {
       final element = WidgetsBinding.instance.rootElement;
       if (element == null) return;
       final node = _serializeElement(element, 0);
       if (node != null) {
+        final view = WidgetsBinding.instance.platformDispatcher.views.first;
+        final w = (view.physicalSize.width / view.devicePixelRatio).round();
+        final h = (view.physicalSize.height / view.devicePixelRatio).round();
         buffer.add({
-          'timestamp': DateTime.now().millisecondsSinceEpoch,
-          'screen': SdkScope.currentScreen ?? 'unknown',
-          'tree': node,
+          'capturedAt': DateTime.now().millisecondsSinceEpoch,
+          'ordinal': _ordinal++,
+          'screenName': SdkScope.currentScreen ?? 'unknown',
+          'viewportWidth': w,
+          'viewportHeight': h,
+          'hierarchy': node,
         });
       }
     } catch (e) {
@@ -72,6 +81,16 @@ class SnapshotCapture {
       if (offset != null) 'x': offset.dx.round(),
       if (offset != null) 'y': offset.dy.round(),
     };
+
+    // Mask text inputs when maskInputs = true
+    if (maskInputs) {
+      final type = element.widget.runtimeType.toString();
+      if (type.contains('TextField') ||
+          type.contains('EditableText') ||
+          type.contains('TextFormField')) {
+        node['text'] = '[MASKED]';
+      }
+    }
 
     final children = <Map<String, dynamic>>[];
     element.visitChildren((child) {

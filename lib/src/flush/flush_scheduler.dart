@@ -19,7 +19,7 @@ class FlushScheduler {
   final ApiClient apiClient;
   final NetworkMonitor networkMonitor;
   final PerformanceMonitor performanceMonitor;
-  final Map<String, dynamic> Function() buildSessionPayload;
+  final Future<Map<String, dynamic>> Function() buildSessionPayload;
   final bool uploadScreenshotsOnWifiOnly;
 
   Timer? _timer;
@@ -68,9 +68,14 @@ class FlushScheduler {
       performanceMonitor.enrichEvent(event);
       event.capturedOffline = networkMonitor.isOffline();
       event.networkAtCapture = networkMonitor.currentType();
+      if (event.capturedOffline) {
+        sessionManager.currentSession?.offlineEventCount++;
+      } else {
+        sessionManager.currentSession?.onlineEventCount++;
+      }
     }
 
-    final sessionPayload = buildSessionPayload();
+    final sessionPayload = await buildSessionPayload();
     final eventsJson = jsonEncode(events.map((e) => e.toJson()).toList());
 
     final pending = PendingEvent(
@@ -94,9 +99,50 @@ class FlushScheduler {
 
     if (ok) {
       UnilitixLogger.d('Flushed ${events.length} events');
+      await _uploadScreenshots();
     } else {
       await database.insertEvent(pending);
       UnilitixLogger.w('Flush failed — queued for retry');
+    }
+  }
+
+  Future<void> _uploadScreenshots() async {
+    if (uploadScreenshotsOnWifiOnly && !networkMonitor.isWifi()) {
+      UnilitixLogger.d('Skipping screenshots — not on WiFi');
+      return;
+    }
+    final sessionId = sessionManager.currentSession?.id;
+    if (sessionId == null) return;
+
+    final screenshots = await database.getPendingScreenshots(sessionId);
+    if (screenshots.isEmpty) return;
+
+    for (final s in screenshots) {
+      if (s.id == null) continue;
+      try {
+        final presignedUrl = await apiClient.initScreenshotUpload({
+          'sessionId': sessionId,
+          'ordinal': s.ordinal,
+          'screenName': s.screenName,
+          'viewportWidth': s.viewportWidth,
+          'viewportHeight': s.viewportHeight,
+          'capturedAt': s.capturedAt,
+        });
+        if (presignedUrl == null) continue;
+
+        final uploaded =
+            await apiClient.uploadScreenshotBytes(presignedUrl, s.imageBytes);
+        if (!uploaded) continue;
+
+        final confirmed = await apiClient.confirmScreenshotUpload({
+          'sessionId': sessionId,
+          'ordinal': s.ordinal,
+        });
+        if (confirmed) await database.deleteScreenshotById(s.id!);
+      } catch (e) {
+        UnilitixLogger.e(
+            'Screenshot upload failed for ordinal ${s.ordinal}', e);
+      }
     }
   }
 

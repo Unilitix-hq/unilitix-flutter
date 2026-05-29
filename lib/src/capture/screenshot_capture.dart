@@ -14,7 +14,14 @@ class ScreenshotCapture {
   final int intervalMs;
   final int maxScreenshots;
   final int maxWidth;
-  final void Function(Uint8List bytes, String screen, int ordinal) onCapture;
+  final Future<void> Function(
+    Uint8List bytes,
+    String screenName,
+    int ordinal,
+    int viewportWidth,
+    int viewportHeight,
+    int capturedAt,
+  ) onCapture;
 
   int _ordinal = 0;
   Timer? _timer;
@@ -55,7 +62,12 @@ class ScreenshotCapture {
 
       final bytes = byteData.buffer.asUint8List();
       final screen = SdkScope.currentScreen ?? 'unknown';
-      onCapture(bytes, screen, _ordinal);
+      final view = WidgetsBinding.instance.platformDispatcher.views.first;
+      final w = (view.physicalSize.width / view.devicePixelRatio).round();
+      final h = (view.physicalSize.height / view.devicePixelRatio).round();
+      final capturedAt = DateTime.now().millisecondsSinceEpoch;
+
+      await onCapture(bytes, screen, _ordinal, w, h, capturedAt);
       _ordinal++;
       image.dispose();
     } catch (e) {

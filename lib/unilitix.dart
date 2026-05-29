@@ -12,6 +12,7 @@ library unilitix;
 import 'package:flutter/widgets.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
+import 'src/africa/africa_context.dart';
 import 'src/config.dart';
 import 'src/core/sdk_scope.dart';
 import 'src/events/event.dart';
@@ -26,6 +27,7 @@ import 'src/capture/screenshot_capture.dart';
 import 'src/network/api_client.dart';
 import 'src/network/network_monitor.dart';
 import 'src/storage/event_database.dart';
+import 'src/storage/pending_screenshot.dart';
 import 'src/performance/performance_monitor.dart';
 import 'src/crash/crash_tracker.dart';
 import 'src/privacy/identity.dart';
@@ -68,6 +70,7 @@ class Unilitix {
   static late DeviceInfoCollector _deviceInfo;
   static late PackageInfo _packageInfo;
   static late RageTapDetector _rageTapDetector;
+  static late AfricaContext _africaContext;
 
   static final GlobalKey _repaintKey = GlobalKey();
   static final UnilitixObserver _observer = UnilitixObserver();
@@ -113,7 +116,10 @@ class Unilitix {
     _optManager = OptManager();
     await _optManager.load();
 
-    _database = EventDatabase(maxOfflineEvents: config.maxOfflineEvents);
+    _database = EventDatabase(
+      maxOfflineEvents: config.maxOfflineEvents,
+      maxScreenshotsPerSession: config.maxScreenshotsPerSession,
+    );
     await _database.open();
 
     _performanceMonitor = PerformanceMonitor()..start();
@@ -122,6 +128,8 @@ class Unilitix {
       onNetworkChanged: (type) => _sessionManager.onNetworkTypeChanged(type),
     );
     _networkMonitor.start();
+
+    _africaContext = AfricaContext(networkMonitor: _networkMonitor);
 
     _snapshotBuffer = SnapshotBuffer(capacity: config.maxSnapshotsPerSession);
 
@@ -186,8 +194,19 @@ class Unilitix {
       intervalMs: config.screenshotIntervalMs,
       maxScreenshots: config.maxScreenshotsPerSession,
       maxWidth: config.screenshotMaxWidth,
-      onCapture: (bytes, screen, ordinal) {
-        UnilitixLogger.d('Screenshot #$ordinal on $screen');
+      onCapture: (bytes, screenName, ordinal, w, h, capturedAt) async {
+        final sessionId = _sessionManager.currentSession?.id ?? '';
+        await _database.insertScreenshot(PendingScreenshot(
+          sessionId: sessionId,
+          ordinal: ordinal,
+          screenName: screenName,
+          viewportWidth: w,
+          viewportHeight: h,
+          capturedAt: capturedAt,
+          imageBytes: bytes,
+          createdAt: DateTime.now().millisecondsSinceEpoch,
+        ));
+        UnilitixLogger.d('Screenshot #$ordinal stored on $screenName');
       },
     );
 
@@ -204,6 +223,7 @@ class Unilitix {
         _flushScheduler.flush();
       },
       breadcrumbs: _breadcrumbs,
+      database: _database,
     );
 
     // Wire up SdkScope callbacks
@@ -339,7 +359,10 @@ class Unilitix {
   static void _onTap(String screen, double x, double y) {
     if (_optManager.isOptedOut) return;
     if (_config?.autoTrackTaps != true) return;
-    final isRage = _rageTapDetector.recordTap(screen, x, y);
+    bool isRage = false;
+    if (_config?.autoTrackRageTaps == true) {
+      isRage = _rageTapDetector.recordTap(screen, x, y);
+    }
     if (!isRage) {
       _addBreadcrumb(EventTypes.tap, screen);
       _emitEvent(UnilitixEvent(
@@ -365,10 +388,15 @@ class Unilitix {
     if (_breadcrumbs.length > 50) _breadcrumbs.removeAt(0);
   }
 
-  static Map<String, dynamic> _buildSessionPayload() {
+  static Future<Map<String, dynamic>> _buildSessionPayload() async {
     final session = _sessionManager.currentSession ?? Session();
     final view = WidgetsBinding.instance.platformDispatcher.views.first;
     final screenSize = view.physicalSize / view.devicePixelRatio;
+    final batteryLvl = await _africaContext.batteryLevel;
+    final carrier = await _africaContext.carrierName;
+    final storageGb = await _africaContext.totalStorageGb;
+    final orientation =
+        screenSize.width > screenSize.height ? 'LANDSCAPE' : 'PORTRAIT';
 
     return {
       'anonymousId': _identity.anonymousId,
@@ -387,10 +415,13 @@ class Unilitix {
       'packageName': _packageInfo.packageName,
       'sdkVersion': _sdkVersion,
       'networkType': _networkMonitor.currentType(),
+      'carrierName': carrier,
+      'orientation': orientation,
       'locale': WidgetsBinding.instance.platformDispatcher.locale.toString(),
       'timezone': DateTime.now().timeZoneName,
       'installId': _identity.installId,
-      'batteryLevel': -1.0,
+      'batteryLevel': batteryLvl,
+      'totalStorageGb': storageGb,
       'startedAt': session.startedAt,
       'endedAt': session.endedAt,
       'durationMs': session.durationMs,

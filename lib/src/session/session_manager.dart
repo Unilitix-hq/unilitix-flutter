@@ -12,6 +12,7 @@ class SessionManager with WidgetsBindingObserver {
 
   Session? _currentSession;
   int? _backgroundedAt;
+  int _foregroundedAt = 0;
   String _networkSentinel = 'INITIAL';
 
   Session? get currentSession => _currentSession;
@@ -35,6 +36,7 @@ class SessionManager with WidgetsBindingObserver {
 
   void _startNewSession() {
     _currentSession = Session();
+    _foregroundedAt = _currentSession!.startedAt;
     _networkSentinel = 'INITIAL';
     resetScreenshotOrdinal();
     UnilitixLogger.d('Session started: ${_currentSession!.id}');
@@ -63,14 +65,17 @@ class SessionManager with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    final now = DateTime.now().millisecondsSinceEpoch;
     if (state == AppLifecycleState.paused) {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      _currentSession?.foregroundTimeMs += now - _foregroundedAt;
       _backgroundedAt = now;
     } else if (state == AppLifecycleState.resumed) {
+      final now = DateTime.now().millisecondsSinceEpoch;
       final bg = _backgroundedAt;
       if (bg != null) {
         final bgDuration = now - bg;
         _backgroundedAt = null;
+        _foregroundedAt = now;
         if (bgDuration > sessionTimeoutSeconds * 1000) {
           if (_currentSession != null) _endCurrentSession();
           _startNewSession();

@@ -1,19 +1,24 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 
 import '../events/event.dart';
 import '../logger/logger.dart';
 import '../core/sdk_scope.dart';
+import '../storage/event_database.dart';
 
 /// Installs crash hooks for Flutter and async errors.
 class CrashTracker {
   final void Function(UnilitixEvent event) onCrashEvent;
   final List<Map<String, dynamic>> breadcrumbs;
+  final EventDatabase database;
 
   FlutterExceptionHandler? _previousFlutterHandler;
 
   CrashTracker({
     required this.onCrashEvent,
     required this.breadcrumbs,
+    required this.database,
   });
 
   void install() {
@@ -39,7 +44,10 @@ class CrashTracker {
 
   void _recordCrash(Object error, StackTrace? stack) {
     UnilitixLogger.e('Crash captured', error, stack);
-    final event = UnilitixEvent(type: EventTypes.crash)
+    final event = UnilitixEvent(
+      type: EventTypes.crash,
+      screen: SdkScope.currentScreen,
+    )
       ..exceptionType = error.runtimeType.toString()
       ..exceptionMessage = error.toString()
       ..stackTrace = stack?.toString()
@@ -50,7 +58,22 @@ class CrashTracker {
 
   /// On next launch, check for a crash persisted during the previous session.
   Future<void> recoverPendingCrash() async {
-    // Crash recovery is handled by the flush scheduler reading
-    // crash events from the database on startup.
+    try {
+      final rows = await database.getOldestEvents(10);
+      final crashBatches = rows.where((r) {
+        try {
+          final events = jsonDecode(r.eventsJson) as List;
+          return events.any((e) => (e as Map)['type'] == 'CRASH');
+        } catch (_) {
+          return false;
+        }
+      }).toList();
+      if (crashBatches.isNotEmpty) {
+        UnilitixLogger.d(
+            'Recovered ${crashBatches.length} pending crash batch(es) from DB');
+      }
+    } catch (e) {
+      UnilitixLogger.e('recoverPendingCrash failed', e);
+    }
   }
 }

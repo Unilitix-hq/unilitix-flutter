@@ -1,3 +1,23 @@
+## [2.0.1] - 2026-05-29
+
+### Fixed
+- AfricaContext wired into session payload: batteryLevel, carrierName,
+  totalStorageGb now real values
+- Screenshot capture now stores to DB and uploads via presigned URL flow
+- foregroundTimeMs now correctly accumulated per session
+- offlineEventCount and onlineEventCount now correctly incremented
+- Crash events now include current screen name
+- recoverPendingCrash() implemented — logs recovered crash batches on launch
+- autoTrackRageTaps config now respected in tap handler
+- orientation, carrierName, totalStorageGb added to session JSON payload
+- Screenshot DB: screenshotCount(), deleteScreenshotsByIds(),
+  deleteOldestScreenshots(), and overflow protection in insertScreenshot()
+- UnilitixLogger.w() now gated by enabled flag (debug-only)
+- Snapshot payload now includes ordinal, viewportWidth, viewportHeight
+- TextField/TextFormField/EditableText text masked in snapshots
+  when maskInputs = true
+- Removed unused archive dependency
+
 ## [2.0.0] - 2026-05-29
 
 ### Breaking

@@ -11,9 +11,9 @@ class UnilitixLogger {
     if (enabled) debugPrint('[Unilitix] $message');
   }
 
-  /// Always prints a warning message.
+  /// Prints a warning when [enabled] is true.
   static void w(String message) {
-    debugPrint('[Unilitix] ⚠️  $message');
+    if (enabled) debugPrint('[Unilitix] ⚠️  $message');
   }
 
   /// Always prints an error message.

@@ -13,9 +13,13 @@ class EventDatabase {
   static const _tScreenshots = 'pending_screenshots';
 
   final int maxOfflineEvents;
+  final int maxScreenshotsPerSession;
   Database? _db;
 
-  EventDatabase({required this.maxOfflineEvents});
+  EventDatabase({
+    required this.maxOfflineEvents,
+    required this.maxScreenshotsPerSession,
+  });
 
   Future<void> open() async {
     final path = p.join(await getDatabasesPath(), _dbName);
@@ -124,8 +128,35 @@ class EventDatabase {
     );
   }
 
+  Future<int> screenshotCount() async {
+    final result =
+        await _db!.rawQuery('SELECT COUNT(*) as c FROM $_tScreenshots');
+    return (result.first['c'] as int?) ?? 0;
+  }
+
+  Future<void> deleteScreenshotsByIds(List<int> ids) async {
+    if (ids.isEmpty) return;
+    final placeholders = ids.map((_) => '?').join(',');
+    await _db!.rawDelete(
+      'DELETE FROM $_tScreenshots WHERE id IN ($placeholders)',
+      ids,
+    );
+  }
+
+  Future<void> deleteOldestScreenshots(int count) async {
+    await _db!.rawDelete(
+      'DELETE FROM $_tScreenshots WHERE id IN '
+      '(SELECT id FROM $_tScreenshots ORDER BY created_at ASC LIMIT ?)',
+      [count],
+    );
+  }
+
   // Screenshots
   Future<void> insertScreenshot(PendingScreenshot s) async {
+    final count = await screenshotCount();
+    if (count >= maxScreenshotsPerSession) {
+      await deleteOldestScreenshots(count - maxScreenshotsPerSession + 1);
+    }
     await _db!.insert(_tScreenshots, s.toMap());
   }
 
