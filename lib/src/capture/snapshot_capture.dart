@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 import 'snapshot_buffer.dart';
 import '../core/sdk_scope.dart';
 import '../logger/logger.dart';
+import '../util/json_util.dart';
 
 /// Periodically serialises the widget tree as a JSON snapshot.
 class SnapshotCapture {
@@ -42,7 +43,7 @@ class SnapshotCapture {
         final w = (view.physicalSize.width / view.devicePixelRatio).round();
         final h = (view.physicalSize.height / view.devicePixelRatio).round();
         buffer.add({
-          'capturedAt': DateTime.now().millisecondsSinceEpoch,
+          'capturedAt': JsonUtil.toRfc3339(DateTime.now().millisecondsSinceEpoch),
           'ordinal': _ordinal++,
           'screenName': SdkScope.currentScreen ?? 'unknown',
           'viewportWidth': w,

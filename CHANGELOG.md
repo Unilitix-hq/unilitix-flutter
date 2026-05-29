@@ -1,3 +1,15 @@
+## [2.0.2] - 2026-05-29
+
+### Fixed
+- All timestamps now sent as RFC3339 strings (was milliseconds int)
+- Screen tracking event type changed from NAVIGATE to NAV to match backend
+- identify() now calls POST /v1/ingest/identify on backend
+- orientation now sent lowercase (portrait/landscape)
+- syncAttempts and syncFailedBatches now included in session payload on retry
+- Screenshot PUT uses Content-Type: image/webp; WebP encoding via image package
+- Screenshot init count clamped to 1–200 backend limit
+- Custom event properties correctly wrapped in metadata object
+
 ## [2.0.1] - 2026-05-29
 
 ### Fixed

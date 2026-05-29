@@ -108,7 +108,7 @@ class ApiClient {
       final resp = await _client
           .put(
             Uri.parse(presignedUrl),
-            headers: {'Content-Type': 'image/png'},
+            headers: {'Content-Type': 'image/webp'},
             body: bytes,
           )
           .timeout(const Duration(seconds: 60));
@@ -121,6 +121,19 @@ class ApiClient {
   Future<bool> confirmScreenshotUpload(Map<String, dynamic> payload) async {
     final resp =
         await _postWithRetry('/v1/ingest/screenshots/confirm', payload);
+    return resp != null && resp.statusCode < 300;
+  }
+
+  Future<bool> identify({
+    required String anonymousId,
+    required String customUserId,
+    Map<String, dynamic>? traits,
+  }) async {
+    final resp = await _postWithRetry('/v1/ingest/identify', {
+      'anonymousId': anonymousId,
+      'customUserId': customUserId,
+      if (traits != null) 'traits': traits,
+    });
     return resp != null && resp.statusCode < 300;
   }
 

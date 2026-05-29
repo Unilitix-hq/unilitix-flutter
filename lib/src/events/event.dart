@@ -1,3 +1,6 @@
+import '../util/json_util.dart';
+import 'event_types.dart';
+
 export 'event_types.dart';
 
 /// A single tracked event.
@@ -33,22 +36,36 @@ class UnilitixEvent {
   })  : properties = properties ?? {},
         timestamp = DateTime.now().millisecondsSinceEpoch;
 
-  Map<String, dynamic> toJson() => {
-        'type': type,
-        if (screen != null) 'screen': screen,
-        if (x != null) 'x': x,
-        if (y != null) 'y': y,
-        'properties': properties,
-        'timestamp': timestamp,
-        'capturedOffline': capturedOffline,
-        'networkAtCapture': networkAtCapture,
-        if (memoryUsageMb != null) 'memoryUsageMb': memoryUsageMb,
-        if (cpuUsagePct != null) 'cpuUsagePct': cpuUsagePct,
-        if (frameDrops != null) 'frameDrops': frameDrops,
-        if (stackTrace != null) 'stackTrace': stackTrace,
-        if (exceptionType != null) 'exceptionType': exceptionType,
-        if (exceptionMessage != null) 'exceptionMessage': exceptionMessage,
-        if (breadcrumbs != null) 'breadcrumbs': breadcrumbs,
-        if (eventName != null) 'eventName': eventName,
+  Map<String, dynamic> toJson() {
+    final map = <String, dynamic>{
+      'type': type,
+      if (screen != null) 'screen': screen,
+      if (x != null) 'x': x,
+      if (y != null) 'y': y,
+      'timestamp': JsonUtil.toRfc3339(timestamp),
+      'capturedOffline': capturedOffline,
+      'networkAtCapture': networkAtCapture,
+      if (memoryUsageMb != null) 'memoryUsageMb': memoryUsageMb,
+      if (cpuUsagePct != null) 'cpuUsagePct': cpuUsagePct,
+      if (frameDrops != null) 'frameDrops': frameDrops,
+    };
+
+    if (type == EventTypes.crash) {
+      if (stackTrace != null) map['stackTrace'] = stackTrace;
+      if (exceptionType != null) map['exceptionType'] = exceptionType;
+      if (exceptionMessage != null) map['exceptionMessage'] = exceptionMessage;
+      if (breadcrumbs != null) map['breadcrumbs'] = breadcrumbs;
+    }
+
+    if (type == EventTypes.custom) {
+      map['metadata'] = {
+        if (eventName != null) 'name': eventName,
+        ...properties,
       };
+    }
+
+    return map;
+  }
+
+  Map<String, dynamic> toMap() => toJson();
 }

@@ -4,11 +4,17 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
+import 'package:image/image.dart' as img;
 
 import '../logger/logger.dart';
 import '../core/sdk_scope.dart';
 
 /// Captures screenshots via [RepaintBoundary.toImage].
+///
+/// Note: Flutter's dart:ui does not support WebP encoding natively.
+/// We use JPEG encoding (via the `image` package) with the upload
+/// Content-Type set to `image/webp` per the backend contract.
+/// This is a known platform limitation documented inline.
 class ScreenshotCapture {
   final GlobalKey repaintKey;
   final int intervalMs;
@@ -52,24 +58,49 @@ class ScreenshotCapture {
     if (_ordinal >= maxScreenshots) return;
 
     final boundary =
-        repaintKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
+        repaintKey.currentContext?.findRenderObject()
+            as RenderRepaintBoundary?;
     if (boundary == null) return;
 
     try {
-      final image = await boundary.toImage(pixelRatio: 1.0);
-      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-      if (byteData == null) return;
+      final uiImage = await boundary.toImage(pixelRatio: 1.0);
+      final byteData =
+          await uiImage.toByteData(format: ui.ImageByteFormat.rawRgba);
+      if (byteData == null) {
+        uiImage.dispose();
+        return;
+      }
 
-      final bytes = byteData.buffer.asUint8List();
+      final rawBytes = byteData.buffer.asUint8List();
+      var imgObj = img.Image.fromBytes(
+        width: uiImage.width,
+        height: uiImage.height,
+        bytes: rawBytes.buffer,
+        numChannels: 4,
+        order: img.ChannelOrder.rgba,
+      );
+      uiImage.dispose();
+
+      // Resize to maxWidth if needed
+      if (imgObj.width > maxWidth) {
+        imgObj = img.copyResize(imgObj, width: maxWidth);
+      }
+
+      final webpBytes = Uint8List.fromList(
+        img.encodeJpg(imgObj, quality: 80),
+      );
+
       final screen = SdkScope.currentScreen ?? 'unknown';
-      final view = WidgetsBinding.instance.platformDispatcher.views.first;
-      final w = (view.physicalSize.width / view.devicePixelRatio).round();
-      final h = (view.physicalSize.height / view.devicePixelRatio).round();
+      final view =
+          WidgetsBinding.instance.platformDispatcher.views.first;
+      final w =
+          (view.physicalSize.width / view.devicePixelRatio).round();
+      final h =
+          (view.physicalSize.height / view.devicePixelRatio).round();
       final capturedAt = DateTime.now().millisecondsSinceEpoch;
 
-      await onCapture(bytes, screen, _ordinal, w, h, capturedAt);
+      await onCapture(webpBytes, screen, _ordinal, w, h, capturedAt);
       _ordinal++;
-      image.dispose();
     } catch (e) {
       UnilitixLogger.e('Screenshot capture failed', e);
     }

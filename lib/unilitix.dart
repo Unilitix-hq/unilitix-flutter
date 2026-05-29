@@ -34,6 +34,7 @@ import 'src/privacy/identity.dart';
 import 'src/privacy/opt_manager.dart';
 import 'src/flush/flush_scheduler.dart';
 import 'src/util/device_info.dart';
+import 'src/util/json_util.dart';
 import 'src/logger/logger.dart';
 
 export 'src/config.dart';
@@ -286,8 +287,14 @@ class Unilitix {
     Map<String, dynamic>? traits,
   ]) async {
     _assertInitialized('identify');
-    await _identity.setUserId(userId);
+    if (_optManager.isOptedOut) return;
+    await _identity.setUserId(userId, traits: traits);
     if (traits != null) _identity.setTraits(traits);
+    await _apiClient.identify(
+      anonymousId: _identity.anonymousId,
+      customUserId: userId,
+      traits: traits,
+    );
     UnilitixLogger.d('Identify: $userId');
   }
 
@@ -396,7 +403,7 @@ class Unilitix {
     final carrier = await _africaContext.carrierName;
     final storageGb = await _africaContext.totalStorageGb;
     final orientation =
-        screenSize.width > screenSize.height ? 'LANDSCAPE' : 'PORTRAIT';
+        screenSize.width > screenSize.height ? 'landscape' : 'portrait';
 
     return {
       'anonymousId': _identity.anonymousId,
@@ -422,8 +429,10 @@ class Unilitix {
       'installId': _identity.installId,
       'batteryLevel': batteryLvl,
       'totalStorageGb': storageGb,
-      'startedAt': session.startedAt,
-      'endedAt': session.endedAt,
+      'startedAt': JsonUtil.toRfc3339(session.startedAt),
+      'endedAt': session.endedAt != null
+          ? JsonUtil.toRfc3339(session.endedAt!)
+          : null,
       'durationMs': session.durationMs,
       'foregroundTimeMs': session.foregroundTimeMs,
       'backgroundTimeMs': session.backgroundTimeMs,

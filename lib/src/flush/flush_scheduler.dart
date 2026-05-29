@@ -9,6 +9,7 @@ import '../network/api_client.dart';
 import '../network/network_monitor.dart';
 import '../performance/performance_monitor.dart';
 import '../logger/logger.dart';
+import '../util/json_util.dart';
 
 /// Schedules periodic event flushing and handles retry logic.
 class FlushScheduler {
@@ -114,8 +115,9 @@ class FlushScheduler {
     final sessionId = sessionManager.currentSession?.id;
     if (sessionId == null) return;
 
-    final screenshots = await database.getPendingScreenshots(sessionId);
-    if (screenshots.isEmpty) return;
+    final all = await database.getPendingScreenshots(sessionId);
+    if (all.isEmpty) return;
+    final screenshots = all.take(200).toList(); // backend validates 1–200
 
     for (final s in screenshots) {
       if (s.id == null) continue;
@@ -137,6 +139,7 @@ class FlushScheduler {
         final confirmed = await apiClient.confirmScreenshotUpload({
           'sessionId': sessionId,
           'ordinal': s.ordinal,
+          'capturedAt': JsonUtil.toRfc3339(s.capturedAt),
         });
         if (confirmed) await database.deleteScreenshotById(s.id!);
       } catch (e) {
@@ -153,6 +156,8 @@ class FlushScheduler {
       await database.incrementSyncAttempts(p.id!);
 
       final sessionData = jsonDecode(p.sessionJson) as Map<String, dynamic>;
+      sessionData['syncAttempts'] = p.syncAttempts;
+      sessionData['syncFailedBatches'] = p.syncFailedBatches;
       final eventsList =
           (jsonDecode(p.eventsJson) as List).cast<Map<String, dynamic>>();
 

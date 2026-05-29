@@ -10,4 +10,11 @@ class JsonUtil {
     if (value is Map) return value.cast<String, dynamic>();
     return {};
   }
+
+  static String toRfc3339(int milliseconds) {
+    return DateTime.fromMillisecondsSinceEpoch(
+      milliseconds,
+      isUtc: true,
+    ).toIso8601String();
+  }
 }

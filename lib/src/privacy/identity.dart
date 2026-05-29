@@ -96,8 +96,9 @@ class Identity {
     }
   }
 
-  Future<void> setUserId(String userId) async {
+  Future<void> setUserId(String userId, {Map<String, dynamic>? traits}) async {
     _userId = userId;
+    if (traits != null) setTraits(traits);
     try {
       await _secure.write(key: _keyUserId, value: userId);
     } catch (_) {
