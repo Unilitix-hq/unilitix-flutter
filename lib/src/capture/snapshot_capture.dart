@@ -43,7 +43,8 @@ class SnapshotCapture {
         final w = (view.physicalSize.width / view.devicePixelRatio).round();
         final h = (view.physicalSize.height / view.devicePixelRatio).round();
         buffer.add({
-          'capturedAt': JsonUtil.toRfc3339(DateTime.now().millisecondsSinceEpoch),
+          'capturedAt':
+              JsonUtil.toRfc3339(DateTime.now().millisecondsSinceEpoch),
           'ordinal': _ordinal++,
           'screenName': SdkScope.currentScreen ?? 'unknown',
           'viewportWidth': w,

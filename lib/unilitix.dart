@@ -430,9 +430,8 @@ class Unilitix {
       'batteryLevel': batteryLvl,
       'totalStorageGb': storageGb,
       'startedAt': JsonUtil.toRfc3339(session.startedAt),
-      'endedAt': session.endedAt != null
-          ? JsonUtil.toRfc3339(session.endedAt!)
-          : null,
+      'endedAt':
+          session.endedAt != null ? JsonUtil.toRfc3339(session.endedAt!) : null,
       'durationMs': session.durationMs,
       'foregroundTimeMs': session.foregroundTimeMs,
       'backgroundTimeMs': session.backgroundTimeMs,

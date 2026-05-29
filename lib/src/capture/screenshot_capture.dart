@@ -58,8 +58,7 @@ class ScreenshotCapture {
     if (_ordinal >= maxScreenshots) return;
 
     final boundary =
-        repaintKey.currentContext?.findRenderObject()
-            as RenderRepaintBoundary?;
+        repaintKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
     if (boundary == null) return;
 
     try {
@@ -91,12 +90,9 @@ class ScreenshotCapture {
       );
 
       final screen = SdkScope.currentScreen ?? 'unknown';
-      final view =
-          WidgetsBinding.instance.platformDispatcher.views.first;
-      final w =
-          (view.physicalSize.width / view.devicePixelRatio).round();
-      final h =
-          (view.physicalSize.height / view.devicePixelRatio).round();
+      final view = WidgetsBinding.instance.platformDispatcher.views.first;
+      final w = (view.physicalSize.width / view.devicePixelRatio).round();
+      final h = (view.physicalSize.height / view.devicePixelRatio).round();
       final capturedAt = DateTime.now().millisecondsSinceEpoch;
 
       await onCapture(webpBytes, screen, _ordinal, w, h, capturedAt);
