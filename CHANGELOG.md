@@ -1,3 +1,27 @@
+## [2.0.0] - 2026-05-29
+
+### Breaking
+- Complete rewrite as pure Dart SDK — no longer wraps Android SDK via JNI method channel
+- `UnilitixConfig` now takes `apiKey` as a **required named parameter** (was positional in v1)
+- Screen names are now Flutter route names (`/home`) instead of Android class names
+- Remove `android/build.gradle` external SDK dependency — all tracking is pure Dart
+
+### Added
+- Session lifecycle via `WidgetsBindingObserver` — automatic timeout, background/foreground tracking
+- Navigator tracking via `UnilitixObserver` with correct Flutter route names
+- `UnilitixGestureDetector` widget for tap and rage-tap tracking
+- Rage-tap detection: 3+ taps within 100 px / 1 s window
+- Widget-tree snapshot capture via `RenderObject` traversal
+- Screenshot capture via `RepaintBoundary.toImage()`
+- Crash tracking: `FlutterError.onError` + `PlatformDispatcher.onError`
+- `sqflite` offline queue with exponential-backoff retry (5 attempts, 1 s–5 min)
+- Gzip compression on all API payloads
+- `flutter_secure_storage` encrypted user ID and anonymous ID
+- `UnilitixPrivate` widget to mask sensitive content from snapshots
+- Africa-first: offline capture, WiFi-only uploads, network transition counting
+- Battery level, network quality, carrier name context on every session
+- `OptManager` persists opt-out preference across restarts
+
 ## [1.0.7] - 2026-05-29
 
 * Android: migrate dependency from JitPack to Maven Central

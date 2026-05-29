@@ -5,11 +5,17 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   await Unilitix.init(
-    'your_api_key_here',
-    config: const UnilitixConfig(debug: true),
+    config: const UnilitixConfig(
+      apiKey: 'YOUR_API_KEY',
+      debug: true,
+    ),
   );
 
-  runApp(const MyApp());
+  runApp(
+    const UnilitixGestureDetector(
+      child: MyApp(),
+    ),
+  );
 }
 
 class MyApp extends StatelessWidget {
@@ -51,7 +57,7 @@ class HomeScreen extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const Text(
-              'Unilitix SDK Demo',
+              'Unilitix SDK v2 Demo',
               style: TextStyle(
                 fontSize: 24,
                 fontWeight: FontWeight.bold,
@@ -130,7 +136,8 @@ class ProfileScreen extends StatelessWidget {
             const Text('Profile Screen'),
             const SizedBox(height: 16),
             ElevatedButton(
-              onPressed: () => Navigator.pushNamed(context, '/settings'),
+              onPressed: () =>
+                  Navigator.pushNamed(context, '/settings'),
               child: const Text('Go to Settings'),
             ),
           ],

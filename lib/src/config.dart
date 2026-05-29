@@ -1,68 +1,104 @@
-part of '../unilitix.dart';
-
 /// Configuration for the Unilitix SDK.
 ///
-/// All fields have sensible defaults — pass only what you
-/// need to override:
+/// Pass to [Unilitix.init]:
 /// ```dart
 /// await Unilitix.init(
-///   'your_api_key',
-///   config: UnilitixConfig(debug: true),
+///   config: const UnilitixConfig(apiKey: 'your_api_key'),
 /// );
 /// ```
 class UnilitixConfig {
-  /// Your Unilitix API endpoint.
-  /// Defaults to the Unilitix cloud.
-  final String endpoint;
+  /// Your Unilitix API key. Required.
+  final String apiKey;
 
-  /// Enable verbose console logging.
-  /// Automatically enabled in debug builds.
-  final bool debug;
+  /// Unilitix ingest API base URL.
+  final String apiUrl;
 
-  /// Automatically track screen navigation.
-  /// Requires [Unilitix.observer] on [MaterialApp].
-  /// Default: true
+  /// Automatically track screen navigation via [Unilitix.observer].
   final bool autoTrackScreens;
 
-  /// Automatically track user taps.
-  /// Default: true
+  /// Automatically track user taps via [UnilitixGestureDetector].
   final bool autoTrackTaps;
 
   /// Automatically capture crash reports.
-  /// Default: true
   final bool autoTrackCrashes;
 
-  /// Automatically detect rage taps (frustrated users).
-  /// Default: true
+  /// Automatically detect rage taps (3+ taps within 100 px / 1 s).
   final bool autoTrackRageTaps;
 
   /// How often to flush events to the server (seconds).
-  /// Default: 30
   final int flushIntervalSeconds;
 
-  /// How long before an idle session expires (seconds).
-  /// Default: 1800 (30 minutes)
+  /// Maximum events per flush batch.
+  final int flushBatchSize;
+
+  /// Maximum events to queue offline before dropping oldest.
+  final int maxOfflineEvents;
+
+  /// Idle duration before a new session starts (seconds).
   final int sessionTimeoutSeconds;
 
-  /// Automatically mask text input fields.
-  /// Recommended for apps handling sensitive data.
-  /// Default: true
+  /// Enable verbose console logging.
+  final bool debug;
+
+  /// Mask text input fields in snapshots and screenshots.
   final bool maskInputs;
 
-  /// What fraction of sessions to capture (0.0–1.0).
-  /// Default: 1.0 (100%)
+  /// Fraction of sessions to capture (0.0–1.0).
   final double sampleRate;
 
+  /// Capture widget-tree snapshots.
+  final bool captureSnapshots;
+
+  /// Snapshot interval in milliseconds (clamped to 1000–60000).
+  final int snapshotIntervalMs;
+
+  /// Maximum snapshots per session.
+  final int maxSnapshotsPerSession;
+
+  /// Capture screenshots via RepaintBoundary.
+  final bool captureScreenshots;
+
+  /// Screenshot interval in milliseconds.
+  final int screenshotIntervalMs;
+
+  /// Screenshot JPEG quality (1–100).
+  final int screenshotQuality;
+
+  /// Maximum screenshot width in pixels.
+  final int screenshotMaxWidth;
+
+  /// Only upload screenshots on WiFi.
+  final bool uploadScreenshotsOnWifiOnly;
+
+  /// Maximum screenshots per session.
+  final int maxScreenshotsPerSession;
+
+  /// Mask text inputs in screenshots.
+  final bool maskInputsInScreenshots;
+
   const UnilitixConfig({
-    this.endpoint = 'https://api.unilitix.com',
-    this.debug = false,
+    required this.apiKey,
+    this.apiUrl = 'https://api.unilitix.io',
     this.autoTrackScreens = true,
     this.autoTrackTaps = true,
     this.autoTrackCrashes = true,
     this.autoTrackRageTaps = true,
     this.flushIntervalSeconds = 30,
+    this.flushBatchSize = 100,
+    this.maxOfflineEvents = 1000,
     this.sessionTimeoutSeconds = 1800,
+    this.debug = false,
     this.maskInputs = true,
     this.sampleRate = 1.0,
+    this.captureSnapshots = true,
+    this.snapshotIntervalMs = 1000,
+    this.maxSnapshotsPerSession = 200,
+    this.captureScreenshots = true,
+    this.screenshotIntervalMs = 1000,
+    this.screenshotQuality = 30,
+    this.screenshotMaxWidth = 480,
+    this.uploadScreenshotsOnWifiOnly = true,
+    this.maxScreenshotsPerSession = 300,
+    this.maskInputsInScreenshots = true,
   });
 }

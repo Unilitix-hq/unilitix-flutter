@@ -26,21 +26,10 @@ apply plugin: 'kotlin-android'
 android {
     namespace 'com.unilitix.unilitix_flutter'
     compileSdk 34
-
-    defaultConfig {
-        minSdk 21
-    }
-
+    defaultConfig { minSdk 21 }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
-
-    kotlinOptions {
-        jvmTarget = '17'
-    }
-}
-
-dependencies {
-    implementation 'com.unilitix:unilitix-android:1.4.1'
+    kotlinOptions { jvmTarget = '17' }
 }

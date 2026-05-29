@@ -1,0 +1,31 @@
+import 'dart:io';
+import 'package:device_info_plus/device_info_plus.dart';
+import 'package:flutter/foundation.dart';
+
+/// Device fingerprint collected once at SDK init.
+class DeviceInfoCollector {
+  String manufacturer = 'unknown';
+  String model = 'unknown';
+  String osVersion = 'unknown';
+
+  Future<void> collect() async {
+    try {
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        final info = await DeviceInfoPlugin().androidInfo;
+        manufacturer = info.manufacturer;
+        model = info.model;
+        osVersion = info.version.release;
+      } else if (defaultTargetPlatform == TargetPlatform.iOS) {
+        final info = await DeviceInfoPlugin().iosInfo;
+        manufacturer = 'Apple';
+        model = info.utsname.machine;
+        osVersion = info.systemVersion;
+      }
+    } catch (_) {
+      // Best-effort
+    }
+  }
+
+  String get os =>
+      Platform.isAndroid ? 'Android' : (Platform.isIOS ? 'iOS' : 'unknown');
+}

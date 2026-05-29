@@ -1,5 +1,5 @@
 name: unilitix_example
-description: Demonstrates how to use the Unilitix Flutter SDK.
+description: Demonstrates how to use the Unilitix Flutter SDK v2.
 publish_to: 'none'
 
 environment:

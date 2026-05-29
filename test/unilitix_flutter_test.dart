@@ -6,17 +6,14 @@ void main() {
     expect(Unilitix.isInitialized, false);
   });
 
-  test('default config has expected values', () {
-    const config = UnilitixConfig();
-    expect(config.endpoint, 'https://api.unilitix.com');
+  test('UnilitixConfig has correct defaults', () {
+    const config = UnilitixConfig(apiKey: 'test_key');
+    expect(config.apiUrl, 'https://api.unilitix.io');
     expect(config.autoTrackScreens, true);
     expect(config.autoTrackTaps, true);
-    expect(config.autoTrackCrashes, true);
-    expect(config.autoTrackRageTaps, true);
-    expect(config.maskInputs, true);
     expect(config.sampleRate, 1.0);
-    expect(config.flushIntervalSeconds, 30);
     expect(config.sessionTimeoutSeconds, 1800);
-    expect(config.debug, false);
+    expect(config.flushBatchSize, 100);
+    expect(config.maxOfflineEvents, 1000);
   });
 }

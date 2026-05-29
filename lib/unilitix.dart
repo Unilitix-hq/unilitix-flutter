@@ -1,282 +1,410 @@
-/// Unilitix Flutter SDK
+/// Unilitix Flutter SDK — pure Dart analytics.
 ///
-/// One-line integration:
 /// ```dart
 /// void main() async {
 ///   WidgetsFlutterBinding.ensureInitialized();
-///   await Unilitix.init('your_api_key');
-///   runApp(MyApp());
+///   await Unilitix.init(config: const UnilitixConfig(apiKey: 'key'));
+///   runApp(UnilitixGestureDetector(child: MyApp()));
 /// }
 /// ```
 library unilitix;
 
-import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
-part 'src/config.dart';
-part 'src/observer.dart';
-part 'src/logger.dart';
+import 'src/config.dart';
+import 'src/core/sdk_scope.dart';
+import 'src/events/event.dart';
+import 'src/events/event_buffer.dart';
+import 'src/session/session.dart';
+import 'src/session/session_manager.dart';
+import 'src/tracking/observer.dart';
+import 'src/tracking/rage_tap_detector.dart';
+import 'src/capture/snapshot_buffer.dart';
+import 'src/capture/snapshot_capture.dart';
+import 'src/capture/screenshot_capture.dart';
+import 'src/network/api_client.dart';
+import 'src/network/network_monitor.dart';
+import 'src/storage/event_database.dart';
+import 'src/performance/performance_monitor.dart';
+import 'src/crash/crash_tracker.dart';
+import 'src/privacy/identity.dart';
+import 'src/privacy/opt_manager.dart';
+import 'src/flush/flush_scheduler.dart';
+import 'src/util/device_info.dart';
+import 'src/logger/logger.dart';
 
-/// The Unilitix SDK.
+export 'src/config.dart';
+export 'src/tracking/observer.dart';
+export 'src/tracking/gesture_tracker.dart';
+export 'src/privacy/privacy_mask.dart';
+export 'src/events/event.dart';
+
+/// The Unilitix SDK entry point.
 ///
 /// Initialize once in `main()` before `runApp()`.
 class Unilitix {
   Unilitix._();
 
-  static const MethodChannel _channel = MethodChannel('com.unilitix/sdk');
+  static const String _sdkVersion = '2.0.0';
 
+  static UnilitixConfig? _config;
   static bool _initialized = false;
-  static UnilitixConfig _config = const UnilitixConfig();
-  static late UnilitixObserver _observer;
-  static bool _observerAttached = false;
-  static bool _screenEventReceived = false;
+  static final List<Map<String, dynamic>> _breadcrumbs = [];
 
-  // ── Init ──────────────────────────────────────────────
+  static late SessionManager _sessionManager;
+  static late EventBuffer _eventBuffer;
+  static late FlushScheduler _flushScheduler;
+  static late EventDatabase _database;
+  static late ApiClient _apiClient;
+  static late SnapshotBuffer _snapshotBuffer;
+  static late SnapshotCapture _snapshotCapture;
+  static late ScreenshotCapture _screenshotCapture;
+  static late CrashTracker _crashTracker;
+  static late NetworkMonitor _networkMonitor;
+  static late Identity _identity;
+  static late OptManager _optManager;
+  static late PerformanceMonitor _performanceMonitor;
+  static late DeviceInfoCollector _deviceInfo;
+  static late PackageInfo _packageInfo;
+  static late RageTapDetector _rageTapDetector;
 
-  /// Initialize the Unilitix SDK.
+  static final GlobalKey _repaintKey = GlobalKey();
+  static final UnilitixObserver _observer = UnilitixObserver();
+
+  /// The navigator observer — add to [MaterialApp.navigatorObservers].
+  static UnilitixObserver get observer => _observer;
+
+  /// Whether [init] has completed successfully.
+  static bool get isInitialized => _initialized;
+
+  /// The active [UnilitixConfig].
+  static UnilitixConfig? get config => _config;
+
+  // ── Init ──────────────────────────────────────────────────────────
+
+  /// Initialize the SDK. Call once in `main()` before `runApp()`.
   ///
-  /// Call this in `main()` before `runApp()`:
   /// ```dart
-  /// await Unilitix.init('your_api_key');
+  /// await Unilitix.init(
+  ///   config: const UnilitixConfig(apiKey: 'your_key'),
+  /// );
   /// ```
-  ///
-  /// All features are enabled by default. Pass a [config]
-  /// to customize behaviour.
-  static Future<void> init(
-    String apiKey, {
-    UnilitixConfig config = const UnilitixConfig(),
-  }) async {
+  static Future<void> init({required UnilitixConfig config}) async {
     if (_initialized) {
-      _log('Already initialized — skipping');
+      UnilitixLogger.w('init() called more than once — ignoring');
       return;
     }
-
     _config = config;
-    UnilitixLogger.enabled = config.debug || kDebugMode;
+    UnilitixLogger.enabled = config.debug;
 
-    _log('Initializing Unilitix SDK v1.0.2...');
+    if (config.sessionTimeoutSeconds < 60) {
+      UnilitixLogger.w(
+          'sessionTimeoutSeconds=${config.sessionTimeoutSeconds} is very low');
+    }
 
-    try {
-      await _channel.invokeMethod<void>('init', {
-        'apiKey': apiKey,
-        'endpoint': config.endpoint,
-        'debug': config.debug,
-        'autoTrackScreens': config.autoTrackScreens,
-        'autoTrackTaps': config.autoTrackTaps,
-        'autoTrackCrashes': config.autoTrackCrashes,
-        'autoTrackRageTaps': config.autoTrackRageTaps,
-        'flushIntervalSeconds': config.flushIntervalSeconds,
-        'sessionTimeoutSeconds': config.sessionTimeoutSeconds,
-        'maskInputs': config.maskInputs,
-        'sampleRate': config.sampleRate,
+    _packageInfo = await PackageInfo.fromPlatform();
+    _deviceInfo = DeviceInfoCollector();
+    await _deviceInfo.collect();
+
+    _identity = Identity();
+    await _identity.initialize();
+
+    _optManager = OptManager();
+    await _optManager.load();
+
+    _database = EventDatabase(maxOfflineEvents: config.maxOfflineEvents);
+    await _database.open();
+
+    _performanceMonitor = PerformanceMonitor()..start();
+
+    _networkMonitor = NetworkMonitor(
+      onNetworkChanged: (type) => _sessionManager.onNetworkTypeChanged(type),
+    );
+    _networkMonitor.start();
+
+    _snapshotBuffer = SnapshotBuffer(capacity: config.maxSnapshotsPerSession);
+
+    _eventBuffer = EventBuffer(
+      batchSize: config.flushBatchSize,
+      onFlushNeeded: () => _flushScheduler.flush(),
+    );
+
+    _apiClient = ApiClient(
+      apiKey: config.apiKey,
+      apiUrl: config.apiUrl,
+      sdkVersion: _sdkVersion,
+    );
+
+    _rageTapDetector = RageTapDetector(
+      onRageTap: (screen, x, y, cx, cy) {
+        _addBreadcrumb('RAGE_TAP', screen);
+        _emitEvent(UnilitixEvent(
+          type: EventTypes.rageTap,
+          screen: screen,
+          x: cx,
+          y: cy,
+        ));
+      },
+    );
+
+    _sessionManager = SessionManager(
+      sessionTimeoutSeconds: config.sessionTimeoutSeconds,
+      onSessionStart: (session) {
+        _emitEvent(UnilitixEvent(
+          type: EventTypes.sessionStart,
+          properties: {'sessionId': session.id},
+        ));
+      },
+      onSessionEnd: (session) {
+        _emitEvent(UnilitixEvent(
+          type: EventTypes.sessionEnd,
+          properties: {'sessionId': session.id},
+        ));
+        _flushScheduler.flush();
+      },
+      resetScreenshotOrdinal: () {
+        _screenshotCapture.resetOrdinal();
+        _snapshotBuffer.clear();
+      },
+    );
+
+    _flushScheduler = FlushScheduler(
+      intervalSeconds: config.flushIntervalSeconds,
+      buffer: _eventBuffer,
+      sessionManager: _sessionManager,
+      database: _database,
+      apiClient: _apiClient,
+      networkMonitor: _networkMonitor,
+      performanceMonitor: _performanceMonitor,
+      buildSessionPayload: _buildSessionPayload,
+      uploadScreenshotsOnWifiOnly: config.uploadScreenshotsOnWifiOnly,
+    );
+
+    _screenshotCapture = ScreenshotCapture(
+      repaintKey: _repaintKey,
+      intervalMs: config.screenshotIntervalMs,
+      maxScreenshots: config.maxScreenshotsPerSession,
+      maxWidth: config.screenshotMaxWidth,
+      onCapture: (bytes, screen, ordinal) {
+        UnilitixLogger.d('Screenshot #$ordinal on $screen');
+      },
+    );
+
+    _snapshotCapture = SnapshotCapture(
+      buffer: _snapshotBuffer,
+      intervalMs: config.snapshotIntervalMs,
+      maskInputs: config.maskInputs,
+    );
+
+    _crashTracker = CrashTracker(
+      onCrashEvent: (event) {
+        _sessionManager.currentSession?.crashed = true;
+        _eventBuffer.emit(event);
+        _flushScheduler.flush();
+      },
+      breadcrumbs: _breadcrumbs,
+    );
+
+    // Wire up SdkScope callbacks
+    SdkScope.onScreenChange = _onScreenChange;
+    SdkScope.onTap = _onTap;
+    SdkScope.onRageTap = (screen, x, y, cx, cy) {
+      _rageTapDetector.recordTap(screen, x, y);
+    };
+
+    // Start everything
+    _sessionManager.start();
+    if (config.autoTrackCrashes) _crashTracker.install();
+    _flushScheduler.start();
+    if (config.captureSnapshots) _snapshotCapture.start();
+    if (config.captureScreenshots) _screenshotCapture.start();
+
+    _initialized = true;
+
+    if (config.debug) {
+      final sid = _sessionManager.currentSession?.id ?? '—';
+      UnilitixLogger.d('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      UnilitixLogger.d('SDK initialized  ✅  v$_sdkVersion');
+      UnilitixLogger.d(
+          'Session started  ✅  ${sid.length > 8 ? sid.substring(0, 8) : sid}…');
+      UnilitixLogger.d(
+          'Observer         ⚠️   not yet — add Unilitix.observer to navigatorObservers');
+      UnilitixLogger.d(
+          'API key          ${config.apiKey.length > 8 ? "${config.apiKey.substring(0, 4)}****${config.apiKey.substring(config.apiKey.length - 4)}" : "****"}');
+      UnilitixLogger.d('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+      Future.delayed(const Duration(seconds: 5), () {
+        if (!SdkScope.screenEventReceived) {
+          UnilitixLogger.w('No screen events detected. Did you add '
+              'Unilitix.observer to MaterialApp.navigatorObservers?');
+        }
       });
-
-      _observer = UnilitixObserver._();
-      _initialized = true;
-
-      _log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-      _log('SDK initialized  ✅');
-      _log('Session started  ✅');
-      _log(
-        _observerAttached
-            ? 'Observer         ✅'
-            : 'Observer         ⚠️  not yet — add Unilitix.observer '
-                'to MaterialApp.navigatorObservers',
-      );
-      _log('API key:         ${_obscureKey(apiKey)}');
-      _log('Endpoint:        ${config.endpoint}');
-      _log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-
-      if (UnilitixLogger.enabled) {
-        Future.delayed(const Duration(seconds: 5), () {
-          if (!_screenEventReceived) {
-            _log(
-              '⚠️  No screen events detected. Did you add '
-              'Unilitix.observer to MaterialApp.navigatorObservers?',
-              isError: true,
-            );
-          }
-        });
-      }
-    } on PlatformException catch (e) {
-      _log('✗ Init failed: ${e.message}', isError: true);
-      rethrow;
     }
   }
 
-  // ── Tracking ──────────────────────────────────────────
+  // ── Tracking ──────────────────────────────────────────────────────
 
   /// Track a custom event with optional properties.
-  ///
-  /// ```dart
-  /// Unilitix.track('purchase_completed', {
-  ///   'amount': 5000,
-  ///   'currency': 'NGN',
-  ///   'product': 'pro_plan',
-  /// });
-  /// ```
   static Future<void> track(
     String event, [
-    Map<String, dynamic> properties = const {},
+    Map<String, dynamic>? properties,
   ]) async {
     _assertInitialized('track');
-    _log('→ Event: $event $properties');
-    try {
-      await _channel.invokeMethod<void>('track', {
-        'event': event,
-        'properties': properties,
-      });
-    } on PlatformException catch (e) {
-      _log('✗ track failed: ${e.message}', isError: true);
-    }
+    if (_optManager.isOptedOut) return;
+    _addBreadcrumb(EventTypes.custom, SdkScope.currentScreen);
+    _emitEvent(UnilitixEvent(
+      type: EventTypes.custom,
+      screen: SdkScope.currentScreen,
+      properties: properties ?? {},
+    )..eventName = event);
   }
 
   /// Identify the current user.
-  ///
-  /// Call after login with the user's ID and any traits:
-  /// ```dart
-  /// Unilitix.identify('user_123', {
-  ///   'name': 'Tosin',
-  ///   'plan': 'pro',
-  ///   'country': 'Nigeria',
-  /// });
-  /// ```
   static Future<void> identify(
     String userId, [
-    Map<String, dynamic> traits = const {},
+    Map<String, dynamic>? traits,
   ]) async {
     _assertInitialized('identify');
-    _log('→ Identify: $userId $traits');
-    try {
-      await _channel.invokeMethod<void>('identify', {
-        'userId': userId,
-        'traits': traits,
-      });
-    } on PlatformException catch (e) {
-      _log('✗ identify failed: ${e.message}', isError: true);
-    }
+    await _identity.setUserId(userId);
+    if (traits != null) _identity.setTraits(traits);
+    UnilitixLogger.d('Identify: $userId');
   }
 
   /// Manually track a screen view.
-  ///
-  /// Only needed if you're NOT using [Unilitix.observer].
-  /// ```dart
-  /// Unilitix.screen('HomeScreen');
-  /// ```
   static Future<void> screen(String screenName) async {
     _assertInitialized('screen');
-    _screenEventReceived = true;
-    _log('→ Screen: $screenName');
-    try {
-      await _channel.invokeMethod<void>('screen', {
-        'screenName': screenName,
-      });
-    } on PlatformException catch (e) {
-      _log('✗ screen failed: ${e.message}', isError: true);
-    }
+    _onScreenChange(screenName);
   }
 
-  // ── Session ───────────────────────────────────────────
+  // ── Session ───────────────────────────────────────────────────────
 
-  /// Manually start a new session.
-  /// Sessions are managed automatically — only call this
-  /// if you need explicit control.
+  /// Start a new session manually.
   static Future<void> startSession() async {
     _assertInitialized('startSession');
-    _log('→ Starting session');
-    try {
-      await _channel.invokeMethod<void>('startSession');
-    } on PlatformException catch (e) {
-      _log('✗ startSession failed: ${e.message}', isError: true);
-    }
+    _sessionManager.stop();
+    _sessionManager.start();
   }
 
-  /// Manually end the current session.
+  /// End the current session manually.
   static Future<void> endSession() async {
     _assertInitialized('endSession');
-    _log('→ Ending session');
-    try {
-      await _channel.invokeMethod<void>('endSession');
-    } on PlatformException catch (e) {
-      _log('✗ endSession failed: ${e.message}', isError: true);
-    }
+    _sessionManager.stop();
   }
 
-  // ── Privacy ───────────────────────────────────────────
+  // ── Privacy ───────────────────────────────────────────────────────
 
-  /// Stop all tracking. Call when user opts out of analytics.
-  /// ```dart
-  /// Unilitix.optOut();
-  /// ```
+  /// Stop all tracking and analytics collection.
   static Future<void> optOut() async {
     _assertInitialized('optOut');
-    _log('→ Opted out');
-    try {
-      await _channel.invokeMethod<void>('optOut');
-    } on PlatformException catch (e) {
-      _log('✗ optOut failed: ${e.message}', isError: true);
-    }
+    await _optManager.optOut();
+    UnilitixLogger.d('Opted out');
   }
 
   /// Resume tracking after [optOut].
   static Future<void> optIn() async {
     _assertInitialized('optIn');
-    _log('→ Opted in');
-    try {
-      await _channel.invokeMethod<void>('optIn');
-    } on PlatformException catch (e) {
-      _log('✗ optIn failed: ${e.message}', isError: true);
-    }
+    await _optManager.optIn();
+    UnilitixLogger.d('Opted in');
   }
 
   /// Reset user identity. Call on logout.
-  /// ```dart
-  /// Unilitix.reset();
-  /// ```
   static Future<void> reset() async {
     _assertInitialized('reset');
-    _log('→ Reset identity');
-    try {
-      await _channel.invokeMethod<void>('reset');
-    } on PlatformException catch (e) {
-      _log('✗ reset failed: ${e.message}', isError: true);
-    }
+    await _identity.reset();
+    UnilitixLogger.d('Identity reset');
   }
 
-  // ── Flush ─────────────────────────────────────────────
+  // ── Flush ─────────────────────────────────────────────────────────
 
-  /// Immediately send all queued events to Unilitix.
-  /// Events are flushed automatically — only call this
-  /// if you need guaranteed delivery (e.g. before app exit).
+  /// Immediately flush all queued events.
   static Future<void> flush() async {
     _assertInitialized('flush');
-    _log('→ Flushing events');
-    try {
-      await _channel.invokeMethod<void>('flush');
-      _log('✓ Flush complete');
-    } on PlatformException catch (e) {
-      _log('✗ flush failed: ${e.message}', isError: true);
+    await _flushScheduler.flush();
+    UnilitixLogger.d('Flush complete');
+  }
+
+  // ── Internal ──────────────────────────────────────────────────────
+
+  static void _onScreenChange(String name) {
+    if (_optManager.isOptedOut) return;
+    SdkScope.currentScreen = name;
+    _addBreadcrumb(EventTypes.navigate, name);
+    _emitEvent(UnilitixEvent(
+      type: EventTypes.navigate,
+      screen: name,
+    ));
+  }
+
+  static void _onTap(String screen, double x, double y) {
+    if (_optManager.isOptedOut) return;
+    if (_config?.autoTrackTaps != true) return;
+    final isRage = _rageTapDetector.recordTap(screen, x, y);
+    if (!isRage) {
+      _addBreadcrumb(EventTypes.tap, screen);
+      _emitEvent(UnilitixEvent(
+        type: EventTypes.tap,
+        screen: screen,
+        x: x,
+        y: y,
+      ));
     }
   }
 
-  // ── Navigator Observer ────────────────────────────────
-
-  /// Add to your [MaterialApp] for automatic screen tracking:
-  /// ```dart
-  /// MaterialApp(
-  ///   navigatorObservers: [Unilitix.observer],
-  /// )
-  /// ```
-  static UnilitixObserver get observer {
-    assert(
-      _initialized,
-      'Call Unilitix.init() before accessing Unilitix.observer.',
-    );
-    return _observer;
+  static void _emitEvent(UnilitixEvent event) {
+    if (_optManager.isOptedOut) return;
+    _eventBuffer.emit(event);
   }
 
-  // ── Helpers ───────────────────────────────────────────
+  static void _addBreadcrumb(String type, String? screen) {
+    _breadcrumbs.add({
+      'type': type,
+      'screen': screen,
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
+    });
+    if (_breadcrumbs.length > 50) _breadcrumbs.removeAt(0);
+  }
+
+  static Map<String, dynamic> _buildSessionPayload() {
+    final session = _sessionManager.currentSession ?? Session();
+    final view = WidgetsBinding.instance.platformDispatcher.views.first;
+    final screenSize = view.physicalSize / view.devicePixelRatio;
+
+    return {
+      'anonymousId': _identity.anonymousId,
+      'userId': _identity.userId,
+      'customUserId': _identity.userId,
+      'deviceType': 'phone',
+      'manufacturer': _deviceInfo.manufacturer,
+      'deviceModel': _deviceInfo.model,
+      'os': _deviceInfo.os,
+      'osVersion': _deviceInfo.osVersion,
+      'screenWidth': screenSize.width.toInt(),
+      'screenHeight': screenSize.height.toInt(),
+      'screenDensity': view.devicePixelRatio,
+      'appVersion': _packageInfo.version,
+      'buildNumber': _packageInfo.buildNumber,
+      'packageName': _packageInfo.packageName,
+      'sdkVersion': _sdkVersion,
+      'networkType': _networkMonitor.currentType(),
+      'locale': WidgetsBinding.instance.platformDispatcher.locale.toString(),
+      'timezone': DateTime.now().timeZoneName,
+      'installId': _identity.installId,
+      'batteryLevel': -1.0,
+      'startedAt': session.startedAt,
+      'endedAt': session.endedAt,
+      'durationMs': session.durationMs,
+      'foregroundTimeMs': session.foregroundTimeMs,
+      'backgroundTimeMs': session.backgroundTimeMs,
+      'crashed': session.crashed,
+      'capturedOffline': session.offlineEventCount > 0,
+      'offlineEventCount': session.offlineEventCount,
+      'onlineEventCount': session.onlineEventCount,
+      'networkTransitions': session.networkTransitions,
+      'sessionId': session.id,
+      'sessionData': _identity.userTraits,
+    };
+  }
 
   static void _assertInitialized(String method) {
     assert(
@@ -285,23 +413,4 @@ class Unilitix {
       'Call Unilitix.init() in main() before runApp().',
     );
   }
-
-  static void _log(String msg, {bool isError = false}) {
-    if (isError) {
-      UnilitixLogger.error(msg);
-    } else {
-      UnilitixLogger.log(msg);
-    }
-  }
-
-  static String _obscureKey(String key) {
-    if (key.length <= 8) return '****';
-    return '${key.substring(0, 4)}****${key.substring(key.length - 4)}';
-  }
-
-  /// Whether the SDK has been successfully initialized.
-  static bool get isInitialized => _initialized;
-
-  /// The active [UnilitixConfig] set during [init].
-  static UnilitixConfig get config => _config;
 }
