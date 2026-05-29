@@ -121,7 +121,12 @@ class Unilitix {
       maxOfflineEvents: config.maxOfflineEvents,
       maxScreenshotsPerSession: config.maxScreenshotsPerSession,
     );
-    await _database.open();
+    try {
+      await _database.open();
+      UnilitixLogger.d('✅ Database opened');
+    } catch (e, stack) {
+      UnilitixLogger.e('❌ Database failed to open', e, stack);
+    }
 
     _performanceMonitor = PerformanceMonitor()..start();
 
@@ -256,7 +261,7 @@ class Unilitix {
       UnilitixLogger.d('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
       Future.delayed(const Duration(seconds: 5), () {
-        if (!SdkScope.screenEventReceived) {
+        if (!SdkScope.observerAttached && !SdkScope.screenEventReceived) {
           UnilitixLogger.w('No screen events detected. Did you add '
               'Unilitix.observer to MaterialApp.navigatorObservers?');
         }

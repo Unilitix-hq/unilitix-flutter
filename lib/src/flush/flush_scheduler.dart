@@ -93,17 +93,22 @@ class FlushScheduler {
       return;
     }
 
-    final ok = await apiClient.ingestSession({
-      ...sessionPayload,
-      'events': events.map((e) => e.toJson()).toList(),
-    });
+    try {
+      final ok = await apiClient.ingestSession({
+        ...sessionPayload,
+        'events': events.map((e) => e.toJson()).toList(),
+      });
 
-    if (ok) {
-      UnilitixLogger.d('Flushed ${events.length} events');
-      await _uploadScreenshots();
-    } else {
+      if (ok) {
+        UnilitixLogger.d('Flushed ${events.length} events');
+        await _uploadScreenshots();
+      } else {
+        await database.insertEvent(pending);
+        UnilitixLogger.w('Flush failed — queued for retry');
+      }
+    } catch (e, stack) {
       await database.insertEvent(pending);
-      UnilitixLogger.w('Flush failed — queued for retry');
+      UnilitixLogger.e('Flush failed — queued for retry', e, stack);
     }
   }
 

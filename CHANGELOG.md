@@ -1,3 +1,10 @@
+## [2.0.4] - 2026-05-29
+
+### Fixed
+- Flush exceptions now caught and logged with stack trace via
+  `UnilitixLogger.e`; batch still queued for retry on any throw
+- Database open now wrapped in try/catch with ✅/❌ debug logging
+
 ## [2.0.3] - 2026-05-29
 
 ### Changed
