@@ -1,3 +1,9 @@
+## [2.0.3] - 2026-05-29
+
+### Changed
+- README rewritten for v2.0.x API — correct init signature,
+  UnilitixGestureDetector, migration guide, common mistakes table
+
 ## [2.0.2] - 2026-05-29
 
 ### Fixed
