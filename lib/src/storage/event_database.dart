@@ -4,6 +4,7 @@ import 'package:path/path.dart' as p;
 
 import 'pending_event.dart';
 import 'pending_screenshot.dart';
+import '../logger/logger.dart';
 
 /// sqflite-backed persistent queue for events and screenshots.
 class EventDatabase {
@@ -15,19 +16,29 @@ class EventDatabase {
   final int maxOfflineEvents;
   final int maxScreenshotsPerSession;
   Database? _db;
+  bool _available = true;
 
   EventDatabase({
     required this.maxOfflineEvents,
     required this.maxScreenshotsPerSession,
   });
 
+  /// Whether local storage is available on this device/platform.
+  bool get isAvailable => _available;
+
   Future<void> open() async {
-    final path = p.join(await getDatabasesPath(), _dbName);
-    _db = await openDatabase(
-      path,
-      version: _version,
-      onCreate: _create,
-    );
+    try {
+      final path = p.join(await getDatabasesPath(), _dbName);
+      _db = await openDatabase(
+        path,
+        version: _version,
+        onCreate: _create,
+      );
+    } catch (e) {
+      UnilitixLogger.w(
+          'Local storage unavailable — events will not persist across restarts');
+      _available = false;
+    }
   }
 
   Future<void> _create(Database db, int version) async {
@@ -60,6 +71,7 @@ class EventDatabase {
   }
 
   Future<void> insertEvent(PendingEvent event) async {
+    if (!_available) return;
     final db = _db!;
     final count = await eventCount();
     if (count >= maxOfflineEvents) {
@@ -69,6 +81,7 @@ class EventDatabase {
   }
 
   Future<List<PendingEvent>> getOldestEvents(int limit) async {
+    if (!_available) return [];
     final rows = await _db!.query(
       _tEvents,
       orderBy: 'created_at ASC',
@@ -78,16 +91,19 @@ class EventDatabase {
   }
 
   Future<void> deleteEventById(int id) async {
+    if (!_available) return;
     await _db!.delete(_tEvents, where: 'id = ?', whereArgs: [id]);
   }
 
   Future<void> deleteEventsByIds(List<int> ids) async {
+    if (!_available) return;
     if (ids.isEmpty) return;
     final placeholders = ids.map((_) => '?').join(',');
     await _db!.delete(_tEvents, where: 'id IN ($placeholders)', whereArgs: ids);
   }
 
   Future<void> incrementRetryCount(int id) async {
+    if (!_available) return;
     await _db!.rawUpdate(
       'UPDATE $_tEvents SET retry_count = retry_count + 1 WHERE id = ?',
       [id],
@@ -95,6 +111,7 @@ class EventDatabase {
   }
 
   Future<void> incrementSyncAttempts(int id) async {
+    if (!_available) return;
     await _db!.rawUpdate(
       'UPDATE $_tEvents SET sync_attempts = sync_attempts + 1 WHERE id = ?',
       [id],
@@ -102,6 +119,7 @@ class EventDatabase {
   }
 
   Future<void> incrementSyncFailedBatches(int id) async {
+    if (!_available) return;
     await _db!.rawUpdate(
       'UPDATE $_tEvents SET sync_failed_batches = sync_failed_batches + 1 WHERE id = ?',
       [id],
@@ -109,11 +127,13 @@ class EventDatabase {
   }
 
   Future<int> eventCount() async {
+    if (!_available) return 0;
     final result = await _db!.rawQuery('SELECT COUNT(*) as c FROM $_tEvents');
     return (result.first['c'] as int?) ?? 0;
   }
 
   Future<void> deleteOldestEvents(int count) async {
+    if (!_available) return;
     await _db!.rawDelete(
       'DELETE FROM $_tEvents WHERE id IN '
       '(SELECT id FROM $_tEvents ORDER BY created_at ASC LIMIT ?)',
@@ -122,19 +142,22 @@ class EventDatabase {
   }
 
   Future<void> remapSessionId(String oldId, String newId) async {
+    if (!_available) return;
     await _db!.rawUpdate(
-      "UPDATE $_tScreenshots SET session_id = ? WHERE session_id = ?",
+      'UPDATE $_tScreenshots SET session_id = ? WHERE session_id = ?',
       [newId, oldId],
     );
   }
 
   Future<int> screenshotCount() async {
+    if (!_available) return 0;
     final result =
         await _db!.rawQuery('SELECT COUNT(*) as c FROM $_tScreenshots');
     return (result.first['c'] as int?) ?? 0;
   }
 
   Future<void> deleteScreenshotsByIds(List<int> ids) async {
+    if (!_available) return;
     if (ids.isEmpty) return;
     final placeholders = ids.map((_) => '?').join(',');
     await _db!.rawDelete(
@@ -144,6 +167,7 @@ class EventDatabase {
   }
 
   Future<void> deleteOldestScreenshots(int count) async {
+    if (!_available) return;
     await _db!.rawDelete(
       'DELETE FROM $_tScreenshots WHERE id IN '
       '(SELECT id FROM $_tScreenshots ORDER BY created_at ASC LIMIT ?)',
@@ -151,8 +175,8 @@ class EventDatabase {
     );
   }
 
-  // Screenshots
   Future<void> insertScreenshot(PendingScreenshot s) async {
+    if (!_available) return;
     final count = await screenshotCount();
     if (count >= maxScreenshotsPerSession) {
       await deleteOldestScreenshots(count - maxScreenshotsPerSession + 1);
@@ -162,6 +186,7 @@ class EventDatabase {
 
   Future<List<PendingScreenshot>> getPendingScreenshots(
       String sessionId) async {
+    if (!_available) return [];
     final rows = await _db!.query(
       _tScreenshots,
       where: 'session_id = ?',
@@ -172,6 +197,7 @@ class EventDatabase {
   }
 
   Future<void> deleteScreenshotById(int id) async {
+    if (!_available) return;
     await _db!.delete(_tScreenshots, where: 'id = ?', whereArgs: [id]);
   }
 

@@ -8,11 +8,17 @@ class PerformanceMonitor {
   int _frameDropCount = 0;
 
   void start() {
-    SchedulerBinding.instance.addTimingsCallback(_onTimings);
+    try {
+      SchedulerBinding.instance.addTimingsCallback(_onTimings);
+    } catch (_) {
+      // Not available on all platforms (e.g. web, some embedders).
+    }
   }
 
   void stop() {
-    SchedulerBinding.instance.removeTimingsCallback(_onTimings);
+    try {
+      SchedulerBinding.instance.removeTimingsCallback(_onTimings);
+    } catch (_) {}
   }
 
   void _onTimings(List<FrameTiming> timings) {
@@ -29,8 +35,11 @@ class PerformanceMonitor {
   }
 
   double get memoryUsageMb {
-    // ProcessInfo.currentRss is available in the Dart VM on both platforms.
-    return ProcessInfo.currentRss / (1024 * 1024);
+    try {
+      return ProcessInfo.currentRss / (1024 * 1024);
+    } catch (_) {
+      return 0.0; // Not supported on web or some platforms.
+    }
   }
 
   /// Attaches performance metrics to [event] in place.

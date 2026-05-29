@@ -1,3 +1,14 @@
+## [2.0.5] - 2026-05-29
+
+### Fixed
+- `ProcessInfo.currentRss` guarded with try/catch — returns 0.0 on
+  web and platforms where the Dart VM RSS is unavailable
+- `SchedulerBinding.addTimingsCallback` guarded with try/catch —
+  no-ops on platforms that don't support frame timing callbacks
+- sqflite `open()` wrapped in try/catch; all DB operations guarded
+  with `_available` flag — SDK continues in memory-only mode if
+  local storage is unavailable (e.g. restricted sandboxes)
+
 ## [2.0.4] - 2026-05-29
 
 ### Fixed
