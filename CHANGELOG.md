@@ -1,3 +1,11 @@
+## [1.0.7] - 2026-05-29
+
+* Android: migrate dependency from JitPack to Maven Central
+  (`com.github.Unilitix-hq:unilitix-android` →
+  `com.unilitix:unilitix-android:1.4.1`)
+* Android: remove JitPack repository URL from build.gradle —
+  Maven Central is now the only required repository
+
 ## [1.0.6] - 2026-05-28
 
 * CI: bump `actions/checkout` to v5 (Node 24-compatible, ahead of

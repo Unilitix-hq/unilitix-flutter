@@ -17,7 +17,6 @@ rootProject.allprojects {
     repositories {
         google()
         mavenCentral()
-        maven { url 'https://jitpack.io' }
     }
 }
 
@@ -43,5 +42,5 @@ android {
 }
 
 dependencies {
-    implementation 'com.github.Unilitix-hq:unilitix-android:1.4.1'
+    implementation 'com.unilitix:unilitix-android:1.4.1'
 }
