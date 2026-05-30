@@ -11,11 +11,28 @@ class SessionManager with WidgetsBindingObserver {
   final void Function() resetScreenshotOrdinal;
 
   Session? _currentSession;
+  Session? _lastEndedSession;
   int? _backgroundedAt;
   int _foregroundedAt = 0;
   String _networkSentinel = 'INITIAL';
 
   Session? get currentSession => _currentSession;
+
+  /// The most recently completed session. Non-null immediately after
+  /// [_endCurrentSession] runs, so [_buildSessionPayload] can still
+  /// read its fields after [_currentSession] is nulled.
+  Session? get lastEndedSession => _lastEndedSession;
+
+  /// Live total foreground time for the current session.
+  /// Includes the in-progress foreground window that has not yet been
+  /// committed by a `paused` event.
+  int get currentForegroundTimeMs {
+    final s = _currentSession;
+    if (s == null) return _lastEndedSession?.foregroundTimeMs ?? 0;
+    if (_backgroundedAt != null) return s.foregroundTimeMs;
+    return s.foregroundTimeMs +
+        (DateTime.now().millisecondsSinceEpoch - _foregroundedAt);
+  }
 
   SessionManager({
     required this.sessionTimeoutSeconds,
@@ -45,7 +62,15 @@ class SessionManager with WidgetsBindingObserver {
 
   void _endCurrentSession() {
     final s = _currentSession!;
-    s.endedAt = DateTime.now().millisecondsSinceEpoch;
+    final now = DateTime.now().millisecondsSinceEpoch;
+
+    // Capture the current foreground window if the app is not backgrounded.
+    if (_backgroundedAt == null && _foregroundedAt > 0) {
+      s.foregroundTimeMs += now - _foregroundedAt;
+    }
+
+    s.endedAt = now;
+    _lastEndedSession = s;
     UnilitixLogger.d('Session ended: ${s.id} (${s.durationMs} ms)');
     onSessionEnd(s);
     _currentSession = null;

@@ -258,6 +258,10 @@ class Unilitix {
           'Observer         ⚠️   not yet — add Unilitix.observer to navigatorObservers');
       UnilitixLogger.d(
           'API key          ${config.apiKey.length > 8 ? "${config.apiKey.substring(0, 4)}****${config.apiKey.substring(config.apiKey.length - 4)}" : "****"}');
+      UnilitixLogger.d(
+          'Device           ${_deviceInfo.manufacturer} ${_deviceInfo.model} (${_deviceInfo.os} ${_deviceInfo.osVersion})');
+      UnilitixLogger.d(
+          'App              ${_packageInfo.appName} ${_packageInfo.version}+${_packageInfo.buildNumber}');
       UnilitixLogger.d('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
       Future.delayed(const Duration(seconds: 5), () {
@@ -401,7 +405,12 @@ class Unilitix {
   }
 
   static Future<Map<String, dynamic>> _buildSessionPayload() async {
-    final session = _sessionManager.currentSession ?? Session();
+    // Prefer the active session; fall back to the most recently ended session
+    // (which is the case when a flush fires right after _endCurrentSession sets
+    // _currentSession to null). Without this, we'd create a dummy Session()
+    // with startedAt=now and durationMs=0.
+    final session =
+        _sessionManager.currentSession ?? _sessionManager.lastEndedSession ?? Session();
     final view = WidgetsBinding.instance.platformDispatcher.views.first;
     final screenSize = view.physicalSize / view.devicePixelRatio;
     final batteryLvl = await _africaContext.batteryLevel;
@@ -438,7 +447,7 @@ class Unilitix {
       'endedAt':
           session.endedAt != null ? JsonUtil.toRfc3339(session.endedAt!) : null,
       'durationMs': session.durationMs,
-      'foregroundTimeMs': session.foregroundTimeMs,
+      'foregroundTimeMs': _sessionManager.currentForegroundTimeMs,
       'backgroundTimeMs': session.backgroundTimeMs,
       'crashed': session.crashed,
       'capturedOffline': session.offlineEventCount > 0,

@@ -1,3 +1,14 @@
+## [2.0.7] - 2026-05-30
+
+### Fixed
+- Session duration was always 0: `_currentSession` was nulled before flush
+  ran; `_buildSessionPayload` now falls back to `lastEndedSession`
+- `foregroundTimeMs` was only committed on `paused`; `_endCurrentSession`
+  now captures the final foreground window before nulling the session, and
+  `_buildSessionPayload` uses `currentForegroundTimeMs` for live sessions
+- Debug init log now prints device manufacturer, model, OS version and
+  app version/build number so collection failures are immediately visible
+
 ## [2.0.6] - 2026-05-30
 
 ### Fixed
