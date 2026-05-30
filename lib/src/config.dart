@@ -78,7 +78,7 @@ class UnilitixConfig {
 
   const UnilitixConfig({
     required this.apiKey,
-    this.apiUrl = 'https://api.unilitix.io',
+    this.apiUrl = 'https://api.unilitix.com',
     this.autoTrackScreens = true,
     this.autoTrackTaps = true,
     this.autoTrackCrashes = true,

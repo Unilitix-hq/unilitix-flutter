@@ -1,3 +1,9 @@
+## [2.0.6] - 2026-05-30
+
+### Fixed
+- Default apiUrl corrected
+- Pinned Flutter version to 3.32.0 in CI to fix dart format mismatch
+
 ## [2.0.5] - 2026-05-30
 
 ### Fixed
