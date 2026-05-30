@@ -14,8 +14,13 @@ class DeviceInfoCollector {
       if (kIsWeb) return;
       if (defaultTargetPlatform == TargetPlatform.android) {
         final info = await DeviceInfoPlugin().androidInfo;
-        manufacturer = info.manufacturer;
-        model = info.model;
+        manufacturer =
+            info.manufacturer.isEmpty ? 'Android' : info.manufacturer;
+        model = info.model.isEmpty
+            ? info.brand.isEmpty
+                ? 'Unknown'
+                : info.brand
+            : info.model;
         osVersion = info.version.release;
       } else if (defaultTargetPlatform == TargetPlatform.iOS) {
         final info = await DeviceInfoPlugin().iosInfo;

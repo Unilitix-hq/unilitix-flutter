@@ -420,7 +420,7 @@ class Unilitix {
         screenSize.width > screenSize.height ? 'landscape' : 'portrait';
 
     UnilitixLogger.d(
-        'Payload deviceModel="${_deviceInfo.model}" '
+        'BUILD PAYLOAD deviceModel="${_deviceInfo.model}" '
         'manufacturer="${_deviceInfo.manufacturer}" '
         'appVersion="${_packageInfo.version}" '
         'buildNumber="${_packageInfo.buildNumber}"');

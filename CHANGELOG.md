@@ -1,3 +1,9 @@
+## [2.0.10] - 2026-05-30
+
+### Fixed
+- Android device info fallbacks: empty manufacturer → 'Android',
+  empty model → brand if available, else 'Unknown'
+
 ## [2.0.9] - 2026-05-30
 
 ### Fixed
