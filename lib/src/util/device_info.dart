@@ -1,11 +1,13 @@
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
 
+import '../logger/logger.dart';
+
 /// Device fingerprint collected once at SDK init.
 class DeviceInfoCollector {
-  String manufacturer = 'unknown';
-  String model = 'unknown';
-  String osVersion = 'unknown';
+  String manufacturer = '';
+  String model = '';
+  String osVersion = '';
 
   Future<void> collect() async {
     try {
@@ -21,8 +23,11 @@ class DeviceInfoCollector {
         model = info.utsname.machine;
         osVersion = info.systemVersion;
       }
-    } catch (_) {
-      // Best-effort
+      UnilitixLogger.d(
+          'DeviceInfo collected: manufacturer="$manufacturer" '
+          'model="$model" osVersion="$osVersion"');
+    } catch (e, stack) {
+      UnilitixLogger.e('DeviceInfo collection failed', e, stack);
     }
   }
 

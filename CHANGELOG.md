@@ -1,3 +1,10 @@
+## [2.0.9] - 2026-05-30
+
+### Fixed
+- DeviceInfo collection now logs errors instead of swallowing them silently
+- Default values changed from 'unknown' to '' to match backend expectations
+- Added success log for device info collection to aid debugging
+
 ## [2.0.8] - 2026-05-30
 
 ### Fixed

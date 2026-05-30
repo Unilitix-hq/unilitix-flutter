@@ -13,7 +13,7 @@ Track sessions, screens, events and crashes with a single line of code.
 ```yaml
 # pubspec.yaml
 dependencies:
-  unilitix: ^2.0.8
+  unilitix: ^2.0.9
 ```
 ```bash
 flutter pub get
