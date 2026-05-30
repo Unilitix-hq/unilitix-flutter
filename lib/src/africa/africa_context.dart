@@ -1,5 +1,6 @@
 import 'package:battery_plus/battery_plus.dart';
-import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
+import 'package:flutter/foundation.dart'
+    show defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/services.dart';
 
 import '../network/network_monitor.dart';
