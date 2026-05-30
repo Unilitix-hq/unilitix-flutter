@@ -1,3 +1,9 @@
+## [2.0.8] - 2026-05-30
+
+### Fixed
+- sdkVersion constant updated from stale 2.0.0 to current version
+- Added payload debug logging for device/version fields
+
 ## [2.0.7] - 2026-05-30
 
 ### Fixed
