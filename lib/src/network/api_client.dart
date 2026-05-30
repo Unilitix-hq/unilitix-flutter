@@ -1,8 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
+import 'dart:io' show SocketException, GZipCodec;
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 
 import 'retry_policy.dart';
@@ -24,17 +25,23 @@ class ApiClient {
     _client = http.Client();
   }
 
-  Map<String, String> get _headers => {
-        'x-unilitix-key': apiKey,
-        'User-Agent': 'Unilitix-Flutter/$sdkVersion',
-        'Content-Type': 'application/json',
-        'Content-Encoding': 'gzip',
-        'Accept': 'application/json',
-      };
+  Map<String, String> get _headers {
+    final h = <String, String>{
+      'x-unilitix-key': apiKey,
+      'User-Agent': 'Unilitix-Flutter/$sdkVersion',
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    };
+    if (!kIsWeb) h['Content-Encoding'] = 'gzip';
+    return h;
+  }
 
-  Uint8List _gzip(String json) {
-    final codec = GZipCodec();
-    return Uint8List.fromList(codec.encode(utf8.encode(json)));
+  /// Returns gzip-compressed bytes on native platforms.
+  /// Returns the original bytes unchanged on web (dart:io GZipCodec
+  /// is not available in Flutter web).
+  List<int> _gzip(List<int> bytes) {
+    if (kIsWeb) return bytes;
+    return GZipCodec().encode(bytes);
   }
 
   Future<http.Response?> _postWithRetry(
@@ -42,7 +49,7 @@ class ApiClient {
     Map<String, dynamic> body,
   ) async {
     final url = Uri.parse('$apiUrl$path');
-    final bodyBytes = _gzip(jsonEncode(body));
+    final bodyBytes = _gzip(utf8.encode(jsonEncode(body)));
 
     for (var attempt = 1; attempt <= RetryPolicy.maxRetries; attempt++) {
       try {

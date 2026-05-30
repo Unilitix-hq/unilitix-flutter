@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
 
@@ -10,6 +9,7 @@ class DeviceInfoCollector {
 
   Future<void> collect() async {
     try {
+      if (kIsWeb) return;
       if (defaultTargetPlatform == TargetPlatform.android) {
         final info = await DeviceInfoPlugin().androidInfo;
         manufacturer = info.manufacturer;
@@ -26,6 +26,21 @@ class DeviceInfoCollector {
     }
   }
 
-  String get os =>
-      Platform.isAndroid ? 'Android' : (Platform.isIOS ? 'iOS' : 'unknown');
+  String get os {
+    if (kIsWeb) return 'Web';
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.android:
+        return 'Android';
+      case TargetPlatform.iOS:
+        return 'iOS';
+      case TargetPlatform.macOS:
+        return 'macOS';
+      case TargetPlatform.windows:
+        return 'Windows';
+      case TargetPlatform.linux:
+        return 'Linux';
+      default:
+        return 'Unknown';
+    }
+  }
 }

@@ -1,4 +1,4 @@
-## [2.0.5] - 2026-05-29
+## [2.0.5] - 2026-05-30
 
 ### Fixed
 - `ProcessInfo.currentRss` guarded with try/catch — returns 0.0 on
@@ -8,6 +8,16 @@
 - sqflite `open()` wrapped in try/catch; all DB operations guarded
   with `_available` flag — SDK continues in memory-only mode if
   local storage is unavailable (e.g. restricted sandboxes)
+- `dart:io GZipCodec` replaced with `kIsWeb`-conditional compression
+  in `ApiClient` — web sends uncompressed JSON, `Content-Encoding`
+  header omitted on web
+- `Platform.isAndroid / Platform.isIOS` replaced with
+  `defaultTargetPlatform` in `device_info.dart` and
+  `africa_context.dart` — `dart:io` import removed from both files;
+  `DeviceInfoCollector.os` now returns correct value on all platforms
+  including web (`"Web"`) and desktop
+- `flutter_secure_storage` failures already fall back to
+  `shared_preferences` in `identity.dart` — web is covered
 
 ## [2.0.4] - 2026-05-29
 

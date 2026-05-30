@@ -1,6 +1,5 @@
-import 'dart:io';
-
 import 'package:battery_plus/battery_plus.dart';
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/services.dart';
 
 import '../network/network_monitor.dart';
@@ -46,10 +45,11 @@ class AfricaContext {
     }
   }
 
-  /// Total internal storage in GB. Android only.
+  /// Total internal storage in GB. Android only — returns -1.0 sentinel
+  /// on all other platforms until a platform channel is wired.
   Future<double> get totalStorageGb async {
     try {
-      if (Platform.isAndroid) {
+      if (defaultTargetPlatform == TargetPlatform.android) {
         // StatFs requires a platform channel; return sentinel value
         return -1.0;
       }
