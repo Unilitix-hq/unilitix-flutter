@@ -49,7 +49,7 @@ export 'src/events/event.dart';
 class Unilitix {
   Unilitix._();
 
-  static const String _sdkVersion = '2.0.0';
+  static const String _sdkVersion = '2.0.7';
 
   static UnilitixConfig? _config;
   static bool _initialized = false;
@@ -418,6 +418,12 @@ class Unilitix {
     final storageGb = await _africaContext.totalStorageGb;
     final orientation =
         screenSize.width > screenSize.height ? 'landscape' : 'portrait';
+
+    UnilitixLogger.d(
+        'Payload deviceModel="${_deviceInfo.model}" '
+        'manufacturer="${_deviceInfo.manufacturer}" '
+        'appVersion="${_packageInfo.version}" '
+        'buildNumber="${_packageInfo.buildNumber}"');
 
     return {
       'anonymousId': _identity.anonymousId,
