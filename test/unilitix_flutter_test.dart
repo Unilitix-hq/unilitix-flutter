@@ -8,7 +8,7 @@ void main() {
 
   test('UnilitixConfig has correct defaults', () {
     const config = UnilitixConfig(apiKey: 'test_key');
-    expect(config.apiUrl, 'https://api.unilitix.io');
+    expect(config.apiUrl, 'https://api.unilitix.com');
     expect(config.autoTrackScreens, true);
     expect(config.autoTrackTaps, true);
     expect(config.sampleRate, 1.0);
