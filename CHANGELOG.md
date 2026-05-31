@@ -1,3 +1,8 @@
+## [2.0.11] - 2026-05-30
+
+### Changed
+- README: expanded track() example to show arbitrary key/value properties
+
 ## [2.0.10] - 2026-05-30
 
 ### Fixed

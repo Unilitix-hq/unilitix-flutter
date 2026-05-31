@@ -82,6 +82,13 @@ Unilitix.track('purchase_completed', {
   'amount': 5000,
   'currency': 'NGN',
 });
+
+// Any key/value properties — strings, numbers, booleans
+Unilitix.track('loan_applied', {
+  'amount': 50000,
+  'loan_type': 'personal',
+  'screen': 'LoanApplication',
+});
 ```
 
 ## Identify users

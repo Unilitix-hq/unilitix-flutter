@@ -58,10 +58,10 @@ class UnilitixEvent {
     }
 
     if (type == EventTypes.custom) {
-      map['metadata'] = {
-        if (eventName != null) 'name': eventName,
-        ...properties,
-      };
+      map['metadata'] = {'name': eventName};
+      if (properties.isNotEmpty) {
+        map['properties'] = properties;
+      }
     }
 
     return map;

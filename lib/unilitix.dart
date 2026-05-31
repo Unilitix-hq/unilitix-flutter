@@ -9,6 +9,8 @@
 /// ```
 library unilitix;
 
+import 'dart:async' show unawaited;
+
 import 'package:flutter/widgets.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
@@ -175,7 +177,8 @@ class Unilitix {
           type: EventTypes.sessionEnd,
           properties: {'sessionId': session.id},
         ));
-        _flushScheduler.flush();
+        // Drain remaining events then send the session record separately.
+        unawaited(_flushScheduler.flushOnSessionEnd());
       },
       resetScreenshotOrdinal: () {
         _screenshotCapture.resetOrdinal();
@@ -193,6 +196,7 @@ class Unilitix {
       performanceMonitor: _performanceMonitor,
       buildSessionPayload: _buildSessionPayload,
       uploadScreenshotsOnWifiOnly: config.uploadScreenshotsOnWifiOnly,
+      snapshotBuffer: _snapshotBuffer,
     );
 
     _screenshotCapture = ScreenshotCapture(
@@ -288,6 +292,8 @@ class Unilitix {
       screen: SdkScope.currentScreen,
       properties: properties ?? {},
     )..eventName = event);
+    // Flush immediately so custom events appear in dashboard without delay
+    unawaited(_flushScheduler.flushNow());
   }
 
   /// Identify the current user.

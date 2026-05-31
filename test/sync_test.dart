@@ -35,9 +35,13 @@ void main() {
       )..eventName = 'button_tapped';
 
       final map = event.toMap();
+      // name in metadata, properties top-level and separate
       expect(map.containsKey('metadata'), isTrue);
       expect((map['metadata'] as Map)['name'], equals('button_tapped'));
-      expect((map['metadata'] as Map)['screen'], equals('home'));
+      expect((map['metadata'] as Map).containsKey('screen'), isFalse);
+      expect(map.containsKey('properties'), isTrue);
+      expect((map['properties'] as Map)['screen'], equals('home'));
+      expect((map['properties'] as Map)['button'], equals('cta'));
     });
 
     test('crash event does not have metadata field', () {

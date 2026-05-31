@@ -97,6 +97,17 @@ class ApiClient {
     return resp != null && resp.statusCode < 300;
   }
 
+  Future<bool> ingestEvents({
+    required String sessionId,
+    required List<Map<String, dynamic>> events,
+  }) async {
+    final resp = await _postWithRetry('/v1/ingest/events', {
+      'sessionId': sessionId,
+      'events': events,
+    });
+    return resp != null && resp.statusCode < 300;
+  }
+
   Future<bool> ingestSnapshots(Map<String, dynamic> payload) async {
     final resp = await _postWithRetry('/v1/ingest/snapshots', payload);
     return resp != null && resp.statusCode < 300;
