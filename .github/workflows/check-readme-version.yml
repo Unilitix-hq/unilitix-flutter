@@ -1,0 +1,29 @@
+name: Check README version
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check README matches pubspec version
+        run: |
+          SDK_VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}')
+          echo "pubspec version: $SDK_VERSION"
+
+          if ! grep -q "unilitix: \^$SDK_VERSION" README.md; then
+            echo "❌ README.md install snippet is outdated."
+            echo "   Expected: unilitix: ^$SDK_VERSION"
+            echo "   Found:    $(grep 'unilitix:' README.md | head -1)"
+            echo ""
+            echo "Fix: update the install snippet in README.md to match pubspec.yaml version"
+            exit 1
+          fi
+
+          echo "✅ README version matches pubspec: ^$SDK_VERSION"

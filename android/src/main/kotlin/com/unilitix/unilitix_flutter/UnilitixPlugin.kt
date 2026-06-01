@@ -46,22 +46,32 @@ class UnilitixPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
     override fun onListen(arguments: Any?, sink: EventChannel.EventSink?) {
         eventSink = sink
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val request = NetworkRequest.Builder()
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .build()
+        val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
         networkCallback = object : ConnectivityManager.NetworkCallback() {
             override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
-                sink?.success(resolveType(caps))
+                sink?.success(getNetworkType(caps))
+            }
+            override fun onAvailable(network: Network) {
+                val caps = cm.getNetworkCapabilities(network)
+                sink?.success(if (caps != null) getNetworkType(caps) else "OFFLINE")
             }
             override fun onLost(network: Network) {
                 sink?.success("OFFLINE")
             }
         }
-        cm.registerNetworkCallback(request, networkCallback!!)
+
+        // Register with main thread handler — callbacks fire on main thread directly
+        cm.registerNetworkCallback(
+            NetworkRequest.Builder().build(),
+            networkCallback!!,
+            mainHandler
+        )
+
         // Emit current state immediately
         val active = cm.activeNetwork
         val caps = active?.let { cm.getNetworkCapabilities(it) }
-        sink?.success(if (caps != null) resolveType(caps) else "OFFLINE")
+        sink?.success(if (caps != null) getNetworkType(caps) else "OFFLINE")
     }
 
     override fun onCancel(arguments: Any?) {
@@ -71,7 +81,7 @@ class UnilitixPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
         eventSink = null
     }
 
-    private fun resolveType(caps: NetworkCapabilities): String {
+    private fun getNetworkType(caps: NetworkCapabilities): String {
         return when {
             caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)     -> "WIFI"
             caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ETHERNET"
