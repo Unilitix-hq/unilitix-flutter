@@ -1,3 +1,9 @@
+## [2.0.14] - 2026-06-01
+### Fixed
+- Widened connectivity_plus, battery_plus, device_info_plus constraints
+  to support both v6.x and v7.x — resolves dependency conflicts for apps
+  still on older plugin versions
+
 ## [2.0.13] - 2026-06-01
 
 ### Added
