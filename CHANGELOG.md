@@ -1,3 +1,12 @@
+## [2.0.13] - 2026-06-01
+
+### Added
+- Web platform stub (`lib/unilitix_web.dart`) — registers the
+  `com.unilitix/sdk` method channel on web; `getCarrierName` returns
+  `''` (carrier detection not available in browsers)
+- macOS, Linux, Windows declared as `default_package: unilitix` so
+  the pure-Dart SDK works on all desktop platforms without native code
+
 ## [2.0.12] - 2026-06-01
 
 ### Changed
