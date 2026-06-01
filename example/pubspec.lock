@@ -602,7 +602,7 @@ packages:
       path: ".."
       relative: true
     source: path
-    version: "2.0.23"
+    version: "2.0.26"
   upower:
     dependency: transitive
     description:

@@ -1,3 +1,17 @@
+## 2.0.26
+- Reconcile version, README and CHANGELOG — all in sync
+
+## 2.0.25
+- Fix: API 26 guard for NetworkCallback 3-argument overload
+- Fix: NET_CAPABILITY_INTERNET filter to reduce callback frequency
+
+## 2.0.24
+- Fix: register NetworkCallback on main thread handler — eliminates ConnectivityThread crash
+
+## 2.0.23
+- Fix: widen all dependency constraints (battery_plus, device_info_plus, flutter_secure_storage, image, package_info_plus, http)
+- Fix: CHANGELOG entries for 2.0.22
+
 ## 2.0.22
 - Removed connectivity_plus dependency — native Android network monitoring via EventChannel
 - Widened battery_plus and device_info_plus constraints
