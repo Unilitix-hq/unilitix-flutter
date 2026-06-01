@@ -1,3 +1,8 @@
+## 2.0.22
+- Removed connectivity_plus dependency — native Android network monitoring via EventChannel
+- Widened battery_plus and device_info_plus constraints
+- Added web platform support
+
 ## [2.0.14] - 2026-06-01
 ### Fixed
 - Widened connectivity_plus, battery_plus, device_info_plus constraints
