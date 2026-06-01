@@ -61,12 +61,16 @@ class UnilitixPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
             }
         }
 
-        // Register with main thread handler — callbacks fire on main thread directly
-        cm.registerNetworkCallback(
-            NetworkRequest.Builder().build(),
-            networkCallback!!,
-            mainHandler
-        )
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+
+        // 3-argument overload (handler) requires API 26+
+        if (android.os.Build.VERSION.SDK_INT >= 26) {
+            cm.registerNetworkCallback(request, networkCallback!!, mainHandler)
+        } else {
+            cm.registerNetworkCallback(request, networkCallback!!)
+        }
 
         // Emit current state immediately
         val active = cm.activeNetwork
