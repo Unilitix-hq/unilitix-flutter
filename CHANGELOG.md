@@ -1,3 +1,15 @@
+## [2.0.12] - 2026-06-01
+
+### Changed
+- Bumped battery_plus to ^7.0.0, connectivity_plus to ^7.0.0,
+  device_info_plus to ^11.0.0
+- Two-path flush architecture: events → POST /v1/ingest/events,
+  session → POST /v1/ingest/session (session end only)
+- Custom event properties now sent as top-level `properties` key
+  separate from `metadata.name`
+- Immediate flush on track() via unawaited flushNow()
+- Snapshot buffer now flushed to backend via POST /v1/ingest/snapshots
+
 ## [2.0.11] - 2026-05-30
 
 ### Changed
