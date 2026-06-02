@@ -1,3 +1,14 @@
+## 2.0.34
+### Fixed
+- iOS plugin rewritten — correct channels (com.unilitix/sdk, com.unilitix/network), correct class name (UnilitixPlugin), handles getBatteryLevel and getCarrierName
+- Android manifest declares ACCESS_NETWORK_STATE for correct initial network state
+- iOS XCTest updated to match new plugin API
+- crashTracker error log updated after logPendingCrashesIfAny rename
+### Changed
+- example/lib/main.dart updated to UnilitixGestureDetector + UnilitixMaterialApp pattern
+- iOS podspec updated: CoreTelephony + UIKit frameworks, PrivacyInfo.xcprivacy, iOS 13.0 minimum, correct metadata
+- CONTRIBUTING.md release tag example updated to v2.x.x format
+
 ## 2.0.32
 ### Fixed
 - Web stub now handles getBatteryLevel (returns -1.0 sentinel)
