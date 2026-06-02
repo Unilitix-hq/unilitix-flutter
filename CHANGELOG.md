@@ -1,3 +1,9 @@
+## 2.0.38
+### Fixed
+- Events flush immediately when app goes to background
+- Session ends and full session record sent when app is killed (detached)
+- Fixes missing score, duration, device, location on dashboard sessions
+
 ## 2.0.37
 ### Changed
 - Version bump: pubspec, podspec, and `kUnilitixSdkVersion` all synced to 2.0.37

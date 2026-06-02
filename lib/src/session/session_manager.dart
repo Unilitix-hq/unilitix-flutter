@@ -10,10 +10,13 @@ class SessionManager with WidgetsBindingObserver {
   final void Function(Session session) onSessionEnd;
   final void Function() resetScreenshotOrdinal;
 
+  /// Called when the app enters the background (paused). Wire to flush pending events.
+  void Function()? onBackground;
+
   Session? _currentSession;
   Session? _lastEndedSession;
   int? _backgroundedAt;
-  int _foregroundedAt = 0;
+  int? _lastForegroundedAt;
   String _networkSentinel = 'INITIAL';
 
   Session? get currentSession => _currentSession;
@@ -25,13 +28,14 @@ class SessionManager with WidgetsBindingObserver {
 
   /// Live total foreground time for the current session.
   /// Includes the in-progress foreground window that has not yet been
-  /// committed by a `paused` event.
+  /// committed by a [AppLifecycleState.paused] event.
   int get currentForegroundTimeMs {
     final s = _currentSession;
     if (s == null) return _lastEndedSession?.foregroundTimeMs ?? 0;
     if (_backgroundedAt != null) return s.foregroundTimeMs;
     return s.foregroundTimeMs +
-        (DateTime.now().millisecondsSinceEpoch - _foregroundedAt);
+        (DateTime.now().millisecondsSinceEpoch -
+            (_lastForegroundedAt ?? s.startedAt));
   }
 
   SessionManager({
@@ -53,7 +57,7 @@ class SessionManager with WidgetsBindingObserver {
 
   void _startNewSession() {
     _currentSession = Session();
-    _foregroundedAt = _currentSession!.startedAt;
+    _lastForegroundedAt = _currentSession!.startedAt;
     _networkSentinel = 'INITIAL';
     resetScreenshotOrdinal();
     UnilitixLogger.d('Session started: ${_currentSession!.id}');
@@ -64,9 +68,9 @@ class SessionManager with WidgetsBindingObserver {
     final s = _currentSession!;
     final now = DateTime.now().millisecondsSinceEpoch;
 
-    // Capture the current foreground window if the app is not backgrounded.
-    if (_backgroundedAt == null && _foregroundedAt > 0) {
-      s.foregroundTimeMs += now - _foregroundedAt;
+    // Capture in-progress foreground window if not currently backgrounded.
+    if (_backgroundedAt == null && _lastForegroundedAt != null) {
+      s.foregroundTimeMs += now - _lastForegroundedAt!;
     }
 
     s.endedAt = now;
@@ -90,24 +94,42 @@ class SessionManager with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused) {
-      final now = DateTime.now().millisecondsSinceEpoch;
-      _currentSession?.foregroundTimeMs += now - _foregroundedAt;
-      _backgroundedAt = now;
-    } else if (state == AppLifecycleState.resumed) {
-      final now = DateTime.now().millisecondsSinceEpoch;
-      final bg = _backgroundedAt;
-      if (bg != null) {
-        final bgDuration = now - bg;
+    switch (state) {
+      case AppLifecycleState.paused:
+        final now = DateTime.now().millisecondsSinceEpoch;
+        if (_currentSession != null) {
+          _currentSession!.foregroundTimeMs +=
+              now - (_lastForegroundedAt ?? _currentSession!.startedAt);
+        }
+        _backgroundedAt = now;
+        // Flush events immediately — session stays alive during the timeout window.
+        onBackground?.call();
+        break;
+
+      case AppLifecycleState.detached:
+        // App being killed — end session and flush everything.
+        if (_currentSession != null) {
+          _endCurrentSession();
+        }
+        break;
+
+      case AppLifecycleState.resumed:
+        final backgroundDuration = _backgroundedAt != null
+            ? DateTime.now().millisecondsSinceEpoch - _backgroundedAt!
+            : 0;
         _backgroundedAt = null;
-        _foregroundedAt = now;
-        if (bgDuration > sessionTimeoutSeconds * 1000) {
+        _lastForegroundedAt = DateTime.now().millisecondsSinceEpoch;
+
+        if (backgroundDuration > sessionTimeoutSeconds * 1000) {
           if (_currentSession != null) _endCurrentSession();
           _startNewSession();
         } else {
-          _currentSession?.backgroundTimeMs += bgDuration;
+          _currentSession?.backgroundTimeMs += backgroundDuration;
         }
-      }
+        break;
+
+      default:
+        break;
     }
   }
 }

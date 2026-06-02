@@ -239,6 +239,10 @@ class Unilitix {
       snapshotBuffer: _snapshotBuffer,
     );
 
+    _sessionManager.onBackground = () {
+      unawaited(_flushScheduler.flush());
+    };
+
     _screenshotCapture = ScreenshotCapture(
       repaintKey: _repaintKey,
       intervalMs: effectiveConfig.screenshotIntervalMs,
