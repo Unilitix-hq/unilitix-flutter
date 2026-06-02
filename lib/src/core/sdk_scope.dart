@@ -8,13 +8,4 @@ class SdkScope {
 
   static void Function(String screen)? onScreenChange;
   static void Function(String screen, double x, double y)? onTap;
-  static void Function(
-    String screen,
-    double x,
-    double y,
-    double centroidX,
-    double centroidY,
-  )? onRageTap;
-  static void Function(Object error, StackTrace? stack)? onCrash;
-  static void Function()? onFlushNeeded;
 }

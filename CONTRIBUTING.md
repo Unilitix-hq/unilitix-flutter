@@ -64,9 +64,9 @@ tag triggers `.github/workflows/publish.yml`, which runs the full
 check suite and publishes to pub.dev.
 
 ```bash
-# After merging your PR
-git tag v1.0.6
-git push origin v1.0.6
+# After merging your PR — replace X.Y.Z with the new version
+git tag v2.0.32
+git push origin v2.0.32
 ```
 
 ## Reporting bugs

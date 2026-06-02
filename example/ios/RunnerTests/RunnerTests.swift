@@ -2,26 +2,30 @@ import Flutter
 import UIKit
 import XCTest
 
-
 @testable import unilitix_flutter
-
-// This demonstrates a simple unit test of the Swift portion of this plugin's implementation.
-//
-// See https://developer.apple.com/documentation/xctest for more information about using XCTest.
 
 class RunnerTests: XCTestCase {
 
-  func testGetPlatformVersion() {
-    let plugin = UnilitixFlutterPlugin()
-
-    let call = FlutterMethodCall(methodName: "getPlatformVersion", arguments: [])
-
-    let resultExpectation = expectation(description: "result block must be called.")
+  func testGetBatteryLevelReturnsDouble() {
+    let plugin = UnilitixPlugin()
+    let call = FlutterMethodCall(methodName: "getBatteryLevel", arguments: nil)
+    let expectation = self.expectation(description: "result block called")
     plugin.handle(call) { result in
-      XCTAssertEqual(result as! String, "iOS " + UIDevice.current.systemVersion)
-      resultExpectation.fulfill()
+      // Returns a Double (0.0–1.0) or -1.0 — never nil or a non-Double
+      XCTAssertTrue(result is Double, "getBatteryLevel must return a Double, got \(type(of: result))")
+      expectation.fulfill()
     }
     waitForExpectations(timeout: 1)
   }
 
+  func testGetCarrierNameReturnsString() {
+    let plugin = UnilitixPlugin()
+    let call = FlutterMethodCall(methodName: "getCarrierName", arguments: nil)
+    let expectation = self.expectation(description: "result block called")
+    plugin.handle(call) { result in
+      XCTAssertTrue(result is String, "getCarrierName must return a String, got \(type(of: result))")
+      expectation.fulfill()
+    }
+    waitForExpectations(timeout: 1)
+  }
 }

@@ -13,9 +13,6 @@ class UnilitixConfig {
   /// Unilitix ingest API base URL.
   final String apiUrl;
 
-  /// Automatically track screen navigation via [Unilitix.observer].
-  final bool autoTrackScreens;
-
   /// Automatically track user taps via [UnilitixGestureDetector].
   final bool autoTrackTaps;
 
@@ -42,9 +39,6 @@ class UnilitixConfig {
 
   /// Mask text input fields in snapshots and screenshots.
   final bool maskInputs;
-
-  /// Fraction of sessions to capture (0.0–1.0).
-  final double sampleRate;
 
   /// Capture widget-tree snapshots.
   final bool captureSnapshots;
@@ -73,13 +67,9 @@ class UnilitixConfig {
   /// Maximum screenshots per session.
   final int maxScreenshotsPerSession;
 
-  /// Mask text inputs in screenshots.
-  final bool maskInputsInScreenshots;
-
   const UnilitixConfig({
     required this.apiKey,
     this.apiUrl = 'https://api.unilitix.com',
-    this.autoTrackScreens = true,
     this.autoTrackTaps = true,
     this.autoTrackCrashes = true,
     this.autoTrackRageTaps = true,
@@ -89,7 +79,6 @@ class UnilitixConfig {
     this.sessionTimeoutSeconds = 1800,
     this.debug = false,
     this.maskInputs = true,
-    this.sampleRate = 1.0,
     this.captureSnapshots = true,
     this.snapshotIntervalMs = 1000,
     this.maxSnapshotsPerSession = 200,
@@ -99,6 +88,5 @@ class UnilitixConfig {
     this.screenshotMaxWidth = 480,
     this.uploadScreenshotsOnWifiOnly = true,
     this.maxScreenshotsPerSession = 300,
-    this.maskInputsInScreenshots = true,
   });
 }

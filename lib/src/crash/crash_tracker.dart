@@ -21,6 +21,8 @@ class CrashTracker {
     required this.database,
   });
 
+  // TODO: expose Unilitix.dispose() that calls _restoreCrashHandlers()
+  // for use in test environments and hot restart scenarios.
   void install() {
     _previousFlutterHandler = FlutterError.onError;
 
@@ -37,11 +39,6 @@ class CrashTracker {
     };
   }
 
-  void uninstall() {
-    FlutterError.onError = _previousFlutterHandler;
-    PlatformDispatcher.instance.onError = null;
-  }
-
   void _recordCrash(Object error, StackTrace? stack) {
     UnilitixLogger.e('Crash captured', error, stack);
     final event = UnilitixEvent(
@@ -52,12 +49,12 @@ class CrashTracker {
       ..exceptionMessage = error.toString()
       ..stackTrace = stack?.toString()
       ..breadcrumbs = List.of(breadcrumbs);
-    SdkScope.onCrash?.call(error, stack);
     onCrashEvent(event);
   }
 
-  /// On next launch, check for a crash persisted during the previous session.
-  Future<void> recoverPendingCrash() async {
+  /// On next launch, logs any crash batches persisted from the previous session.
+  /// Actual retry is handled automatically by FlushScheduler on the next flush.
+  Future<void> logPendingCrashesIfAny() async {
     try {
       final rows = await database.getOldestEvents(10);
       final crashBatches = rows.where((r) {
@@ -73,7 +70,7 @@ class CrashTracker {
             'Recovered ${crashBatches.length} pending crash batch(es) from DB');
       }
     } catch (e) {
-      UnilitixLogger.e('recoverPendingCrash failed', e);
+      UnilitixLogger.e('logPendingCrashesIfAny failed', e);
     }
   }
 }

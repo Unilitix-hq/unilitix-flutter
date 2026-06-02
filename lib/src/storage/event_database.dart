@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'package:sqflite/sqflite.dart';
-import 'package:path/path.dart' as p;
 
 import 'pending_event.dart';
 import 'pending_screenshot.dart';
@@ -23,12 +22,9 @@ class EventDatabase {
     required this.maxScreenshotsPerSession,
   });
 
-  /// Whether local storage is available on this device/platform.
-  bool get isAvailable => _available;
-
   Future<void> open() async {
     try {
-      final path = p.join(await getDatabasesPath(), _dbName);
+      final path = '${await getDatabasesPath()}/$_dbName';
       _db = await openDatabase(
         path,
         version: _version,
@@ -95,13 +91,6 @@ class EventDatabase {
     await _db!.delete(_tEvents, where: 'id = ?', whereArgs: [id]);
   }
 
-  Future<void> deleteEventsByIds(List<int> ids) async {
-    if (!_available) return;
-    if (ids.isEmpty) return;
-    final placeholders = ids.map((_) => '?').join(',');
-    await _db!.delete(_tEvents, where: 'id IN ($placeholders)', whereArgs: ids);
-  }
-
   Future<void> incrementRetryCount(int id) async {
     if (!_available) return;
     await _db!.rawUpdate(
@@ -141,29 +130,11 @@ class EventDatabase {
     );
   }
 
-  Future<void> remapSessionId(String oldId, String newId) async {
-    if (!_available) return;
-    await _db!.rawUpdate(
-      'UPDATE $_tScreenshots SET session_id = ? WHERE session_id = ?',
-      [newId, oldId],
-    );
-  }
-
   Future<int> screenshotCount() async {
     if (!_available) return 0;
     final result =
         await _db!.rawQuery('SELECT COUNT(*) as c FROM $_tScreenshots');
     return (result.first['c'] as int?) ?? 0;
-  }
-
-  Future<void> deleteScreenshotsByIds(List<int> ids) async {
-    if (!_available) return;
-    if (ids.isEmpty) return;
-    final placeholders = ids.map((_) => '?').join(',');
-    await _db!.rawDelete(
-      'DELETE FROM $_tScreenshots WHERE id IN ($placeholders)',
-      ids,
-    );
   }
 
   Future<void> deleteOldestScreenshots(int count) async {

@@ -1,27 +1,20 @@
 # Unilitix Flutter SDK
 
-African-first mobile UX analytics for Flutter.
-Track sessions, screens, events and crashes with a single line of code.
+African-first mobile UX analytics for Flutter. Track sessions, screens, events and crashes with a single line of code.
 
 [![pub package](https://img.shields.io/pub/v/unilitix.svg)](https://pub.dev/packages/unilitix)
 [![pub points](https://img.shields.io/pub/points/unilitix)](https://pub.dev/packages/unilitix/score)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![CI](https://github.com/Unilitix-hq/unilitix-flutter/actions/workflows/publish.yml/badge.svg)](https://github.com/Unilitix-hq/unilitix-flutter/actions/workflows/publish.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![CI](https://github.com/Unilitix-hq/unilitix-flutter/actions/workflows/publish.yml/badge.svg)](https://github.com/Unilitix-hq/unilitix-flutter/actions)
 
 ## Install
 
 ```yaml
-# pubspec.yaml
 dependencies:
-  unilitix: ^2.0.26
-```
-```bash
-flutter pub get
+  unilitix: ^2.0.32
 ```
 
 ## Quick start
-
-Copy this entire block into your `main.dart` and replace `YOUR_API_KEY`:
 
 ```dart
 import 'package:flutter/material.dart';
@@ -29,153 +22,99 @@ import 'package:unilitix/unilitix.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  await Unilitix.init(
-    config: const UnilitixConfig(apiKey: 'YOUR_API_KEY'),
-  );
-
-  runApp(
-    UnilitixGestureDetector(
-      child: const MyApp(),
-    ),
-  );
+  await Unilitix.init(config: const UnilitixConfig(apiKey: 'YOUR_API_KEY'));
+  runApp(UnilitixGestureDetector(child: const MyApp()));
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
-
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      navigatorObservers: [Unilitix.observer], // screen tracking
+    return UnilitixMaterialApp( // drop-in for MaterialApp
       home: const HomeScreen(),
     );
   }
 }
 ```
 
-Get your API key at [app.unilitix.com](https://app.unilitix.com) → Settings → Apps → Create App.
+Get your API key at [app.unilitix.com](https://app.unilitix.com) → Settings → Apps.
 
 ## Verify your integration
 
-In debug mode, within 5 seconds of launch you will see:
+In debug mode you will see:
 
 ```text
-[Unilitix] ✅ SDK initialized
-[Unilitix] ✅ Session started
+[Unilitix] SDK initialized ✅ v2.0.32
+[Unilitix] Session started ✅ abc123…
+[Unilitix] Screen → /home
 ```
-
-If you see a `⚠️` warning about screen events, confirm `Unilitix.observer` is inside `navigatorObservers` in your `MaterialApp`. Silent in production builds.
-
-## Common mistakes
-
-| ❌ Wrong | ✅ Correct |
-|---|---|
-| `Unilitix.init('your_api_key')` | `Unilitix.init(config: const UnilitixConfig(apiKey: '...'))` |
-| `runApp(const MyApp())` | `runApp(UnilitixGestureDetector(child: const MyApp()))` |
-| `UnilitixNavigatorObserver()` | `Unilitix.observer` |
 
 ## Track custom events
 
 ```dart
-Unilitix.track('purchase_completed', {
-  'amount': 5000,
-  'currency': 'NGN',
-});
-
-// Any key/value properties — strings, numbers, booleans
 Unilitix.track('loan_applied', {
   'amount': 50000,
   'loan_type': 'personal',
-  'screen': 'LoanApplication',
+  'currency': 'NGN',
 });
 ```
 
 ## Identify users
 
 ```dart
-// Call after login
+// After login
 Unilitix.identify('user_123', {
-  'name': 'Tosin',
+  'name': 'Ada Okafor',
   'plan': 'pro',
   'country': 'Nigeria',
 });
 
-// Call on logout
+// After logout
 Unilitix.reset();
 ```
 
 ## Configuration
 
-All options have sensible defaults. Only override what you need:
-
 ```dart
 await Unilitix.init(
   config: const UnilitixConfig(
     apiKey: 'YOUR_API_KEY',
-    debug: true,                  // console logging
-    autoTrackScreens: true,       // screen flow tracking
-    autoTrackTaps: true,          // tap heatmaps
-    autoTrackCrashes: true,       // crash reports
-    autoTrackRageTaps: true,      // frustration detection
-    flushIntervalSeconds: 30,     // upload frequency
-    sessionTimeoutSeconds: 1800,  // session idle timeout (30 min)
-    maskInputs: true,             // hide sensitive fields
-    sampleRate: 1.0,              // 100% of sessions
-    captureScreenshots: true,     // visual session replay
-    captureSnapshots: true,       // widget tree capture
+    debug: false,
+    captureSnapshots: true,            // session replay — widget tree
+    captureScreenshots: false,         // pixel screenshots — Growth plan
+    maskInputs: true,                  // mask text fields in replay
+    flushIntervalSeconds: 30,          // upload frequency
+    sessionTimeoutSeconds: 1800,       // idle timeout (30 min)
     uploadScreenshotsOnWifiOnly: true, // save mobile data
   ),
 );
 ```
 
-## Session control
+## go_router / custom navigators
 
 ```dart
-await Unilitix.startSession();
-await Unilitix.endSession();
-await Unilitix.flush();
+GoRouter(
+  observers: [Unilitix.observer],
+  routes: [...],
+)
 ```
 
 ## Privacy
 
 ```dart
-Unilitix.optOut();
-Unilitix.optIn();
-```
+Unilitix.optOut(); // user opts out
+Unilitix.optIn();  // user opts back in
 
-Wrap sensitive widgets to exclude them from recordings:
-
-```dart
-UnilitixPrivate(
-  child: CreditCardWidget(),
-)
-```
-
-## Migration from v1.x
-
-```dart
-// Before (v1.x)
-await Unilitix.init('your_api_key');
-runApp(const MyApp());
-
-// After (v2.x)
-await Unilitix.init(
-  config: const UnilitixConfig(apiKey: 'your_api_key'),
-);
-runApp(
-  UnilitixGestureDetector(
-    child: const MyApp(),
-  ),
-);
+// Exclude sensitive widgets from recordings
+UnilitixPrivate(child: CreditCardWidget())
 ```
 
 ## Requirements
 
-| Platform | Minimum version |
+| Platform | Minimum |
 |---|---|
 | Android | API 21 (Android 5.0) |
-| iOS | In development — [track progress](https://github.com/Unilitix-hq/unilitix-flutter/issues/1) |
+| iOS | In development |
+| Web | ✅ Supported |
 
 ## Support
 

@@ -27,3 +27,21 @@ jobs:
           fi
 
           echo "✅ README version matches pubspec: ^$SDK_VERSION"
+
+      - name: Check kUnilitixSdkVersion matches pubspec version
+        run: |
+          SDK_VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}')
+          DART_VERSION=$(grep "kUnilitixSdkVersion" lib/src/core/version.dart | grep -o "'[0-9.]*'" | tr -d "'")
+          echo "pubspec version:       $SDK_VERSION"
+          echo "kUnilitixSdkVersion:   $DART_VERSION"
+
+          if [ "$SDK_VERSION" != "$DART_VERSION" ]; then
+            echo "❌ kUnilitixSdkVersion in lib/src/core/version.dart does not match pubspec.yaml."
+            echo "   pubspec.yaml:        $SDK_VERSION"
+            echo "   kUnilitixSdkVersion: $DART_VERSION"
+            echo ""
+            echo "Fix: update kUnilitixSdkVersion in lib/src/core/version.dart to '$SDK_VERSION'"
+            exit 1
+          fi
+
+          echo "✅ kUnilitixSdkVersion matches pubspec: $DART_VERSION"

@@ -1,9 +1,10 @@
 import 'dart:async';
-import 'dart:io';
+
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
 
 /// Network monitor with zero third-party dependencies.
-/// Uses platform channels on Android/iOS, dart:io socket check as fallback.
+/// Uses platform channels on Android/iOS, http connectivity check as fallback.
 class NetworkMonitor {
   final void Function(String type) onNetworkChanged;
 
@@ -40,7 +41,7 @@ class NetworkMonitor {
     _pollTimer = null;
   }
 
-  /// Polling fallback for web/desktop using dart:io socket check
+  /// Polling fallback for web/desktop using an http reachability check.
   void _startPolling() {
     _pollTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
       final type = await _checkConnectivity();
@@ -53,13 +54,13 @@ class NetworkMonitor {
 
   static Future<String> _checkConnectivity() async {
     try {
-      final result = await InternetAddress.lookup('google.com')
+      final response = await http
+          .get(Uri.parse('https://clients3.google.com/generate_204'))
           .timeout(const Duration(seconds: 5));
-      if (result.isNotEmpty && result[0].rawAddress.isNotEmpty) {
-        return 'WIFI'; // Can't distinguish WiFi vs cellular in pure Dart
-      }
-    } catch (_) {}
-    return 'OFFLINE';
+      return response.statusCode == 204 ? 'WIFI' : 'OFFLINE';
+    } catch (_) {
+      return 'OFFLINE';
+    }
   }
 
   static String _parseNativeType(String raw) {

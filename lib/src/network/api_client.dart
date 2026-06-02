@@ -61,32 +61,22 @@ class ApiClient {
           return resp;
         }
 
-        final delay = RetryPolicy.delayFor(
-          attempt: attempt,
-          statusCode: resp.statusCode,
-          retryAfterHeader: resp.headers['retry-after'],
-        );
-        if (delay < 0 ||
-            !RetryPolicy.shouldRetry(
-                attempt: attempt, statusCode: resp.statusCode)) {
+        if (!RetryPolicy.shouldRetry(
+            attempt: attempt, statusCode: resp.statusCode)) {
           UnilitixLogger.w('API ${resp.statusCode} on $path — dropping batch');
           return resp;
         }
-        await Future.delayed(Duration(milliseconds: delay));
+        final retryAfterSecs = resp.headers['retry-after'] != null
+            ? int.tryParse(resp.headers['retry-after']!)
+            : null;
+        await Future.delayed(
+            RetryPolicy.delayFor(attempt - 1, retryAfterSeconds: retryAfterSecs));
       } on SocketException {
         if (attempt == RetryPolicy.maxRetries) return null;
-        await Future.delayed(
-          Duration(
-              milliseconds:
-                  RetryPolicy.delayFor(attempt: attempt, statusCode: null)),
-        );
+        await Future.delayed(RetryPolicy.delayFor(attempt - 1));
       } on TimeoutException {
         if (attempt == RetryPolicy.maxRetries) return null;
-        await Future.delayed(
-          Duration(
-              milliseconds:
-                  RetryPolicy.delayFor(attempt: attempt, statusCode: null)),
-        );
+        await Future.delayed(RetryPolicy.delayFor(attempt - 1));
       }
     }
     return null;
@@ -131,7 +121,8 @@ class ApiClient {
           )
           .timeout(const Duration(seconds: 60));
       return resp.statusCode < 300;
-    } catch (_) {
+    } catch (e, stack) {
+      UnilitixLogger.e('uploadScreenshotBytes failed', e, stack);
       return false;
     }
   }

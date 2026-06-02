@@ -4,7 +4,7 @@
 /// void main() async {
 ///   WidgetsFlutterBinding.ensureInitialized();
 ///   await Unilitix.init(config: const UnilitixConfig(apiKey: 'key'));
-///   runApp(UnilitixGestureDetector(child: MyApp()));
+///   runApp(UnilitixMaterialApp(home: HomeScreen()));
 /// }
 /// ```
 library unilitix;
@@ -19,7 +19,6 @@ import 'src/config.dart';
 import 'src/core/sdk_scope.dart';
 import 'src/events/event.dart';
 import 'src/events/event_buffer.dart';
-import 'src/session/session.dart';
 import 'src/session/session_manager.dart';
 import 'src/tracking/observer.dart';
 import 'src/tracking/rage_tap_detector.dart';
@@ -36,12 +35,15 @@ import 'src/privacy/identity.dart';
 import 'src/privacy/opt_manager.dart';
 import 'src/flush/flush_scheduler.dart';
 import 'src/util/device_info.dart';
+import 'src/core/version.dart';
 import 'src/util/json_util.dart';
 import 'src/logger/logger.dart';
 
 export 'src/config.dart';
 export 'src/tracking/observer.dart';
 export 'src/tracking/gesture_tracker.dart';
+export 'src/tracking/unilitix_app.dart';
+export 'src/tracking/unilitix_material_app.dart';
 export 'src/privacy/privacy_mask.dart';
 export 'src/events/event.dart';
 
@@ -50,8 +52,6 @@ export 'src/events/event.dart';
 /// Initialize once in `main()` before `runApp()`.
 class Unilitix {
   Unilitix._();
-
-  static const String _sdkVersion = '2.0.7';
 
   static UnilitixConfig? _config;
   static bool _initialized = false;
@@ -78,8 +78,14 @@ class Unilitix {
   static final GlobalKey _repaintKey = GlobalKey();
   static final UnilitixObserver _observer = UnilitixObserver();
 
-  /// The navigator observer — add to [MaterialApp.navigatorObservers].
+  /// The navigator observer.
+  /// [UnilitixMaterialApp] wires this automatically.
+  /// Only needed for custom navigators — see [UnilitixMaterialApp].
   static UnilitixObserver get observer => _observer;
+
+  /// The [RepaintBoundary] key used for screenshot capture.
+  /// Automatically attached by [UnilitixMaterialApp].
+  static GlobalKey get repaintKey => _repaintKey;
 
   /// Whether [init] has completed successfully.
   static bool get isInitialized => _initialized;
@@ -149,7 +155,7 @@ class Unilitix {
     _apiClient = ApiClient(
       apiKey: config.apiKey,
       apiUrl: config.apiUrl,
-      sdkVersion: _sdkVersion,
+      sdkVersion: kUnilitixSdkVersion,
     );
 
     _rageTapDetector = RageTapDetector(
@@ -204,6 +210,7 @@ class Unilitix {
       intervalMs: config.screenshotIntervalMs,
       maxScreenshots: config.maxScreenshotsPerSession,
       maxWidth: config.screenshotMaxWidth,
+      quality: config.screenshotQuality,
       onCapture: (bytes, screenName, ordinal, w, h, capturedAt) async {
         final sessionId = _sessionManager.currentSession?.id ?? '';
         await _database.insertScreenshot(PendingScreenshot(
@@ -239,13 +246,10 @@ class Unilitix {
     // Wire up SdkScope callbacks
     SdkScope.onScreenChange = _onScreenChange;
     SdkScope.onTap = _onTap;
-    SdkScope.onRageTap = (screen, x, y, cx, cy) {
-      _rageTapDetector.recordTap(screen, x, y);
-    };
-
     // Start everything
     _sessionManager.start();
     if (config.autoTrackCrashes) _crashTracker.install();
+    await _crashTracker.logPendingCrashesIfAny();
     _flushScheduler.start();
     if (config.captureSnapshots) _snapshotCapture.start();
     if (config.captureScreenshots) _screenshotCapture.start();
@@ -255,11 +259,11 @@ class Unilitix {
     if (config.debug) {
       final sid = _sessionManager.currentSession?.id ?? '—';
       UnilitixLogger.d('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-      UnilitixLogger.d('SDK initialized  ✅  v$_sdkVersion');
+      UnilitixLogger.d('SDK initialized  ✅  v$kUnilitixSdkVersion');
       UnilitixLogger.d(
           'Session started  ✅  ${sid.length > 8 ? sid.substring(0, 8) : sid}…');
       UnilitixLogger.d(
-          'Observer         ⚠️   not yet — add Unilitix.observer to navigatorObservers');
+          'Observer         ⚠️   not yet — use UnilitixMaterialApp instead of MaterialApp');
       UnilitixLogger.d(
           'API key          ${config.apiKey.length > 8 ? "${config.apiKey.substring(0, 4)}****${config.apiKey.substring(config.apiKey.length - 4)}" : "****"}');
       UnilitixLogger.d(
@@ -270,8 +274,10 @@ class Unilitix {
 
       Future.delayed(const Duration(seconds: 5), () {
         if (!SdkScope.observerAttached && !SdkScope.screenEventReceived) {
-          UnilitixLogger.w('No screen events detected. Did you add '
-              'Unilitix.observer to MaterialApp.navigatorObservers?');
+          UnilitixLogger.w(
+            'Screen tracking not detected. Replace MaterialApp with UnilitixMaterialApp:\n'
+            '  UnilitixMaterialApp(home: HomeScreen())',
+          );
         }
       });
     }
@@ -304,7 +310,6 @@ class Unilitix {
     _assertInitialized('identify');
     if (_optManager.isOptedOut) return;
     await _identity.setUserId(userId, traits: traits);
-    if (traits != null) _identity.setTraits(traits);
     await _apiClient.identify(
       anonymousId: _identity.anonymousId,
       customUserId: userId,
@@ -410,13 +415,12 @@ class Unilitix {
     if (_breadcrumbs.length > 50) _breadcrumbs.removeAt(0);
   }
 
-  static Future<Map<String, dynamic>> _buildSessionPayload() async {
+  static Future<Map<String, dynamic>?> _buildSessionPayload() async {
     // Prefer the active session; fall back to the most recently ended session
-    // (which is the case when a flush fires right after _endCurrentSession sets
-    // _currentSession to null). Without this, we'd create a dummy Session()
-    // with startedAt=now and durationMs=0.
+    // (the case when a flush fires right after _endCurrentSession nulls it).
     final session =
-        _sessionManager.currentSession ?? _sessionManager.lastEndedSession ?? Session();
+        _sessionManager.currentSession ?? _sessionManager.lastEndedSession;
+    if (session == null) return null;
     final view = WidgetsBinding.instance.platformDispatcher.views.first;
     final screenSize = view.physicalSize / view.devicePixelRatio;
     final batteryLvl = await _africaContext.batteryLevel;
@@ -434,7 +438,6 @@ class Unilitix {
     return {
       'anonymousId': _identity.anonymousId,
       'userId': _identity.userId,
-      'customUserId': _identity.userId,
       'deviceType': 'phone',
       'manufacturer': _deviceInfo.manufacturer,
       'deviceModel': _deviceInfo.model,
@@ -446,7 +449,7 @@ class Unilitix {
       'appVersion': _packageInfo.version,
       'buildNumber': _packageInfo.buildNumber,
       'packageName': _packageInfo.packageName,
-      'sdkVersion': _sdkVersion,
+      'sdkVersion': kUnilitixSdkVersion,
       'networkType': _networkMonitor.currentType(),
       'carrierName': carrier,
       'orientation': orientation,

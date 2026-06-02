@@ -11,13 +11,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
 
       - uses: dart-lang/setup-dart@v1   # MUST come before publish — enables OIDC
 
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.32.0'
+          flutter-version: '3.32.8'
           channel: stable
 
       - name: Install dependencies

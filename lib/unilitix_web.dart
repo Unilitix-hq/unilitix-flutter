@@ -4,8 +4,7 @@ import 'package:flutter_web_plugins/flutter_web_plugins.dart';
 /// Web stub for the Unilitix SDK platform channel.
 ///
 /// The core SDK is pure Dart and works on all platforms. This stub
-/// handles the single native call (getCarrierName) by returning an
-/// empty string — carrier detection is not available in browsers.
+/// handles native calls that have no meaningful browser equivalent.
 class UnilitixPluginWeb {
   static void registerWith(Registrar registrar) {
     final channel = MethodChannel(
@@ -14,11 +13,14 @@ class UnilitixPluginWeb {
       registrar,
     );
     channel.setMethodCallHandler((call) async {
-      if (call.method == 'getCarrierName') return '';
-      throw PlatformException(
-        code: 'Unimplemented',
-        message: '${call.method} is not implemented on web.',
-      );
+      switch (call.method) {
+        case 'getCarrierName': return '';
+        case 'getBatteryLevel': return -1.0;
+        default: throw PlatformException(
+          code: 'Unimplemented',
+          message: '${call.method} not implemented on web',
+        );
+      }
     });
   }
 }

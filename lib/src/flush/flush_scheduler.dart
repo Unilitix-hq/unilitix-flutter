@@ -25,7 +25,7 @@ class FlushScheduler {
   final ApiClient apiClient;
   final NetworkMonitor networkMonitor;
   final PerformanceMonitor performanceMonitor;
-  final Future<Map<String, dynamic>> Function() buildSessionPayload;
+  final Future<Map<String, dynamic>?> Function() buildSessionPayload;
   final bool uploadScreenshotsOnWifiOnly;
   final SnapshotBuffer? snapshotBuffer;
 
@@ -146,6 +146,7 @@ class FlushScheduler {
   Future<void> _flushSession() async {
     try {
       final sessionPayload = await buildSessionPayload();
+      if (sessionPayload == null) return;
       final sessionId = sessionPayload['sessionId'] as String? ?? '';
       final ok = await apiClient.ingestSession(sessionPayload);
       if (ok) {
@@ -201,7 +202,7 @@ class FlushScheduler {
           'screenName': s.screenName,
           'viewportWidth': s.viewportWidth,
           'viewportHeight': s.viewportHeight,
-          'capturedAt': s.capturedAt,
+          'capturedAt': JsonUtil.toRfc3339(s.capturedAt),
         });
         if (presignedUrl == null) continue;
 

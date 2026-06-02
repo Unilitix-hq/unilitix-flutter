@@ -20,6 +20,7 @@ class ScreenshotCapture {
   final int intervalMs;
   final int maxScreenshots;
   final int maxWidth;
+  final int quality;
   final Future<void> Function(
     Uint8List bytes,
     String screenName,
@@ -37,6 +38,7 @@ class ScreenshotCapture {
     required this.intervalMs,
     required this.maxScreenshots,
     required this.maxWidth,
+    required this.quality,
     required this.onCapture,
   });
 
@@ -85,8 +87,8 @@ class ScreenshotCapture {
         imgObj = img.copyResize(imgObj, width: maxWidth);
       }
 
-      final webpBytes = Uint8List.fromList(
-        img.encodeJpg(imgObj, quality: 80),
+      final jpegBytes = Uint8List.fromList(
+        img.encodeJpg(imgObj, quality: quality),
       );
 
       final screen = SdkScope.currentScreen ?? 'unknown';
@@ -95,7 +97,7 @@ class ScreenshotCapture {
       final h = (view.physicalSize.height / view.devicePixelRatio).round();
       final capturedAt = DateTime.now().millisecondsSinceEpoch;
 
-      await onCapture(webpBytes, screen, _ordinal, w, h, capturedAt);
+      await onCapture(jpegBytes, screen, _ordinal, w, h, capturedAt);
       _ordinal++;
     } catch (e) {
       UnilitixLogger.e('Screenshot capture failed', e);

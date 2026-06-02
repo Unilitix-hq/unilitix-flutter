@@ -1,6 +1,7 @@
 package com.unilitix.unilitix_flutter
 
 import android.content.Context
+import android.os.BatteryManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -30,6 +31,13 @@ class UnilitixPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
 
     override fun onMethodCall(call: MethodCall, result: Result) {
         when (call.method) {
+            "getBatteryLevel" -> {
+                try {
+                    val bm = context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
+                    val level = bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1
+                    result.success(level.toDouble() / 100.0)
+                } catch (e: Exception) { result.success(-1.0) }
+            }
             "getCarrierName" -> {
                 try {
                     val tm = context.getSystemService(Context.TELEPHONY_SERVICE)

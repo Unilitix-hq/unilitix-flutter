@@ -1,3 +1,76 @@
+## 2.0.32
+### Fixed
+- Web stub now handles getBatteryLevel (returns -1.0 sentinel)
+- Web connectivity check uses google.com/generate_204 instead of api.unilitix.com — decouples connectivity state from Unilitix API availability
+- Docstring in unilitix.dart updated to show UnilitixMaterialApp pattern
+### Removed
+- EventTypes.scroll — was never emitted, removed to avoid false API expectations
+### Changed
+- publish.yml pinned to Flutter 3.32.8
+### Added
+- 73 new unit tests covering UnilitixConfig, UnilitixEvent, RageTapDetector, RetryPolicy, JsonUtil, SnapshotBuffer, EventBuffer, Session, and Unilitix static API (87 total)
+- RetryPolicy.delayFor overflow fix — attempt clamped to [0, 20] before bit-shift; returns Duration instead of int
+- Removed path and battery_plus dependencies (8 pub dependencies total); battery level now via existing com.unilitix/sdk channel
+
+## 2.0.31
+### Fixed
+- Init log now shows SDK version (kUnilitixSdkVersion), not app version
+- SdkScope.onCrash removed — was emitting a ghost crash event with silently-dropped properties alongside the real one from CrashTracker
+- Web screenshot uploads unblocked — _checkConnectivity now returns 'WIFI' so isWifi() is true on web when connected
+- publish.yml: actions/checkout@v5 → @v4 (v5 does not exist; publish CI was broken)
+### Removed
+- SdkScope.onCrash field (no longer assigned or needed)
+- CrashTracker.uninstall() — renamed _restoreCrashHandlers() and made private; wiring left for a future Unilitix.dispose() (TODO in crash_tracker.dart)
+- AfricaContext.networkType getter (no caller)
+- EventDatabase.deleteScreenshotsByIds (no caller)
+- EventDatabase.isAvailable getter (no caller)
+### Changed
+- UnilitixObserver now overrides didRemove in addition to didPush/didPop/didReplace — Navigator.removeRoute() calls now tracked
+
+## 2.0.30
+### Fixed
+- sdkVersion in payloads and User-Agent now correctly reports SDK version, not app version
+- Screenshots now captured: RepaintBoundary auto-attached via UnilitixMaterialApp
+- Web network polling no longer converges to OFFLINE — uses http reachability check
+- recoverPendingCrash() now called on init — crash batches from previous sessions are logged
+- SdkScope.onCrash now wired — was a permanent no-op
+- uploadScreenshotBytes now logs exceptions instead of silently swallowing them
+### Removed
+- SdkScope.onRageTap and SdkScope.onFlushNeeded (dead fields)
+- UnilitixConfig.autoTrackScreens and UnilitixConfig.sampleRate (declared, never read)
+- AfricaContext.batteryState (no caller)
+- EventDatabase.deleteEventsByIds (no caller)
+- JsonUtil.encode / decode / safeMap (no callers — only toRfc3339 remains)
+- customUserId field from session payload (duplicate of userId)
+- Session() fallback in _buildSessionPayload — returns null instead of sending garbage
+### Changed
+- observerAttached now set in didPop and didReplace, not only didPush
+- UnilitixApp deprecated — use UnilitixMaterialApp
+- kUnilitixSdkVersion constant in lib/src/core/version.dart is single source of truth for SDK version
+
+## 2.0.29
+### Changed
+- UnilitixMaterialApp now covers all MaterialApp parameters: scaffoldMessengerKey, color, onGenerateTitle, highContrastTheme, highContrastDarkTheme, routeInformationParser, themeAnimationDuration, themeAnimationCurve, themeAnimationStyle, scrollBehavior, shortcuts, actions, localeListResolutionCallback, localeResolutionCallback, onNavigationNotification, onGenerateInitialRoutes, and all debug overlay flags
+
+## 2.0.28
+### Added
+- UnilitixMaterialApp — drop-in replacement for MaterialApp with automatic screen tracking; no navigatorObservers wiring needed
+- Supports classic navigator, routerDelegate, and routerConfig paths
+
+## 2.0.27
+### Fixed
+- sdkVersion now reads from PackageInfo at runtime — never drifts from pubspec.yaml
+- identify() no longer calls setTraits twice
+- screenshotQuality config now correctly passed into screenshot capture
+- capturedAt uses RFC3339 consistently in screenshot init and confirm
+### Removed
+- Dead SdkScope.onRageTap assignment
+- Dead remapSessionId method
+- maskInputsInScreenshots config field (not yet implemented)
+### Changed
+- totalStorageGb simplified to honest stub
+- webpBytes renamed to jpegBytes
+
 ## 2.0.26
 - Reconcile version, README and CHANGELOG — all in sync
 
