@@ -8,4 +8,5 @@ class SdkScope {
 
   static void Function(String screen)? onScreenChange;
   static void Function(String screen, double x, double y)? onTap;
+  static void Function(String screen, double dx, double dy)? onScroll;
 }

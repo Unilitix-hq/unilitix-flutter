@@ -1,3 +1,12 @@
+## 2.0.44
+### Added
+- Scroll tracking via NotificationListener — SCROLL events with screen position
+- SCROLL gesture type now supported in heatmap
+
+### Fixed
+- Heatmap date range filter (days param)
+- Network type and offline flag on heatmap data points
+
 ## 2.0.42
 ### Fixed
 - Removed double `flushOnSessionEnd` on background — `onBackground` wiring dropped since `onSessionEnd` already triggers the flush when session ends on `paused`

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../unilitix.dart';
+import '../core/sdk_scope.dart';
 
 /// Drop-in replacement for [MaterialApp] with automatic Unilitix screen tracking.
 /// No [navigatorObservers] configuration needed.
@@ -147,9 +148,20 @@ class UnilitixMaterialApp extends StatelessWidget {
     // Router API — routerConfig takes full ownership; observers not injectable
     // in this path (Flutter limitation). Use classic navigator path for tracking.
     if (routerConfig != null) {
-      return RepaintBoundary(
-        key: Unilitix.repaintKey,
-        child: MaterialApp.router(
+      return NotificationListener<ScrollNotification>(
+        onNotification: (notification) {
+          if (notification is ScrollEndNotification) {
+            SdkScope.onScroll?.call(
+              SdkScope.currentScreen ?? '',
+              0.0,
+              notification.metrics.pixels,
+            );
+          }
+          return false;
+        },
+        child: RepaintBoundary(
+          key: Unilitix.repaintKey,
+          child: MaterialApp.router(
           routerConfig: routerConfig,
           scaffoldMessengerKey: scaffoldMessengerKey,
           title: title ?? '',
@@ -181,14 +193,26 @@ class UnilitixMaterialApp extends StatelessWidget {
           checkerboardOffscreenLayers: checkerboardOffscreenLayers,
           showSemanticsDebugger: showSemanticsDebugger,
         ),
+        ),
       );
     }
 
     // routerDelegate path (go_router / custom RouterDelegate without routerConfig)
     if (routerDelegate != null) {
-      return RepaintBoundary(
-        key: Unilitix.repaintKey,
-        child: MaterialApp.router(
+      return NotificationListener<ScrollNotification>(
+        onNotification: (notification) {
+          if (notification is ScrollEndNotification) {
+            SdkScope.onScroll?.call(
+              SdkScope.currentScreen ?? '',
+              0.0,
+              notification.metrics.pixels,
+            );
+          }
+          return false;
+        },
+        child: RepaintBoundary(
+          key: Unilitix.repaintKey,
+          child: MaterialApp.router(
           routeInformationProvider: routeInformationProvider,
           routeInformationParser: routeInformationParser,
           routerDelegate: routerDelegate!,
@@ -223,13 +247,25 @@ class UnilitixMaterialApp extends StatelessWidget {
           checkerboardOffscreenLayers: checkerboardOffscreenLayers,
           showSemanticsDebugger: showSemanticsDebugger,
         ),
+        ),
       );
     }
 
     // Classic navigator path — Unilitix.observer injected here
-    return RepaintBoundary(
-      key: Unilitix.repaintKey,
-      child: MaterialApp(
+    return NotificationListener<ScrollNotification>(
+      onNotification: (notification) {
+        if (notification is ScrollEndNotification) {
+          SdkScope.onScroll?.call(
+            SdkScope.currentScreen ?? '',
+            0.0,
+            notification.metrics.pixels,
+          );
+        }
+        return false;
+      },
+      child: RepaintBoundary(
+        key: Unilitix.repaintKey,
+        child: MaterialApp(
         navigatorKey: navigatorKey,
         scaffoldMessengerKey: scaffoldMessengerKey,
         home: home,
@@ -267,6 +303,7 @@ class UnilitixMaterialApp extends StatelessWidget {
         checkerboardRasterCacheImages: checkerboardRasterCacheImages,
         checkerboardOffscreenLayers: checkerboardOffscreenLayers,
         showSemanticsDebugger: showSemanticsDebugger,
+      ),
       ),
     );
   }

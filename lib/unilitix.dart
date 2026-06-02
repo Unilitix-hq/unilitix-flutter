@@ -275,6 +275,14 @@ class Unilitix {
     // Wire up SdkScope callbacks
     SdkScope.onScreenChange = _onScreenChange;
     SdkScope.onTap = _onTap;
+    SdkScope.onScroll = (screen, dx, dy) {
+      _emitEvent(UnilitixEvent(
+        type: EventTypes.scroll,
+        screen: screen,
+        x: dx,
+        y: dy,
+      ));
+    };
     // Start everything
     _sessionManager.start();
     if (effectiveConfig.autoTrackCrashes) _crashTracker.install();
