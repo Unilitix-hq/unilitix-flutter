@@ -1,3 +1,7 @@
+## 2.0.37
+### Changed
+- Version bump: pubspec, podspec, and `kUnilitixSdkVersion` all synced to 2.0.37
+
 ## 2.0.36
 ### Changed
 - `Unilitix.init` now accepts a positional `apiKey` string — `init('key')` and `init('key', config: ...)` both work
