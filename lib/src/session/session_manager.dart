@@ -102,8 +102,9 @@ class SessionManager with WidgetsBindingObserver {
               now - (_lastForegroundedAt ?? _currentSession!.startedAt);
         }
         _backgroundedAt = now;
-        // Flush events immediately — session stays alive during the timeout window.
-        onBackground?.call();
+        _lastForegroundedAt = null;
+        if (_currentSession != null) _endCurrentSession();
+        onBackground?.call(); // triggers flushOnSessionEnd
         break;
 
       case AppLifecycleState.detached:
@@ -114,18 +115,10 @@ class SessionManager with WidgetsBindingObserver {
         break;
 
       case AppLifecycleState.resumed:
-        final backgroundDuration = _backgroundedAt != null
-            ? DateTime.now().millisecondsSinceEpoch - _backgroundedAt!
-            : 0;
         _backgroundedAt = null;
         _lastForegroundedAt = DateTime.now().millisecondsSinceEpoch;
-
-        if (backgroundDuration > sessionTimeoutSeconds * 1000) {
-          if (_currentSession != null) _endCurrentSession();
-          _startNewSession();
-        } else {
-          _currentSession?.backgroundTimeMs += backgroundDuration;
-        }
+        // Always start a new session on resume — previous session was ended on pause.
+        _startNewSession();
         break;
 
       default:

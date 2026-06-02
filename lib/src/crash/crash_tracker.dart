@@ -35,8 +35,15 @@ class CrashTracker {
     // 2. Async errors outside Flutter framework
     PlatformDispatcher.instance.onError = (error, stack) {
       _recordCrash(error, stack);
-      return false;
+      // In debug: return false so Flutter re-throws and shows the red screen.
+      // In release: return true to suppress the rethrow.
+      return !kDebugMode;
     };
+  }
+
+  /// Records an error caught by a Zone (e.g. runZonedGuarded in Unilitix.runApp).
+  void recordZoneError(Object error, StackTrace stack) {
+    _recordCrash(error, stack);
   }
 
   void _recordCrash(Object error, StackTrace? stack) {

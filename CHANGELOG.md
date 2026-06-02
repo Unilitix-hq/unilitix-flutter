@@ -1,3 +1,10 @@
+## 2.0.41
+### Changed
+- Session ends immediately on `AppLifecycleState.paused` — full session record sent on every background
+- `resumed` always starts a fresh session — no more session restore/continue logic
+- `onBackground` now triggers `flushOnSessionEnd` (events + screenshots + session record) instead of a simple flush
+- `detached` (app killed) still ends the session as a safety net
+
 ## 2.0.40
 ### Fixed
 - UnilitixGestureDetector added back to quick start — tap and rage tap tracking now documented correctly

@@ -9,7 +9,7 @@
 /// ```
 library unilitix;
 
-import 'dart:async' show unawaited;
+import 'dart:async' show runZonedGuarded, unawaited;
 
 import 'package:flutter/widgets.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -240,7 +240,7 @@ class Unilitix {
     );
 
     _sessionManager.onBackground = () {
-      unawaited(_flushScheduler.flush());
+      unawaited(_flushScheduler.flushOnSessionEnd());
     };
 
     _screenshotCapture = ScreenshotCapture(
@@ -319,6 +319,21 @@ class Unilitix {
         }
       });
     }
+  }
+
+  /// Wraps [runApp] in a [runZonedGuarded] zone so synchronous errors thrown
+  /// outside the Flutter framework (e.g. in widget constructors) are captured.
+  ///
+  /// Use instead of `runApp()` in `main()`:
+  /// ```dart
+  /// await Unilitix.init('your_key');
+  /// Unilitix.runApp(const MyApp());
+  /// ```
+  static void runApp(Widget app) {
+    runZonedGuarded(
+      () => runApp(app),
+      (error, stack) => _crashTracker.recordZoneError(error, stack),
+    );
   }
 
   // ── Tracking ──────────────────────────────────────────────────────
