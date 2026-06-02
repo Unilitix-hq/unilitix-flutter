@@ -1,3 +1,9 @@
+## 2.0.40
+### Fixed
+- UnilitixGestureDetector added back to quick start — tap and rage tap tracking now documented correctly
+### Changed
+- README quick start updated to include UnilitixGestureDetector wrapper
+
 ## 2.0.38
 ### Fixed
 - Events flush immediately when app goes to background
