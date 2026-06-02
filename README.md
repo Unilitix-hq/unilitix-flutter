@@ -23,7 +23,7 @@ import 'package:unilitix/unilitix.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Unilitix.init('YOUR_API_KEY');
-  runApp(
+  Unilitix.runApp(
     UnilitixGestureDetector(
       child: const MyApp(),
     ),
