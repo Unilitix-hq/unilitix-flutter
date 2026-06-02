@@ -91,6 +91,16 @@ class EventDatabase {
     await _db!.delete(_tEvents, where: 'id = ?', whereArgs: [id]);
   }
 
+  Future<void> deletePendingEvent(int id) => deleteEventById(id);
+
+  Future<void> deleteEventsOlderThan(DateTime cutoff) async {
+    if (!_available) return;
+    await _db!.rawDelete(
+      'DELETE FROM $_tEvents WHERE created_at < ?',
+      [cutoff.millisecondsSinceEpoch],
+    );
+  }
+
   Future<void> incrementRetryCount(int id) async {
     if (!_available) return;
     await _db!.rawUpdate(

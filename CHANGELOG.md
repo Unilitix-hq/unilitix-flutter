@@ -1,3 +1,8 @@
+## 2.0.42
+### Fixed
+- Removed double `flushOnSessionEnd` on background — `onBackground` wiring dropped since `onSessionEnd` already triggers the flush when session ends on `paused`
+- Removed redundant `SESSION_END` event emit from `onSessionEnd` callback
+
 ## 2.0.41
 ### Changed
 - Session ends immediately on `AppLifecycleState.paused` — full session record sent on every background

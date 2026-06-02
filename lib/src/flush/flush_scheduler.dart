@@ -227,7 +227,12 @@ class FlushScheduler {
     final pending = await database.getOldestEvents(20);
     for (final p in pending) {
       if (p.id == null) continue;
-      await database.incrementSyncAttempts(p.id!);
+
+      // Drop batches that have failed too many times.
+      if (p.retryCount >= 10) {
+        await database.deletePendingEvent(p.id!);
+        continue;
+      }
 
       final sessionData = jsonDecode(p.sessionJson) as Map<String, dynamic>;
       final eventsList =
@@ -255,6 +260,7 @@ class FlushScheduler {
       }
 
       if (ok) {
+        await database.incrementSyncAttempts(p.id!); // only on successful send
         await database.deleteEventById(p.id!);
         UnilitixLogger.d('Retry succeeded for batch ${p.id}');
       } else {
@@ -262,5 +268,10 @@ class FlushScheduler {
         await database.incrementSyncFailedBatches(p.id!);
       }
     }
+
+    // Purge events older than 7 days.
+    await database.deleteEventsOlderThan(
+      DateTime.now().subtract(const Duration(days: 7)),
+    );
   }
 }

@@ -213,11 +213,6 @@ class Unilitix {
         ));
       },
       onSessionEnd: (session) {
-        _emitEvent(UnilitixEvent(
-          type: EventTypes.sessionEnd,
-          properties: {'sessionId': session.id},
-        ));
-        // Drain remaining events then send the session record separately.
         unawaited(_flushScheduler.flushOnSessionEnd());
       },
       resetScreenshotOrdinal: () {
@@ -238,10 +233,6 @@ class Unilitix {
       uploadScreenshotsOnWifiOnly: effectiveConfig.uploadScreenshotsOnWifiOnly,
       snapshotBuffer: _snapshotBuffer,
     );
-
-    _sessionManager.onBackground = () {
-      unawaited(_flushScheduler.flushOnSessionEnd());
-    };
 
     _screenshotCapture = ScreenshotCapture(
       repaintKey: _repaintKey,
