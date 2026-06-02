@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'unilitix_flutter'
-  s.version          = '0.0.1'
+  s.version          = '2.0.36'
   s.summary          = 'African-first mobile UX analytics for Flutter.'
   s.description      = 'Unilitix Flutter SDK — track sessions, screens, events and crashes.'
   s.homepage         = 'https://unilitix.com'
@@ -10,7 +10,7 @@ Pod::Spec.new do |s|
   s.source_files     = 'Classes/**/*'
   s.dependency 'Flutter'
   s.platform         = :ios, '13.0'
-  s.frameworks       = 'CoreTelephony', 'UIKit'
+  s.frameworks       = 'CoreTelephony', 'UIKit', 'Network'
 
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',

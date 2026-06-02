@@ -98,21 +98,54 @@ class Unilitix {
   /// Initialize the SDK. Call once in `main()` before `runApp()`.
   ///
   /// ```dart
+  /// // Simple:
+  /// await Unilitix.init('your_api_key');
+  ///
+  /// // With config overrides:
   /// await Unilitix.init(
-  ///   config: const UnilitixConfig(apiKey: 'your_key'),
+  ///   'your_api_key',
+  ///   config: const UnilitixConfig(apiKey: 'your_api_key', debug: true),
   /// );
   /// ```
-  static Future<void> init({required UnilitixConfig config}) async {
+  static Future<void> init(
+    String apiKey, {
+    UnilitixConfig? config,
+  }) async {
+    final effectiveConfig = config != null
+        ? UnilitixConfig(
+            apiKey: apiKey,
+            apiUrl: config.apiUrl,
+            autoTrackTaps: config.autoTrackTaps,
+            autoTrackCrashes: config.autoTrackCrashes,
+            autoTrackRageTaps: config.autoTrackRageTaps,
+            flushIntervalSeconds: config.flushIntervalSeconds,
+            flushBatchSize: config.flushBatchSize,
+            maxOfflineEvents: config.maxOfflineEvents,
+            sessionTimeoutSeconds: config.sessionTimeoutSeconds,
+            debug: config.debug,
+            maskInputs: config.maskInputs,
+            captureSnapshots: config.captureSnapshots,
+            snapshotIntervalMs: config.snapshotIntervalMs,
+            maxSnapshotsPerSession: config.maxSnapshotsPerSession,
+            captureScreenshots: config.captureScreenshots,
+            screenshotIntervalMs: config.screenshotIntervalMs,
+            screenshotQuality: config.screenshotQuality,
+            screenshotMaxWidth: config.screenshotMaxWidth,
+            uploadScreenshotsOnWifiOnly: config.uploadScreenshotsOnWifiOnly,
+            maxScreenshotsPerSession: config.maxScreenshotsPerSession,
+          )
+        : UnilitixConfig(apiKey: apiKey);
+
     if (_initialized) {
       UnilitixLogger.w('init() called more than once — ignoring');
       return;
     }
-    _config = config;
-    UnilitixLogger.enabled = config.debug;
+    _config = effectiveConfig;
+    UnilitixLogger.enabled = effectiveConfig.debug;
 
-    if (config.sessionTimeoutSeconds < 60) {
+    if (effectiveConfig.sessionTimeoutSeconds < 60) {
       UnilitixLogger.w(
-          'sessionTimeoutSeconds=${config.sessionTimeoutSeconds} is very low');
+          'sessionTimeoutSeconds=${effectiveConfig.sessionTimeoutSeconds} is very low');
     }
 
     _packageInfo = await PackageInfo.fromPlatform();
@@ -126,8 +159,8 @@ class Unilitix {
     await _optManager.load();
 
     _database = EventDatabase(
-      maxOfflineEvents: config.maxOfflineEvents,
-      maxScreenshotsPerSession: config.maxScreenshotsPerSession,
+      maxOfflineEvents: effectiveConfig.maxOfflineEvents,
+      maxScreenshotsPerSession: effectiveConfig.maxScreenshotsPerSession,
     );
     try {
       await _database.open();
@@ -145,16 +178,17 @@ class Unilitix {
 
     _africaContext = AfricaContext(networkMonitor: _networkMonitor);
 
-    _snapshotBuffer = SnapshotBuffer(capacity: config.maxSnapshotsPerSession);
+    _snapshotBuffer =
+        SnapshotBuffer(capacity: effectiveConfig.maxSnapshotsPerSession);
 
     _eventBuffer = EventBuffer(
-      batchSize: config.flushBatchSize,
+      batchSize: effectiveConfig.flushBatchSize,
       onFlushNeeded: () => _flushScheduler.flush(),
     );
 
     _apiClient = ApiClient(
-      apiKey: config.apiKey,
-      apiUrl: config.apiUrl,
+      apiKey: effectiveConfig.apiKey,
+      apiUrl: effectiveConfig.apiUrl,
       sdkVersion: kUnilitixSdkVersion,
     );
 
@@ -171,7 +205,7 @@ class Unilitix {
     );
 
     _sessionManager = SessionManager(
-      sessionTimeoutSeconds: config.sessionTimeoutSeconds,
+      sessionTimeoutSeconds: effectiveConfig.sessionTimeoutSeconds,
       onSessionStart: (session) {
         _emitEvent(UnilitixEvent(
           type: EventTypes.sessionStart,
@@ -193,7 +227,7 @@ class Unilitix {
     );
 
     _flushScheduler = FlushScheduler(
-      intervalSeconds: config.flushIntervalSeconds,
+      intervalSeconds: effectiveConfig.flushIntervalSeconds,
       buffer: _eventBuffer,
       sessionManager: _sessionManager,
       database: _database,
@@ -201,16 +235,16 @@ class Unilitix {
       networkMonitor: _networkMonitor,
       performanceMonitor: _performanceMonitor,
       buildSessionPayload: _buildSessionPayload,
-      uploadScreenshotsOnWifiOnly: config.uploadScreenshotsOnWifiOnly,
+      uploadScreenshotsOnWifiOnly: effectiveConfig.uploadScreenshotsOnWifiOnly,
       snapshotBuffer: _snapshotBuffer,
     );
 
     _screenshotCapture = ScreenshotCapture(
       repaintKey: _repaintKey,
-      intervalMs: config.screenshotIntervalMs,
-      maxScreenshots: config.maxScreenshotsPerSession,
-      maxWidth: config.screenshotMaxWidth,
-      quality: config.screenshotQuality,
+      intervalMs: effectiveConfig.screenshotIntervalMs,
+      maxScreenshots: effectiveConfig.maxScreenshotsPerSession,
+      maxWidth: effectiveConfig.screenshotMaxWidth,
+      quality: effectiveConfig.screenshotQuality,
       onCapture: (bytes, screenName, ordinal, w, h, capturedAt) async {
         final sessionId = _sessionManager.currentSession?.id ?? '';
         await _database.insertScreenshot(PendingScreenshot(
@@ -229,8 +263,8 @@ class Unilitix {
 
     _snapshotCapture = SnapshotCapture(
       buffer: _snapshotBuffer,
-      intervalMs: config.snapshotIntervalMs,
-      maskInputs: config.maskInputs,
+      intervalMs: effectiveConfig.snapshotIntervalMs,
+      maskInputs: effectiveConfig.maskInputs,
     );
 
     _crashTracker = CrashTracker(
@@ -248,15 +282,15 @@ class Unilitix {
     SdkScope.onTap = _onTap;
     // Start everything
     _sessionManager.start();
-    if (config.autoTrackCrashes) _crashTracker.install();
+    if (effectiveConfig.autoTrackCrashes) _crashTracker.install();
     await _crashTracker.logPendingCrashesIfAny();
     _flushScheduler.start();
-    if (config.captureSnapshots) _snapshotCapture.start();
-    if (config.captureScreenshots) _screenshotCapture.start();
+    if (effectiveConfig.captureSnapshots) _snapshotCapture.start();
+    if (effectiveConfig.captureScreenshots) _screenshotCapture.start();
 
     _initialized = true;
 
-    if (config.debug) {
+    if (effectiveConfig.debug) {
       final sid = _sessionManager.currentSession?.id ?? '—';
       UnilitixLogger.d('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
       UnilitixLogger.d('SDK initialized  ✅  v$kUnilitixSdkVersion');
@@ -265,7 +299,7 @@ class Unilitix {
       UnilitixLogger.d(
           'Observer         ⚠️   not yet — use UnilitixMaterialApp instead of MaterialApp');
       UnilitixLogger.d(
-          'API key          ${config.apiKey.length > 8 ? "${config.apiKey.substring(0, 4)}****${config.apiKey.substring(config.apiKey.length - 4)}" : "****"}');
+          'API key          ${effectiveConfig.apiKey.length > 8 ? "${effectiveConfig.apiKey.substring(0, 4)}****${effectiveConfig.apiKey.substring(effectiveConfig.apiKey.length - 4)}" : "****"}');
       UnilitixLogger.d(
           'Device           ${_deviceInfo.manufacturer} ${_deviceInfo.model} (${_deviceInfo.os} ${_deviceInfo.osVersion})');
       UnilitixLogger.d(

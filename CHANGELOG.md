@@ -1,3 +1,14 @@
+## 2.0.36
+### Changed
+- `Unilitix.init` now accepts a positional `apiKey` string — `init('key')` and `init('key', config: ...)` both work
+- Old `init(config: UnilitixConfig(apiKey: ...))` signature removed
+
+### Fixed (iOS)
+- Network monitoring now uses NWPathMonitor — real-time updates instead of one-shot static WIFI
+- Cellular type resolved to 2G/3G/4G via CTRadioAccessTechnology
+- Battery monitoring enabled/disabled correctly — no longer leaks monitoring state
+- Podspec version synced to 2.0.36
+
 ## 2.0.35
 ### Changed
 - README: simplified init syntax in Quick start and Configuration examples

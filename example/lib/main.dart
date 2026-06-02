@@ -4,6 +4,7 @@ import 'package:unilitix/unilitix.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Unilitix.init(
+    'YOUR_API_KEY',
     config: const UnilitixConfig(apiKey: 'YOUR_API_KEY', debug: true),
   );
   runApp(const MyApp());

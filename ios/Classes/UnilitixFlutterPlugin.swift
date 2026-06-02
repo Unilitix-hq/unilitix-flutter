@@ -1,9 +1,12 @@
 import Flutter
 import UIKit
 import CoreTelephony
+import Network
 
 public class UnilitixPlugin: NSObject, FlutterPlugin {
   private var networkEventSink: FlutterEventSink?
+  private var pathMonitor: NWPathMonitor?
+  private let monitorQueue = DispatchQueue(label: "com.unilitix.network")
 
   public static func register(with registrar: FlutterPluginRegistrar) {
     let methodChannel = FlutterMethodChannel(
@@ -24,18 +27,57 @@ public class UnilitixPlugin: NSObject, FlutterPlugin {
     switch call.method {
     case "getCarrierName":
       let info = CTTelephonyNetworkInfo()
-      if let carrier = info.serviceSubscriberCellularProviders?.values.first {
+      if let providers = info.serviceSubscriberCellularProviders,
+         let carrier = providers.values.first(where: { $0.carrierName != nil }) {
         result(carrier.carrierName ?? "")
       } else {
         result("")
       }
+
     case "getBatteryLevel":
       UIDevice.current.isBatteryMonitoringEnabled = true
       let level = UIDevice.current.batteryLevel
+      UIDevice.current.isBatteryMonitoringEnabled = false // cleanup
       result(level < 0 ? -1.0 : Double(level))
+
     default:
       result(FlutterMethodNotImplemented)
     }
+  }
+
+  private func resolveNetworkType(_ path: NWPath) -> String {
+    guard path.status == .satisfied else { return "OFFLINE" }
+
+    if path.usesInterfaceType(.wifi) { return "WIFI" }
+    if path.usesInterfaceType(.wiredEthernet) { return "ETHERNET" }
+
+    if path.usesInterfaceType(.cellular) {
+      // Resolve cellular generation via CTTelephonyNetworkInfo
+      let info = CTTelephonyNetworkInfo()
+      let radioTech = info.serviceCurrentRadioAccessTechnology?.values.first ?? ""
+      switch radioTech {
+      case CTRadioAccessTechnologyLTE,
+           CTRadioAccessTechnologyNRNSA,
+           CTRadioAccessTechnologyNR:
+        return "4G"
+      case CTRadioAccessTechnologyHSDPA,
+           CTRadioAccessTechnologyHSUPA,
+           CTRadioAccessTechnologyHSPA,
+           CTRadioAccessTechnologyCDMAEVDORev0,
+           CTRadioAccessTechnologyCDMAEVDORevA,
+           CTRadioAccessTechnologyCDMAEVDORevB,
+           CTRadioAccessTechnologyeHRPD,
+           CTRadioAccessTechnologyWCDMA:
+        return "3G"
+      case CTRadioAccessTechnologyEdge,
+           CTRadioAccessTechnologyGPRS,
+           CTRadioAccessTechnologyCDMA1x:
+        return "2G"
+      default:
+        return "CELLULAR"
+      }
+    }
+    return "OFFLINE"
   }
 }
 
@@ -45,13 +87,30 @@ extension UnilitixPlugin: FlutterStreamHandler {
     eventSink events: @escaping FlutterEventSink
   ) -> FlutterError? {
     networkEventSink = events
-    // iOS doesn't expose WiFi vs cellular without Network.framework entitlements.
-    // Emit WIFI as initial state; the Dart side falls back to polling for finer resolution.
-    events("WIFI")
+
+    let monitor = NWPathMonitor()
+    pathMonitor = monitor
+
+    monitor.pathUpdateHandler = { [weak self] path in
+      guard let self = self else { return }
+      let type = self.resolveNetworkType(path)
+      DispatchQueue.main.async {
+        self.networkEventSink?(type)
+      }
+    }
+
+    monitor.start(queue: monitorQueue)
+    // Emit current state immediately
+    DispatchQueue.main.async {
+      events(self.resolveNetworkType(monitor.currentPath))
+    }
+
     return nil
   }
 
   public func onCancel(withArguments arguments: Any?) -> FlutterError? {
+    pathMonitor?.cancel()
+    pathMonitor = nil
     networkEventSink = nil
     return nil
   }
