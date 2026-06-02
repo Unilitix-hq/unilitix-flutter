@@ -9,6 +9,13 @@ import 'package:http/http.dart' as http;
 import 'retry_policy.dart';
 import '../logger/logger.dart';
 
+/// A presigned-URL slot returned by the batch screenshot init endpoint.
+class ScreenshotSlot {
+  final int ordinal;
+  final String presignedUrl;
+  const ScreenshotSlot({required this.ordinal, required this.presignedUrl});
+}
+
 /// HTTP client for the Unilitix ingest API.
 class ApiClient {
   final String apiKey;
@@ -103,11 +110,24 @@ class ApiClient {
     return resp != null && resp.statusCode < 300;
   }
 
-  Future<String?> initScreenshotUpload(Map<String, dynamic> metadata) async {
-    final resp = await _postWithRetry('/v1/ingest/screenshots/init', metadata);
+  Future<List<ScreenshotSlot>?> initScreenshotUpload({
+    required String sessionId,
+    required int count,
+    required List<int> ordinals,
+  }) async {
+    final resp = await _postWithRetry('/v1/ingest/screenshots/init', {
+      'sessionId': sessionId,
+      'count': count,
+      'ordinals': ordinals,
+    });
     if (resp == null || resp.statusCode >= 300) return null;
     final json = jsonDecode(resp.body) as Map<String, dynamic>;
-    return json['presignedUrl'] as String?;
+    final raw = json['slots'] as List?;
+    if (raw == null) return null;
+    return raw.cast<Map<String, dynamic>>().map((s) => ScreenshotSlot(
+          ordinal: s['ordinal'] as int,
+          presignedUrl: s['presignedUrl'] as String,
+        )).toList();
   }
 
   Future<bool> uploadScreenshotBytes(
@@ -127,9 +147,11 @@ class ApiClient {
     }
   }
 
-  Future<bool> confirmScreenshotUpload(Map<String, dynamic> payload) async {
-    final resp =
-        await _postWithRetry('/v1/ingest/screenshots/confirm', payload);
+  Future<bool> confirmScreenshotUpload(String sessionId, int ordinal) async {
+    final resp = await _postWithRetry('/v1/ingest/screenshots/confirm', {
+      'sessionId': sessionId,
+      'ordinal': ordinal,
+    });
     return resp != null && resp.statusCode < 300;
   }
 

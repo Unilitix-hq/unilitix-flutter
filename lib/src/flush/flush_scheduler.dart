@@ -10,7 +10,6 @@ import '../network/api_client.dart';
 import '../network/network_monitor.dart';
 import '../performance/performance_monitor.dart';
 import '../logger/logger.dart';
-import '../util/json_util.dart';
 
 /// Schedules periodic event flushing and handles retry logic.
 ///
@@ -73,19 +72,27 @@ class FlushScheduler {
   /// guard. Safe: drain() is atomic in single-isolate Dart.
   Future<void> flushNow() => _flushEvents();
 
-  /// Called on session end: flush remaining events then send the session record.
+  /// Called on session end: flush remaining events, upload screenshots, retry
+  /// pending batches, then send the session record.
   Future<void> flushOnSessionEnd() async {
-    await _flushEvents();
+    final sessionId = sessionManager.currentSession?.id ??
+        sessionManager.lastEndedSession?.id;
+    if (sessionId == null) return;
+
+    await _flushEvents(sessionId: sessionId);
+    await _uploadScreenshots(sessionId: sessionId);
+    await _retryPending();
     await _flushSession();
   }
 
   // ── Events path ────────────────────────────────────────────────────────────
 
-  Future<void> _flushEvents() async {
+  Future<void> _flushEvents({String? sessionId}) async {
+    final id = sessionId ?? sessionManager.currentSession?.id;
+    if (id == null) return;
+
     final events = buffer.drain();
     if (events.isEmpty) return;
-
-    final sessionId = sessionManager.currentSession?.id ?? '';
 
     for (final event in events) {
       performanceMonitor.enrichEvent(event);
@@ -101,27 +108,26 @@ class FlushScheduler {
     final eventsJson = jsonEncode(events.map((e) => e.toJson()).toList());
 
     if (networkMonitor.isOffline()) {
-      await _queueEventsForRetry(sessionId, eventsJson, capturedOffline: true);
+      await _queueEventsForRetry(id, eventsJson, capturedOffline: true);
       UnilitixLogger.d('Offline — queued ${events.length} events');
       return;
     }
 
     try {
       final ok = await apiClient.ingestEvents(
-        sessionId: sessionId,
+        sessionId: id,
         events: events.map((e) => e.toJson()).toList(),
       );
       if (ok) {
         UnilitixLogger.d('Flushed ${events.length} events');
-        await _flushSnapshots(sessionId);
-        await _uploadScreenshots();
+        await _flushSnapshots(id);
+        await _uploadScreenshots(sessionId: id);
       } else {
-        await _queueEventsForRetry(sessionId, eventsJson,
-            capturedOffline: false);
+        await _queueEventsForRetry(id, eventsJson, capturedOffline: false);
         UnilitixLogger.w('Event flush failed — queued for retry');
       }
     } catch (e, stack) {
-      await _queueEventsForRetry(sessionId, eventsJson, capturedOffline: false);
+      await _queueEventsForRetry(id, eventsJson, capturedOffline: false);
       UnilitixLogger.e('Event flush failed', e, stack);
     }
   }
@@ -181,46 +187,38 @@ class FlushScheduler {
     }
   }
 
-  Future<void> _uploadScreenshots() async {
-    if (uploadScreenshotsOnWifiOnly && !networkMonitor.isWifi()) {
-      UnilitixLogger.d('Skipping screenshots — not on WiFi');
-      return;
-    }
-    final sessionId = sessionManager.currentSession?.id;
-    if (sessionId == null) return;
+  Future<void> _uploadScreenshots({String? sessionId}) async {
+    final id = sessionId ??
+        sessionManager.currentSession?.id ??
+        sessionManager.lastEndedSession?.id;
+    if (id == null) return;
 
-    final all = await database.getPendingScreenshots(sessionId);
-    if (all.isEmpty) return;
-    final screenshots = all.take(200).toList(); // backend validates 1–200
+    final pending = await database.getPendingScreenshots(id);
+    if (pending.isEmpty) return;
 
-    for (final s in screenshots) {
-      if (s.id == null) continue;
-      try {
-        final presignedUrl = await apiClient.initScreenshotUpload({
-          'sessionId': sessionId,
-          'ordinal': s.ordinal,
-          'screenName': s.screenName,
-          'viewportWidth': s.viewportWidth,
-          'viewportHeight': s.viewportHeight,
-          'capturedAt': JsonUtil.toRfc3339(s.capturedAt),
-        });
-        if (presignedUrl == null) continue;
+    // Single batch init with all ordinals.
+    final slots = await apiClient.initScreenshotUpload(
+      sessionId: id,
+      count: pending.length,
+      ordinals: pending.map((s) => s.ordinal).toList(),
+    );
+    if (slots == null) return;
 
-        final uploaded =
-            await apiClient.uploadScreenshotBytes(presignedUrl, s.imageBytes);
-        if (!uploaded) continue;
-
-        final confirmed = await apiClient.confirmScreenshotUpload({
-          'sessionId': sessionId,
-          'ordinal': s.ordinal,
-          'capturedAt': JsonUtil.toRfc3339(s.capturedAt),
-        });
-        if (confirmed) await database.deleteScreenshotById(s.id!);
-      } catch (e) {
-        UnilitixLogger.e(
-            'Screenshot upload failed for ordinal ${s.ordinal}', e);
-      }
-    }
+    // Upload each screenshot to its presigned URL in parallel.
+    await Future.wait(
+      pending.map((screenshot) async {
+        try {
+          final slot =
+              slots.firstWhere((s) => s.ordinal == screenshot.ordinal);
+          await apiClient.uploadScreenshotBytes(
+              slot.presignedUrl, screenshot.imageBytes);
+          await apiClient.confirmScreenshotUpload(id, screenshot.ordinal);
+          await database.deleteScreenshotById(screenshot.id!);
+        } catch (e) {
+          // leave in DB for retry
+        }
+      }),
+    );
   }
 
   // ── Retry ──────────────────────────────────────────────────────────────────
