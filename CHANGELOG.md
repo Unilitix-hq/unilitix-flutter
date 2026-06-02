@@ -1,3 +1,10 @@
+## 2.0.35
+### Changed
+- README: simplified init syntax in Quick start and Configuration examples
+- README: removed UnilitixGestureDetector from Quick start (UnilitixMaterialApp handles screen tracking)
+- README: iOS minimum updated to iOS 13.0+
+- README: Verify section version string updated to v2.0.35
+
 ## 2.0.34
 ### Fixed
 - iOS plugin rewritten — correct channels (com.unilitix/sdk, com.unilitix/network), correct class name (UnilitixPlugin), handles getBatteryLevel and getCarrierName

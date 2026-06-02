@@ -11,7 +11,7 @@ African-first mobile UX analytics for Flutter. Track sessions, screens, events a
 
 ```yaml
 dependencies:
-  unilitix: ^2.0.34
+  unilitix: ^2.0.35
 ```
 
 ## Quick start
@@ -22,8 +22,8 @@ import 'package:unilitix/unilitix.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Unilitix.init(config: const UnilitixConfig(apiKey: 'YOUR_API_KEY'));
-  runApp(UnilitixGestureDetector(child: const MyApp()));
+  await Unilitix.init('YOUR_API_KEY');
+  runApp(const MyApp());
 }
 
 class MyApp extends StatelessWidget {
@@ -43,7 +43,7 @@ Get your API key at [app.unilitix.com](https://app.unilitix.com) → Settings �
 In debug mode you will see:
 
 ```text
-[Unilitix] SDK initialized ✅ v2.0.32
+[Unilitix] SDK initialized ✅ v2.0.35
 [Unilitix] Session started ✅ abc123…
 [Unilitix] Screen → /home
 ```
@@ -76,15 +76,15 @@ Unilitix.reset();
 
 ```dart
 await Unilitix.init(
-  config: const UnilitixConfig(
-    apiKey: 'YOUR_API_KEY',
+  'YOUR_API_KEY',
+  config: UnilitixConfig(
     debug: false,
-    captureSnapshots: true,            // session replay — widget tree
-    captureScreenshots: false,         // pixel screenshots — Growth plan
-    maskInputs: true,                  // mask text fields in replay
-    flushIntervalSeconds: 30,          // upload frequency
-    sessionTimeoutSeconds: 1800,       // idle timeout (30 min)
-    uploadScreenshotsOnWifiOnly: true, // save mobile data
+    captureSnapshots: true,
+    captureScreenshots: false,
+    maskInputs: true,
+    flushIntervalSeconds: 30,
+    sessionTimeoutSeconds: 1800,
+    uploadScreenshotsOnWifiOnly: true,
   ),
 );
 ```
@@ -113,7 +113,7 @@ UnilitixPrivate(child: CreditCardWidget())
 | Platform | Minimum |
 |---|---|
 | Android | API 21 (Android 5.0) |
-| iOS | In development |
+| iOS | iOS 13.0+ |
 | Web | ✅ Supported |
 
 ## Support
