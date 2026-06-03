@@ -1,3 +1,10 @@
+## 2.0.51
+### Added
+- `onEventsFlush` callback on `SessionManager` — fires on `AppLifecycleState.paused` to drain in-flight events before the app goes dark
+- `FlushScheduler.flushEventsOnly()` — events-only flush with no session POST and no screenshot upload; used exclusively for background drains
+### Changed
+- On `paused`, events are now flushed immediately before the background timer starts — reduces event loss when the OS kills the app during the timeout window
+
 ## 2.0.50
 ### Fixed (iOS)
 - Podspec version synced to 2.0.50 (was stale at 2.0.36)

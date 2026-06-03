@@ -72,6 +72,9 @@ class FlushScheduler {
   /// guard. Safe: drain() is atomic in single-isolate Dart.
   Future<void> flushNow() => _flushEvents();
 
+  /// Drain pending events on app background — no session POST, no screenshots.
+  Future<void> flushEventsOnly() => _flushEvents();
+
   /// Called on session end: flush remaining events (which also uploads
   /// screenshots on success), then send the session record.
   Future<void> flushOnSessionEnd() async {

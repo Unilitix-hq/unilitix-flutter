@@ -12,6 +12,10 @@ class SessionManager with WidgetsBindingObserver {
   final void Function(Session session) onSessionEnd;
   final void Function() resetScreenshotOrdinal;
 
+  /// Called on [AppLifecycleState.paused] to drain in-flight events before the
+  /// app goes dark. Does not end the session or send a session record.
+  void Function()? onEventsFlush;
+
   Session? _currentSession;
   Session? _lastEndedSession;
   DateTime? _backgroundedAt;
@@ -108,6 +112,7 @@ class SessionManager with WidgetsBindingObserver {
         _commitForegroundWindow();
         _backgroundedAt = DateTime.now();
         _lastForegroundedAt = null;
+        onEventsFlush?.call(); // drain events on background, no session POST
         // End the session after the timeout elapses in the background.
         _backgroundTimer = Timer(
           Duration(seconds: sessionTimeoutSeconds),
