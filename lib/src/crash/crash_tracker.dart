@@ -48,10 +48,13 @@ class CrashTracker {
 
   void _recordCrash(Object error, StackTrace? stack) {
     UnilitixLogger.e('Crash captured', error, stack);
+    final raw = '${error.runtimeType}: ${error.toString()}';
+    final title = raw.length > 200 ? raw.substring(0, 200) : raw;
     final event = UnilitixEvent(
       type: EventTypes.crash,
       screen: SdkScope.currentScreen,
     )
+      ..title = title
       ..exceptionType = error.runtimeType.toString()
       ..exceptionMessage = error.toString()
       ..stackTrace = stack?.toString()

@@ -19,6 +19,7 @@ class UnilitixEvent {
   int? frameDrops;
 
   // CRASH fields
+  String? title;
   String? stackTrace;
   String? exceptionType;
   String? exceptionMessage;
@@ -51,6 +52,7 @@ class UnilitixEvent {
     };
 
     if (type == EventTypes.crash) {
+      if (title != null) map['title'] = title;
       if (stackTrace != null) map['stackTrace'] = stackTrace;
       if (exceptionType != null) map['exceptionType'] = exceptionType;
       if (exceptionMessage != null) map['exceptionMessage'] = exceptionMessage;
