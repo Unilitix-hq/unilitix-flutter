@@ -8,7 +8,7 @@ import '../logger/logger.dart';
 /// sqflite-backed persistent queue for events and screenshots.
 class EventDatabase {
   static const _dbName = 'unilitix_events.db';
-  static const _version = 1;
+  static const _version = 2;
   static const _tEvents = 'pending_events';
   static const _tScreenshots = 'pending_screenshots';
 
@@ -29,6 +29,7 @@ class EventDatabase {
         path,
         version: _version,
         onCreate: _create,
+        onUpgrade: _onUpgrade,
       );
     } catch (e) {
       UnilitixLogger.w(
@@ -51,6 +52,9 @@ class EventDatabase {
         sync_failed_batches INTEGER DEFAULT 0
       )
     ''');
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_events_created_at ON $_tEvents(created_at)',
+    );
     await db.execute('''
       CREATE TABLE $_tScreenshots (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,14 +70,29 @@ class EventDatabase {
     ''');
   }
 
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_events_created_at ON $_tEvents(created_at)',
+      );
+    }
+  }
+
   Future<void> insertEvent(PendingEvent event) async {
     if (!_available) return;
-    final db = _db!;
-    final count = await eventCount();
-    if (count >= maxOfflineEvents) {
-      await deleteOldestEvents(count - maxOfflineEvents + 1);
-    }
-    await db.insert(_tEvents, event.toMap());
+    await _db!.transaction((txn) async {
+      final result =
+          await txn.rawQuery('SELECT COUNT(*) as c FROM $_tEvents');
+      final count = (result.first['c'] as int?) ?? 0;
+      if (count >= maxOfflineEvents) {
+        await txn.rawDelete(
+          'DELETE FROM $_tEvents WHERE id IN '
+          '(SELECT id FROM $_tEvents ORDER BY created_at ASC LIMIT ?)',
+          [count - maxOfflineEvents + 1],
+        );
+      }
+      await txn.insert(_tEvents, event.toMap());
+    });
   }
 
   Future<List<PendingEvent>> getOldestEvents(int limit) async {

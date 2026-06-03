@@ -2,6 +2,8 @@ import 'event.dart';
 
 /// In-memory event queue. Thread-safe (single-isolate Dart).
 class EventBuffer {
+  static const int _maxCapacity = 500;
+
   final int batchSize;
   final void Function() onFlushNeeded;
 
@@ -9,8 +11,10 @@ class EventBuffer {
 
   EventBuffer({required this.batchSize, required this.onFlushNeeded});
 
-  /// Add an event. Triggers [onFlushNeeded] when batch size is reached.
+  /// Add an event. Drops the event if the buffer is at capacity.
+  /// Triggers [onFlushNeeded] when batch size is reached.
   void emit(UnilitixEvent event) {
+    if (_buffer.length >= _maxCapacity) return;
     _buffer.add(event);
     if (_buffer.length >= batchSize) {
       onFlushNeeded();

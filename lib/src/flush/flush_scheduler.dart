@@ -72,23 +72,25 @@ class FlushScheduler {
   /// guard. Safe: drain() is atomic in single-isolate Dart.
   Future<void> flushNow() => _flushEvents();
 
-  /// Called on session end: flush remaining events, upload screenshots, retry
-  /// pending batches, then send the session record.
+  /// Called on session end: flush remaining events (which also uploads
+  /// screenshots on success), then send the session record.
   Future<void> flushOnSessionEnd() async {
-    final sessionId = sessionManager.currentSession?.id ??
-        sessionManager.lastEndedSession?.id;
-    if (sessionId == null) return;
-
-    await _flushEvents(sessionId: sessionId);
-    await _uploadScreenshots(sessionId: sessionId);
-    await _retryPending();
-    await _flushSession();
+    if (_flushing) return;
+    _flushing = true;
+    try {
+      await _flushEvents(); // calls _uploadScreenshots internally on success
+      await _flushSession();
+    } finally {
+      _flushing = false;
+    }
   }
 
   // ── Events path ────────────────────────────────────────────────────────────
 
   Future<void> _flushEvents({String? sessionId}) async {
-    final id = sessionId ?? sessionManager.currentSession?.id;
+    final id = sessionId ??
+        sessionManager.currentSession?.id ??
+        sessionManager.lastEndedSession?.id;
     if (id == null) return;
 
     final events = buffer.drain();

@@ -1,3 +1,14 @@
+## 2.0.49
+### Fixed
+- `flushOnSessionEnd` now respects the `_flushing` guard — no more race with periodic flush
+- `flushOnSessionEnd` no longer calls `_uploadScreenshots` separately; `_flushEvents` handles it on success, eliminating double-upload
+- `_flushEvents` fallback now includes `lastEndedSession?.id` — events are correctly sent after session ends
+- `insertEvent` wrapped in a sqflite transaction — count + delete + insert is now atomic
+- `EventBuffer` capped at 500 events — drops new events when full instead of growing unbounded
+
+### Changed
+- DB schema version bumped to 2 — adds `idx_events_created_at` index on `pending_events(created_at)` for existing and new installs
+
 ## 2.0.47
 ### Changed
 - Session timeout is now timer-based — session ends in the background after `sessionTimeoutSeconds` elapses, not on every pause
