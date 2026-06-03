@@ -1,3 +1,13 @@
+## 2.0.52
+### Added
+- `pending_sessions` table (DB v3) — persists session stub on start, deleted on clean session end
+- `_recoverPendingSessions()` — on SDK init, sends any undelivered session stubs from previous crashed/killed sessions
+- `onSessionStart` now saves a stub to `pending_sessions` so crash-killed sessions are recoverable on next launch
+- `onSessionEnd` deletes the stub after `flushOnSessionEnd` completes
+
+### Changed
+- DB schema version bumped to 3; v1→v3 and v2→v3 migrations handled in `_onUpgrade`
+
 ## 2.0.51
 ### Added
 - `onEventsFlush` callback on `SessionManager` — fires on `AppLifecycleState.paused` to drain in-flight events before the app goes dark

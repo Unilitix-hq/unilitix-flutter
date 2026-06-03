@@ -8,9 +8,10 @@ import '../logger/logger.dart';
 /// sqflite-backed persistent queue for events and screenshots.
 class EventDatabase {
   static const _dbName = 'unilitix_events.db';
-  static const _version = 2;
+  static const _version = 3;
   static const _tEvents = 'pending_events';
   static const _tScreenshots = 'pending_screenshots';
+  static const _tSessions = 'pending_sessions';
 
   final int maxOfflineEvents;
   final int maxScreenshotsPerSession;
@@ -56,6 +57,14 @@ class EventDatabase {
       'CREATE INDEX IF NOT EXISTS idx_events_created_at ON $_tEvents(created_at)',
     );
     await db.execute('''
+      CREATE TABLE $_tSessions (
+        id TEXT PRIMARY KEY,
+        session_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending'
+      )
+    ''');
+    await db.execute('''
       CREATE TABLE $_tScreenshots (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         session_id TEXT NOT NULL,
@@ -75,6 +84,16 @@ class EventDatabase {
       await db.execute(
         'CREATE INDEX IF NOT EXISTS idx_events_created_at ON $_tEvents(created_at)',
       );
+    }
+    if (oldVersion < 3) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS $_tSessions (
+          id TEXT PRIMARY KEY,
+          session_json TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending'
+        )
+      ''');
     }
   }
 
@@ -199,6 +218,34 @@ class EventDatabase {
   Future<void> deleteScreenshotById(int id) async {
     if (!_available) return;
     await _db!.delete(_tScreenshots, where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<void> savePendingSession(String sessionId, String sessionJson) async {
+    if (!_available) return;
+    await _db!.insert(
+      _tSessions,
+      {
+        'id': sessionId,
+        'session_json': sessionJson,
+        'created_at': DateTime.now().millisecondsSinceEpoch,
+        'status': 'pending',
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<void> deletePendingSession(String sessionId) async {
+    if (!_available) return;
+    await _db!.delete(_tSessions, where: 'id = ?', whereArgs: [sessionId]);
+  }
+
+  /// Returns sessions saved on start that were never deleted (app crashed/killed).
+  Future<List<Map<String, dynamic>>> getPendingSessions() async {
+    if (!_available) return [];
+    final rows = await _db!.query(_tSessions, orderBy: 'created_at ASC');
+    return rows
+        .map((r) => {'id': r['id'], 'session_json': r['session_json']})
+        .toList();
   }
 
   Future<void> close() async {

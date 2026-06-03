@@ -10,6 +10,7 @@
 library unilitix;
 
 import 'dart:async' show runZonedGuarded, unawaited;
+import 'dart:convert' show jsonDecode, jsonEncode;
 
 import 'package:flutter/widgets.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -212,9 +213,16 @@ class Unilitix {
           type: EventTypes.sessionStart,
           properties: {'sessionId': session.id},
         ));
+        unawaited(_database.savePendingSession(
+          session.id,
+          jsonEncode({'sessionId': session.id, 'startedAt': session.startedAt, 'crashed': true}),
+        ));
       },
       onSessionEnd: (session) {
-        unawaited(_flushScheduler.flushOnSessionEnd());
+        unawaited(() async {
+          await _flushScheduler.flushOnSessionEnd();
+          await _database.deletePendingSession(session.id);
+        }());
       },
       resetScreenshotOrdinal: () {
         _screenshotCapture.resetOrdinal();
@@ -293,6 +301,7 @@ class Unilitix {
     if (effectiveConfig.autoTrackCrashes) _crashTracker.install();
     await _crashTracker.logPendingCrashesIfAny();
     _flushScheduler.start();
+    unawaited(_recoverPendingSessions());
     if (effectiveConfig.captureSnapshots) _snapshotCapture.start();
     if (effectiveConfig.captureScreenshots) _screenshotCapture.start();
 
@@ -429,6 +438,29 @@ class Unilitix {
   }
 
   // ── Internal ──────────────────────────────────────────────────────
+
+  static Future<void> _recoverPendingSessions() async {
+    try {
+      final sessions = await _database.getPendingSessions();
+      for (final s in sessions) {
+        final id = s['id'] as String?;
+        final raw = s['session_json'] as String?;
+        if (id == null || raw == null) continue;
+        try {
+          final payload = jsonDecode(raw) as Map<String, dynamic>;
+          final ok = await _apiClient.ingestSession(payload);
+          if (ok) {
+            await _database.deletePendingSession(id);
+            UnilitixLogger.d('Recovered session $id');
+          }
+        } catch (e) {
+          UnilitixLogger.e('Failed to recover session $id', e);
+        }
+      }
+    } catch (e) {
+      UnilitixLogger.e('_recoverPendingSessions failed', e);
+    }
+  }
 
   static void _onScreenChange(String name) {
     if (_optManager.isOptedOut) return;
