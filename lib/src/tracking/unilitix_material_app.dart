@@ -18,6 +18,11 @@ import '../core/sdk_scope.dart';
 ///   home: HomeScreen(),
 /// )
 /// ```
+@Deprecated(
+  'Use UnilitixWidget instead. Wrap your existing MaterialApp with UnilitixWidget '
+  'and add Unilitix.observer to navigatorObservers. '
+  'UnilitixMaterialApp will be removed in v3.0.0.',
+)
 class UnilitixMaterialApp extends StatelessWidget {
   // ── Navigation ────────────────────────────────────────────────────────────
   final Widget? home;

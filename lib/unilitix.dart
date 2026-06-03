@@ -43,6 +43,7 @@ export 'src/config.dart';
 export 'src/tracking/observer.dart';
 export 'src/tracking/gesture_tracker.dart';
 export 'src/tracking/unilitix_app.dart';
+export 'src/tracking/unilitix_widget.dart';
 export 'src/tracking/unilitix_material_app.dart';
 export 'src/privacy/privacy_mask.dart';
 export 'src/events/event.dart';

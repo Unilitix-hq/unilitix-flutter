@@ -1,3 +1,14 @@
+## 2.0.46
+### Added
+- `UnilitixWidget` — thin `RepaintBoundary` wrapper; replaces `UnilitixMaterialApp` for session replay setup
+- New canonical pattern: `Unilitix.runApp(UnilitixWidget(child: MyApp()))` + `navigatorObservers: [Unilitix.observer]`
+
+### Deprecated
+- `UnilitixMaterialApp` — use `UnilitixWidget` + plain `MaterialApp` instead; will be removed in v3.0.0
+
+### Changed
+- README quick start updated to `UnilitixWidget` pattern
+
 ## 2.0.45
 ### Fixed
 - Screenshot capture re-entrancy guard — concurrent captures no longer overlap

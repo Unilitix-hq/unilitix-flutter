@@ -3,11 +3,8 @@ import 'package:unilitix/unilitix.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Unilitix.init(
-    'YOUR_API_KEY',
-    config: const UnilitixConfig(apiKey: 'YOUR_API_KEY', debug: true),
-  );
-  runApp(const MyApp());
+  await Unilitix.init('YOUR_API_KEY', config: const UnilitixConfig(apiKey: 'YOUR_API_KEY', debug: true));
+  Unilitix.runApp(const UnilitixWidget(child: MyApp()));
 }
 
 class MyApp extends StatelessWidget {
@@ -15,10 +12,9 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const UnilitixGestureDetector(
-      child: UnilitixMaterialApp(
-        home: HomeScreen(),
-      ),
+    return MaterialApp(
+      navigatorObservers: [Unilitix.observer],
+      home: const UnilitixGestureDetector(child: HomeScreen()),
     );
   }
 }
