@@ -9,12 +9,7 @@ import 'package:image/image.dart' as img;
 import '../logger/logger.dart';
 import '../core/sdk_scope.dart';
 
-/// Captures screenshots via [RepaintBoundary.toImage].
-///
-/// Note: Flutter's dart:ui does not support WebP encoding natively.
-/// We use JPEG encoding (via the `image` package) with the upload
-/// Content-Type set to `image/webp` per the backend contract.
-/// This is a known platform limitation documented inline.
+/// Captures screenshots via [RepaintBoundary.toImage] and encodes as JPEG.
 class ScreenshotCapture {
   final GlobalKey repaintKey;
   final int intervalMs;
@@ -31,6 +26,7 @@ class ScreenshotCapture {
   ) onCapture;
 
   int _ordinal = 0;
+  bool _isCapturing = false;
   Timer? _timer;
 
   ScreenshotCapture({
@@ -58,19 +54,25 @@ class ScreenshotCapture {
 
   Future<void> _capture() async {
     if (_ordinal >= maxScreenshots) return;
+    if (_isCapturing) return;
+    _isCapturing = true;
+
+    // Increment before any await to avoid ordinal races.
+    final ordinal = _ordinal++;
 
     final boundary =
         repaintKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
-    if (boundary == null) return;
+    if (boundary == null) {
+      _isCapturing = false;
+      return;
+    }
 
+    ui.Image? uiImage;
     try {
-      final uiImage = await boundary.toImage(pixelRatio: 1.0);
+      uiImage = await boundary.toImage(pixelRatio: 1.0);
       final byteData =
           await uiImage.toByteData(format: ui.ImageByteFormat.rawRgba);
-      if (byteData == null) {
-        uiImage.dispose();
-        return;
-      }
+      if (byteData == null) return;
 
       final rawBytes = byteData.buffer.asUint8List();
       var imgObj = img.Image.fromBytes(
@@ -80,9 +82,7 @@ class ScreenshotCapture {
         numChannels: 4,
         order: img.ChannelOrder.rgba,
       );
-      uiImage.dispose();
 
-      // Resize to maxWidth if needed
       if (imgObj.width > maxWidth) {
         imgObj = img.copyResize(imgObj, width: maxWidth);
       }
@@ -97,10 +97,12 @@ class ScreenshotCapture {
       final h = (view.physicalSize.height / view.devicePixelRatio).round();
       final capturedAt = DateTime.now().millisecondsSinceEpoch;
 
-      await onCapture(jpegBytes, screen, _ordinal, w, h, capturedAt);
-      _ordinal++;
+      await onCapture(jpegBytes, screen, ordinal, w, h, capturedAt);
     } catch (e) {
       UnilitixLogger.e('Screenshot capture failed', e);
+    } finally {
+      uiImage?.dispose();
+      _isCapturing = false;
     }
   }
 }

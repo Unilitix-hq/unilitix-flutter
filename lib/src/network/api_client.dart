@@ -136,7 +136,7 @@ class ApiClient {
       final resp = await _client
           .put(
             Uri.parse(presignedUrl),
-            headers: {'Content-Type': 'image/webp'},
+            headers: {'Content-Type': 'image/jpeg'},
             body: bytes,
           )
           .timeout(const Duration(seconds: 60));

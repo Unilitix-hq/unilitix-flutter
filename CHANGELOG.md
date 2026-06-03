@@ -1,3 +1,10 @@
+## 2.0.45
+### Fixed
+- Screenshot capture re-entrancy guard — concurrent captures no longer overlap
+- Ordinal incremented before `await` — eliminates race condition under concurrent timers
+- `uiImage` always disposed in `finally` — fixes GPU texture memory leak on capture failure
+- Upload `Content-Type` corrected to `image/jpeg` to match actual JPEG encoding
+
 ## 2.0.44
 ### Added
 - Scroll tracking via NotificationListener — SCROLL events with screen position
