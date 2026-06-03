@@ -11,7 +11,7 @@ African-first mobile UX analytics for Flutter. Track sessions, screens, events a
 
 ```yaml
 dependencies:
-  unilitix: ^2.0.46
+  unilitix: ^2.0.47
 ```
 
 ## Quick start

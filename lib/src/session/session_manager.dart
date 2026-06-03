@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
 
 import 'session.dart';
@@ -10,13 +12,11 @@ class SessionManager with WidgetsBindingObserver {
   final void Function(Session session) onSessionEnd;
   final void Function() resetScreenshotOrdinal;
 
-  /// Called when the app enters the background (paused). Wire to flush pending events.
-  void Function()? onBackground;
-
   Session? _currentSession;
   Session? _lastEndedSession;
-  int? _backgroundedAt;
-  int? _lastForegroundedAt;
+  DateTime? _backgroundedAt;
+  DateTime? _lastForegroundedAt;
+  Timer? _backgroundTimer;
   String _networkSentinel = 'INITIAL';
 
   Session? get currentSession => _currentSession;
@@ -27,15 +27,16 @@ class SessionManager with WidgetsBindingObserver {
   Session? get lastEndedSession => _lastEndedSession;
 
   /// Live total foreground time for the current session.
-  /// Includes the in-progress foreground window that has not yet been
-  /// committed by a [AppLifecycleState.paused] event.
+  /// Includes the in-progress foreground window not yet committed by a pause.
   int get currentForegroundTimeMs {
     final s = _currentSession;
     if (s == null) return _lastEndedSession?.foregroundTimeMs ?? 0;
     if (_backgroundedAt != null) return s.foregroundTimeMs;
+    final fg = _lastForegroundedAt;
     return s.foregroundTimeMs +
-        (DateTime.now().millisecondsSinceEpoch -
-            (_lastForegroundedAt ?? s.startedAt));
+        (fg != null
+            ? DateTime.now().millisecondsSinceEpoch - fg.millisecondsSinceEpoch
+            : 0);
   }
 
   SessionManager({
@@ -51,13 +52,16 @@ class SessionManager with WidgetsBindingObserver {
   }
 
   void stop() {
+    _backgroundTimer?.cancel();
+    _backgroundTimer = null;
     WidgetsBinding.instance.removeObserver(this);
     if (_currentSession != null) _endCurrentSession();
   }
 
   void _startNewSession() {
     _currentSession = Session();
-    _lastForegroundedAt = _currentSession!.startedAt;
+    _lastForegroundedAt =
+        DateTime.fromMillisecondsSinceEpoch(_currentSession!.startedAt);
     _networkSentinel = 'INITIAL';
     resetScreenshotOrdinal();
     UnilitixLogger.d('Session started: ${_currentSession!.id}');
@@ -65,19 +69,24 @@ class SessionManager with WidgetsBindingObserver {
   }
 
   void _endCurrentSession() {
-    final s = _currentSession!;
-    final now = DateTime.now().millisecondsSinceEpoch;
-
-    // Capture in-progress foreground window if not currently backgrounded.
-    if (_backgroundedAt == null && _lastForegroundedAt != null) {
-      s.foregroundTimeMs += now - _lastForegroundedAt!;
-    }
-
-    s.endedAt = now;
+    final s = _currentSession;
+    if (s == null) return;
+    _commitForegroundWindow();
+    s.endedAt = DateTime.now().millisecondsSinceEpoch;
     _lastEndedSession = s;
     UnilitixLogger.d('Session ended: ${s.id} (${s.durationMs} ms)');
     onSessionEnd(s);
     _currentSession = null;
+  }
+
+  /// Commits the current open foreground window into [Session.foregroundTimeMs].
+  void _commitForegroundWindow() {
+    final s = _currentSession;
+    final fg = _lastForegroundedAt;
+    if (s != null && _backgroundedAt == null && fg != null) {
+      s.foregroundTimeMs +=
+          DateTime.now().millisecondsSinceEpoch - fg.millisecondsSinceEpoch;
+    }
   }
 
   /// Call when the network type changes (from [NetworkMonitor]).
@@ -96,29 +105,44 @@ class SessionManager with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     switch (state) {
       case AppLifecycleState.paused:
-        final now = DateTime.now().millisecondsSinceEpoch;
-        if (_currentSession != null) {
-          _currentSession!.foregroundTimeMs +=
-              now - (_lastForegroundedAt ?? _currentSession!.startedAt);
-        }
-        _backgroundedAt = now;
+        _commitForegroundWindow();
+        _backgroundedAt = DateTime.now();
         _lastForegroundedAt = null;
-        if (_currentSession != null) _endCurrentSession();
-        onBackground?.call(); // triggers flushOnSessionEnd
+        // End the session after the timeout elapses in the background.
+        _backgroundTimer = Timer(
+          Duration(seconds: sessionTimeoutSeconds),
+          () {
+            if (_currentSession != null) _endCurrentSession();
+          },
+        );
         break;
 
       case AppLifecycleState.detached:
-        // App being killed — end session and flush everything.
-        if (_currentSession != null) {
-          _endCurrentSession();
-        }
+        // App being killed — cancel pending timer and end session immediately.
+        _backgroundTimer?.cancel();
+        _backgroundTimer = null;
+        if (_currentSession != null) _endCurrentSession();
         break;
 
       case AppLifecycleState.resumed:
+        // Guard: only act if we are actually returning from background.
+        if (_backgroundedAt == null) break;
+        final bg = _backgroundedAt!;
         _backgroundedAt = null;
-        _lastForegroundedAt = DateTime.now().millisecondsSinceEpoch;
-        // Always start a new session on resume — previous session was ended on pause.
-        _startNewSession();
+
+        if (_backgroundTimer?.isActive == true) {
+          // Within timeout — cancel the timer and continue the same session.
+          _backgroundTimer?.cancel();
+          _backgroundTimer = null;
+          _lastForegroundedAt = DateTime.now();
+          _currentSession?.backgroundTimeMs +=
+              DateTime.now().millisecondsSinceEpoch -
+                  bg.millisecondsSinceEpoch;
+        } else {
+          // Timer already fired or was never started — start a fresh session.
+          _backgroundTimer = null;
+          _startNewSession();
+        }
         break;
 
       default:

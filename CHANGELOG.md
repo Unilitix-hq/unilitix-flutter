@@ -1,3 +1,13 @@
+## 2.0.47
+### Changed
+- Session timeout is now timer-based — session ends in the background after `sessionTimeoutSeconds` elapses, not on every pause
+- `resumed` within timeout cancels the timer and continues the same session (backgroundTimeMs recorded)
+- `resumed` after timeout starts a fresh session
+- `detached` cancels the pending timer and ends the session immediately
+- `stop()` cancels the background timer to prevent leaks
+- Extracted `_commitForegroundWindow()` helper — eliminates foreground double-count risk
+- Removed dead `onBackground` field
+
 ## 2.0.46
 ### Added
 - `UnilitixWidget` — thin `RepaintBoundary` wrapper; replaces `UnilitixMaterialApp` for session replay setup
