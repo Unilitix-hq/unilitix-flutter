@@ -27,12 +27,10 @@ public class UnilitixPlugin: NSObject, FlutterPlugin {
     switch call.method {
     case "getCarrierName":
       let info = CTTelephonyNetworkInfo()
-      if let providers = info.serviceSubscriberCellularProviders,
-         let carrier = providers.values.first(where: { $0.carrierName != nil }) {
-        result(carrier.carrierName ?? "")
-      } else {
-        result("")
-      }
+      let carriers = info.serviceSubscriberCellularProviders ?? [:]
+      let orderedKeys = info.serviceOrder ?? Array(carriers.keys)
+      let carrier = orderedKeys.compactMap { carriers[$0] }.first
+      result(carrier?.carrierName ?? "")
 
     case "getBatteryLevel":
       UIDevice.current.isBatteryMonitoringEnabled = true
@@ -55,10 +53,14 @@ public class UnilitixPlugin: NSObject, FlutterPlugin {
       // Resolve cellular generation via CTTelephonyNetworkInfo
       let info = CTTelephonyNetworkInfo()
       let radioTech = info.serviceCurrentRadioAccessTechnology?.values.first ?? ""
+      if #available(iOS 14.1, *) {
+        if radioTech == CTRadioAccessTechnologyNRNSA ||
+           radioTech == CTRadioAccessTechnologyNR {
+          return "5G"
+        }
+      }
       switch radioTech {
-      case CTRadioAccessTechnologyLTE,
-           CTRadioAccessTechnologyNRNSA,
-           CTRadioAccessTechnologyNR:
+      case CTRadioAccessTechnologyLTE:
         return "4G"
       case CTRadioAccessTechnologyHSDPA,
            CTRadioAccessTechnologyHSUPA,

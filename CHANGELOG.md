@@ -1,3 +1,9 @@
+## 2.0.50
+### Fixed (iOS)
+- Podspec version synced to 2.0.50 (was stale at 2.0.36)
+- 5G detection added — `CTRadioAccessTechnologyNRNSA` and `CTRadioAccessTechnologyNR` now return `"5G"` on iOS 14.1+; previously reported as `"4G"`
+- Dual-SIM primary carrier selection uses `serviceOrder` (iOS 13+) instead of arbitrary dictionary key iteration
+
 ## 2.0.49
 ### Fixed
 - `flushOnSessionEnd` now respects the `_flushing` guard — no more race with periodic flush
