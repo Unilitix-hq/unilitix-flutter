@@ -1,11 +1,17 @@
-/// Unilitix Flutter SDK — pure Dart analytics.
+/// Unilitix Flutter SDK — mobile UX analytics for African apps.
 ///
+/// ## Setup
 /// ```dart
 /// void main() async {
 ///   WidgetsFlutterBinding.ensureInitialized();
-///   await Unilitix.init(config: const UnilitixConfig(apiKey: 'key'));
-///   runApp(UnilitixMaterialApp(home: HomeScreen()));
+///   await Unilitix.init('YOUR_API_KEY');
+///   Unilitix.runApp(UnilitixWidget(child: MyApp()));
 /// }
+///
+/// // In your MaterialApp:
+/// // MaterialApp(
+/// //   navigatorObservers: [Unilitix.observer],
+/// // )
 /// ```
 library unilitix;
 

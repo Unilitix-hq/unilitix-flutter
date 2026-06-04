@@ -304,11 +304,12 @@ void main() {
 
     // ── delayFor ──────────────────────────────────────────────────────────────
 
-    test('exponential backoff: attempt 0→1s, 1→2s, 2→4s, 3→8s', () {
-      expect(RetryPolicy.delayFor(0).inMilliseconds, 1000);
-      expect(RetryPolicy.delayFor(1).inMilliseconds, 2000);
-      expect(RetryPolicy.delayFor(2).inMilliseconds, 4000);
-      expect(RetryPolicy.delayFor(3).inMilliseconds, 8000);
+    test('exponential backoff: attempt 0→~1s, 1→~2s, 2→~4s, 3→~8s (±20% jitter)', () {
+      // base * [1.0, 1.2) due to jitter
+      expect(RetryPolicy.delayFor(0).inMilliseconds, inInclusiveRange(1000, 1199));
+      expect(RetryPolicy.delayFor(1).inMilliseconds, inInclusiveRange(2000, 2399));
+      expect(RetryPolicy.delayFor(2).inMilliseconds, inInclusiveRange(4000, 4799));
+      expect(RetryPolicy.delayFor(3).inMilliseconds, inInclusiveRange(8000, 9599));
     });
 
     test('retryAfterSeconds is honoured when provided', () {
@@ -332,8 +333,8 @@ void main() {
       expect(delay.inMilliseconds, RetryPolicy.maxDelayMs);
     });
 
-    test('negative attempt is clamped to 0 — returns 1s', () {
-      expect(RetryPolicy.delayFor(-1).inMilliseconds, 1000);
+    test('negative attempt is clamped to 0 — returns ~1s (±20% jitter)', () {
+      expect(RetryPolicy.delayFor(-1).inMilliseconds, inInclusiveRange(1000, 1199));
     });
 
     // ── shouldRetry ───────────────────────────────────────────────────────────
