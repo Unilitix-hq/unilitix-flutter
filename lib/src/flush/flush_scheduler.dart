@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' show min;
 
 import '../capture/snapshot_buffer.dart';
 import '../events/event_buffer.dart';
@@ -82,6 +83,7 @@ class FlushScheduler {
     _flushing = true;
     try {
       await _flushEvents(); // calls _uploadScreenshots internally on success
+      await _retryPending(skipPurge: true);
       await _flushSession();
     } finally {
       _flushing = false;
@@ -103,10 +105,12 @@ class FlushScheduler {
       performanceMonitor.enrichEvent(event);
       event.capturedOffline = networkMonitor.isOffline();
       event.networkAtCapture = networkMonitor.currentType();
+      final session =
+          sessionManager.currentSession ?? sessionManager.lastEndedSession;
       if (event.capturedOffline) {
-        sessionManager.currentSession?.offlineEventCount++;
+        session?.offlineEventCount++;
       } else {
-        sessionManager.currentSession?.onlineEventCount++;
+        session?.onlineEventCount++;
       }
     }
 
@@ -228,55 +232,60 @@ class FlushScheduler {
 
   // ── Retry ──────────────────────────────────────────────────────────────────
 
-  Future<void> _retryPending() async {
+  Future<void> _retryPending({bool skipPurge = false}) async {
     final pending = await database.getOldestEvents(20);
-    for (final p in pending) {
-      if (p.id == null) continue;
+    for (var i = 0; i < pending.length; i += 5) {
+      final chunk = pending.sublist(i, min(i + 5, pending.length));
+      await Future.wait(chunk.map(_processBatch));
+    }
+    if (!skipPurge) {
+      await database.deleteEventsOlderThan(
+        DateTime.now().subtract(const Duration(days: 7)),
+      );
+    }
+  }
 
-      // Drop batches that have failed too many times.
-      if (p.retryCount >= 10) {
-        await database.deletePendingEvent(p.id!);
-        continue;
-      }
+  Future<void> _processBatch(PendingEvent p) async {
+    if (p.id == null) return;
 
-      final sessionData = jsonDecode(p.sessionJson) as Map<String, dynamic>;
-      final eventsList =
-          (jsonDecode(p.eventsJson) as List).cast<Map<String, dynamic>>();
-
-      // Events-only records have exactly {sessionId} in session_json.
-      // Full-session records (legacy) have the complete session payload.
-      final isEventsOnly =
-          sessionData.length == 1 && sessionData.containsKey('sessionId');
-
-      final bool ok;
-      if (isEventsOnly) {
-        final sid = sessionData['sessionId'] as String? ?? '';
-        ok = await apiClient.ingestEvents(
-          sessionId: sid,
-          events: eventsList,
-        );
-      } else {
-        sessionData['syncAttempts'] = p.syncAttempts;
-        sessionData['syncFailedBatches'] = p.syncFailedBatches;
-        ok = await apiClient.ingestSession({
-          ...sessionData,
-          'events': eventsList,
-        });
-      }
-
-      if (ok) {
-        await database.incrementSyncAttempts(p.id!); // only on successful send
-        await database.deleteEventById(p.id!);
-        UnilitixLogger.d('Retry succeeded for batch ${p.id}');
-      } else {
-        await database.incrementRetryCount(p.id!);
-        await database.incrementSyncFailedBatches(p.id!);
-      }
+    // Drop batches that have failed too many times.
+    if (p.retryCount >= 10) {
+      await database.deletePendingEvent(p.id!);
+      return;
     }
 
-    // Purge events older than 7 days.
-    await database.deleteEventsOlderThan(
-      DateTime.now().subtract(const Duration(days: 7)),
-    );
+    final sessionData = jsonDecode(p.sessionJson) as Map<String, dynamic>;
+    final eventsList =
+        (jsonDecode(p.eventsJson) as List).cast<Map<String, dynamic>>();
+
+    // Events-only records have exactly {sessionId} in session_json.
+    // Full-session records (legacy) have the complete session payload.
+    final isEventsOnly =
+        sessionData.length == 1 && sessionData.containsKey('sessionId');
+
+    final bool ok;
+    if (isEventsOnly) {
+      final sid = sessionData['sessionId'] as String? ?? '';
+      ok = await apiClient.ingestEvents(
+        sessionId: sid,
+        events: eventsList,
+      );
+    } else {
+      sessionData['syncAttempts'] = p.syncAttempts;
+      sessionData['syncFailedBatches'] = p.syncFailedBatches;
+      ok = await apiClient.ingestSession({
+        ...sessionData,
+        'events': eventsList,
+      });
+    }
+
+    if (ok) {
+      await database.incrementSyncAttempts(p.id!); // only on successful send
+      await database.deleteEventById(p.id!);
+      UnilitixLogger.d('Retry succeeded for batch ${p.id}');
+    } else {
+      await database.incrementRetryCount(p.id!);
+      await database.incrementSyncFailedBatches(p.id!);
+    }
   }
 }

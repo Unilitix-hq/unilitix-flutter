@@ -1,3 +1,14 @@
+## 2.0.54
+### Changed
+- `_retryPending` now processes batches in parallel chunks of 5 — reduces retry wall-clock time under backlog
+- Per-batch logic extracted into `_processBatch` for clarity
+- `_retryPending(skipPurge: true)` — session-end retries skip the 7-day purge (periodic flush handles it)
+- `flushOnSessionEnd` now calls `_retryPending(skipPurge: true)` before the session POST — offline-queued events are delivered and `offlineEventCount` is updated before the session record is sent
+
+## 2.0.53
+### Fixed
+- `offlineEventCount` / `onlineEventCount` now fall back to `lastEndedSession` when `currentSession` is null — retried events that succeed after session end are counted against the correct session
+
 ## 2.0.52
 ### Added
 - `pending_sessions` table (DB v3) — persists session stub on start, deleted on clean session end
