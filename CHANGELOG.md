@@ -1,3 +1,8 @@
+## 2.0.56
+### Changed
+- Startup observer warning updated: "not connected — add Unilitix.observer to MaterialApp.navigatorObservers" (was stale UnilitixMaterialApp reference)
+- Dashboard docs: amber warning callout added directly after the setup snippet in Flutter Quick start Step 2
+
 ## 2.0.55
 ### Changed
 - Dartdoc updated on all public `Unilitix` methods and getters — consistent verb-first phrasing, code examples on `observer`, `track`, `identify`, `runApp`, and `init`

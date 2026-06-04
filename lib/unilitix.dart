@@ -215,10 +215,16 @@ class Unilitix {
           type: EventTypes.sessionStart,
           properties: {'sessionId': session.id},
         ));
-        unawaited(_database.savePendingSession(
-          session.id,
-          jsonEncode({'sessionId': session.id, 'startedAt': session.startedAt, 'crashed': true}),
-        ));
+        unawaited(() async {
+          final payload = await _buildSessionPayload();
+          if (payload != null) {
+            final withCrash = {...payload, 'crashed': true};
+            await _database.savePendingSession(
+              session.id,
+              jsonEncode(withCrash),
+            );
+          }
+        }());
       },
       onSessionEnd: (session) {
         unawaited(() async {
@@ -316,7 +322,7 @@ class Unilitix {
       UnilitixLogger.d(
           'Session started  ✅  ${sid.length > 8 ? sid.substring(0, 8) : sid}…');
       UnilitixLogger.d(
-          'Observer         ⚠️   not yet — use UnilitixMaterialApp instead of MaterialApp');
+          'Observer         ⚠️   not connected — add Unilitix.observer to MaterialApp.navigatorObservers');
       UnilitixLogger.d(
           'API key          ${effectiveConfig.apiKey.length > 8 ? "${effectiveConfig.apiKey.substring(0, 4)}****${effectiveConfig.apiKey.substring(effectiveConfig.apiKey.length - 4)}" : "****"}');
       UnilitixLogger.d(
