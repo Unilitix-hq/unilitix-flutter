@@ -1,3 +1,7 @@
+## 2.0.57
+### Fixed
+- Network exceptions (`ClientException`, "Connection closed", "Software caused connection abort") are now filtered out of crash tracking — avoids false-positive crash reports from transient connectivity drops
+
 ## 2.0.56
 ### Changed
 - Startup observer warning updated: "not connected — add Unilitix.observer to MaterialApp.navigatorObservers" (was stale UnilitixMaterialApp reference)

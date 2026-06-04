@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' show ClientException;
 
 import '../events/event.dart';
 import '../logger/logger.dart';
@@ -47,6 +48,12 @@ class CrashTracker {
   }
 
   void _recordCrash(Object error, StackTrace? stack) {
+    // Network errors are not crashes — skip to avoid false positives.
+    if (error is ClientException ||
+        error.toString().contains('Connection closed') ||
+        error.toString().contains('Software caused connection abort')) {
+      return;
+    }
     UnilitixLogger.e('Crash captured', error, stack);
     final raw = '${error.runtimeType}: ${error.toString()}';
     final title = raw.length > 200 ? raw.substring(0, 200) : raw;
