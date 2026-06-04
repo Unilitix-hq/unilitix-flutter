@@ -5,13 +5,15 @@
 /// void main() async {
 ///   WidgetsFlutterBinding.ensureInitialized();
 ///   await Unilitix.init('YOUR_API_KEY');
-///   Unilitix.runApp(UnilitixWidget(child: MyApp()));
+///   Unilitix.runApp(MyApp());
 /// }
 ///
-/// // In your MaterialApp:
-/// // MaterialApp(
-/// //   navigatorObservers: [Unilitix.observer],
-/// // )
+/// class MyApp extends StatelessWidget {
+///   Widget build(BuildContext context) => MaterialApp(
+///     navigatorObservers: [Unilitix.observer],
+///     builder: (context, child) => UnilitixWidget(child: child!),
+///   );
+/// }
 /// ```
 library unilitix;
 
@@ -349,12 +351,23 @@ class Unilitix {
     }
   }
 
-  /// Wraps [runApp] with crash detection via [runZonedGuarded].
-  /// Use instead of Flutter's [runApp].
+  /// Initializes crash detection and starts the app.
   ///
   /// ```dart
-  /// Unilitix.runApp(UnilitixWidget(child: MyApp()));
+  /// void main() {
+  ///   Unilitix.runApp(MyApp());
+  /// }
+  ///
+  /// class MyApp extends StatelessWidget {
+  ///   Widget build(BuildContext context) => MaterialApp(
+  ///     navigatorObservers: [Unilitix.observer],
+  ///     builder: (context, child) => UnilitixWidget(child: child!),
+  ///   );
+  /// }
   /// ```
+  ///
+  /// Do NOT wrap [MaterialApp] itself — use [MaterialApp.builder] to ensure
+  /// screenshots capture fully rendered content.
   static void runApp(Widget app) {
     runZonedGuarded(
       () => runApp(app),

@@ -11,7 +11,7 @@ African-first mobile UX analytics for Flutter. Track sessions, screens, events a
 
 ```yaml
 dependencies:
-  unilitix: ^2.0.58
+  unilitix: ^2.0.59
 ```
 
 ## Quick start
@@ -23,16 +23,17 @@ import 'package:unilitix/unilitix.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Unilitix.init('YOUR_API_KEY');
-  Unilitix.runApp(
-    UnilitixWidget(child: const MyApp()),
-  );
+  Unilitix.runApp(const MyApp());
 }
 
 class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       navigatorObservers: [Unilitix.observer],
+      builder: (context, child) => UnilitixWidget(child: child!),
       home: const HomeScreen(),
     );
   }

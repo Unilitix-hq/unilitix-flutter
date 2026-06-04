@@ -1,3 +1,9 @@
+## 2.0.59
+### Changed
+- Setup pattern updated: `UnilitixWidget` now placed via `MaterialApp.builder` instead of wrapping `MyApp` — ensures screenshots capture fully rendered content including the navigation shell
+- README quick start and `Unilitix.runApp` dartdoc updated to reflect the builder pattern
+- `Unilitix.runApp(MyApp())` replaces `Unilitix.runApp(UnilitixWidget(child: MyApp()))`
+
 ## 2.0.58
 ### Changed
 - Version bump: pubspec, podspec, `kUnilitixSdkVersion`, and README all synced to 2.0.58
