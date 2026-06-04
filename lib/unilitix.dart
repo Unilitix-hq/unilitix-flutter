@@ -86,34 +86,30 @@ class Unilitix {
   static final GlobalKey _repaintKey = GlobalKey();
   static final UnilitixObserver _observer = UnilitixObserver();
 
-  /// The navigator observer.
-  /// [UnilitixMaterialApp] wires this automatically.
-  /// Only needed for custom navigators — see [UnilitixMaterialApp].
+  /// The navigator observer for screen tracking.
+  /// Add to [MaterialApp.navigatorObservers].
+  ///
+  /// ```dart
+  /// MaterialApp(navigatorObservers: [Unilitix.observer])
+  /// ```
   static UnilitixObserver get observer => _observer;
 
-  /// The [RepaintBoundary] key used for screenshot capture.
-  /// Automatically attached by [UnilitixMaterialApp].
+  /// The repaint boundary key used by [UnilitixWidget].
   static GlobalKey get repaintKey => _repaintKey;
 
-  /// Whether [init] has completed successfully.
+  /// Whether the SDK has been initialized.
   static bool get isInitialized => _initialized;
 
-  /// The active [UnilitixConfig].
+  /// The current SDK configuration.
   static UnilitixConfig? get config => _config;
 
   // ── Init ──────────────────────────────────────────────────────────
 
-  /// Initialize the SDK. Call once in `main()` before `runApp()`.
+  /// Initializes the Unilitix SDK.
+  /// Call once in [main] before [runApp].
   ///
   /// ```dart
-  /// // Simple:
   /// await Unilitix.init('your_api_key');
-  ///
-  /// // With config overrides:
-  /// await Unilitix.init(
-  ///   'your_api_key',
-  ///   config: const UnilitixConfig(apiKey: 'your_api_key', debug: true),
-  /// );
   /// ```
   static Future<void> init(
     String apiKey, {
@@ -340,13 +336,11 @@ class Unilitix {
     }
   }
 
-  /// Wraps [runApp] in a [runZonedGuarded] zone so synchronous errors thrown
-  /// outside the Flutter framework (e.g. in widget constructors) are captured.
+  /// Wraps [runApp] with crash detection via [runZonedGuarded].
+  /// Use instead of Flutter's [runApp].
   ///
-  /// Use instead of `runApp()` in `main()`:
   /// ```dart
-  /// await Unilitix.init('your_key');
-  /// Unilitix.runApp(const MyApp());
+  /// Unilitix.runApp(UnilitixWidget(child: MyApp()));
   /// ```
   static void runApp(Widget app) {
     runZonedGuarded(
@@ -357,7 +351,11 @@ class Unilitix {
 
   // ── Tracking ──────────────────────────────────────────────────────
 
-  /// Track a custom event with optional properties.
+  /// Tracks a custom event with optional properties.
+  ///
+  /// ```dart
+  /// Unilitix.track('button_tapped', {'screen': 'home'});
+  /// ```
   static Future<void> track(
     String event, [
     Map<String, dynamic>? properties,
@@ -374,7 +372,11 @@ class Unilitix {
     unawaited(_flushScheduler.flushNow());
   }
 
-  /// Identify the current user.
+  /// Identifies the current user with optional traits.
+  ///
+  /// ```dart
+  /// Unilitix.identify('user_123', {'email': 'ada@example.com'});
+  /// ```
   static Future<void> identify(
     String userId, [
     Map<String, dynamic>? traits,
@@ -390,7 +392,8 @@ class Unilitix {
     UnilitixLogger.d('Identify: $userId');
   }
 
-  /// Manually track a screen view.
+  /// Manually tracks a screen view.
+  /// Use when [Unilitix.observer] cannot detect navigation automatically.
   static Future<void> screen(String screenName) async {
     _assertInitialized('screen');
     _onScreenChange(screenName);
@@ -398,14 +401,14 @@ class Unilitix {
 
   // ── Session ───────────────────────────────────────────────────────
 
-  /// Start a new session manually.
+  /// Manually starts a new session.
   static Future<void> startSession() async {
     _assertInitialized('startSession');
     _sessionManager.stop();
     _sessionManager.start();
   }
 
-  /// End the current session manually.
+  /// Manually ends the current session.
   static Future<void> endSession() async {
     _assertInitialized('endSession');
     _sessionManager.stop();
@@ -413,21 +416,21 @@ class Unilitix {
 
   // ── Privacy ───────────────────────────────────────────────────────
 
-  /// Stop all tracking and analytics collection.
+  /// Stops all tracking and analytics collection.
   static Future<void> optOut() async {
     _assertInitialized('optOut');
     await _optManager.optOut();
     UnilitixLogger.d('Opted out');
   }
 
-  /// Resume tracking after [optOut].
+  /// Resumes tracking after [optOut].
   static Future<void> optIn() async {
     _assertInitialized('optIn');
     await _optManager.optIn();
     UnilitixLogger.d('Opted in');
   }
 
-  /// Reset user identity. Call on logout.
+  /// Resets user identity and clears stored IDs. Call on logout.
   static Future<void> reset() async {
     _assertInitialized('reset');
     await _identity.reset();
@@ -436,7 +439,7 @@ class Unilitix {
 
   // ── Flush ─────────────────────────────────────────────────────────
 
-  /// Immediately flush all queued events.
+  /// Immediately flushes all queued events to the backend.
   static Future<void> flush() async {
     _assertInitialized('flush');
     await _flushScheduler.flush();
