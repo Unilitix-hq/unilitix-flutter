@@ -1,3 +1,8 @@
+## 2.0.54
+### Fixed (Android)
+- 5G detection added — `NETWORK_TYPE_NR` now returns `"5G"` on Android API 29+ (Q); previously reported as `"4G"`
+- `import android.os.Build` added; `NETWORK_TYPE_NR` removed from the 4G case
+
 ## 2.0.53
 ### Changed
 - `_retryPending` now processes batches in parallel chunks of 5 — reduces retry wall-clock time under backlog

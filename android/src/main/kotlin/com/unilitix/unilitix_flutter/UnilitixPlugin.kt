@@ -2,6 +2,7 @@ package com.unilitix.unilitix_flutter
 
 import android.content.Context
 import android.os.BatteryManager
+import android.os.Build
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -105,18 +106,23 @@ class UnilitixPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
     private fun resolveCellular(): String {
         return try {
             val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
-            when (tm?.dataNetworkType) {
-                TelephonyManager.NETWORK_TYPE_LTE,
-                TelephonyManager.NETWORK_TYPE_NR    -> "4G"
-                TelephonyManager.NETWORK_TYPE_HSDPA,
-                TelephonyManager.NETWORK_TYPE_HSUPA,
-                TelephonyManager.NETWORK_TYPE_HSPA,
-                TelephonyManager.NETWORK_TYPE_HSPAP,
-                TelephonyManager.NETWORK_TYPE_UMTS  -> "3G"
-                TelephonyManager.NETWORK_TYPE_EDGE,
-                TelephonyManager.NETWORK_TYPE_GPRS,
-                TelephonyManager.NETWORK_TYPE_CDMA  -> "2G"
-                else -> "CELLULAR"
+            val networkType = tm?.dataNetworkType
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                networkType == TelephonyManager.NETWORK_TYPE_NR) {
+                "5G"
+            } else {
+                when (networkType) {
+                    TelephonyManager.NETWORK_TYPE_LTE   -> "4G"
+                    TelephonyManager.NETWORK_TYPE_HSDPA,
+                    TelephonyManager.NETWORK_TYPE_HSUPA,
+                    TelephonyManager.NETWORK_TYPE_HSPA,
+                    TelephonyManager.NETWORK_TYPE_HSPAP,
+                    TelephonyManager.NETWORK_TYPE_UMTS  -> "3G"
+                    TelephonyManager.NETWORK_TYPE_EDGE,
+                    TelephonyManager.NETWORK_TYPE_GPRS,
+                    TelephonyManager.NETWORK_TYPE_CDMA  -> "2G"
+                    else -> "CELLULAR"
+                }
             }
         } catch (_: Exception) {
             "CELLULAR"
