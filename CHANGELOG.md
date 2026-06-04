@@ -1,3 +1,7 @@
+## 2.0.55
+### Changed
+- Dartdoc updated on all public `Unilitix` methods and getters — consistent verb-first phrasing, code examples on `observer`, `track`, `identify`, `runApp`, and `init`
+
 ## 2.0.54
 ### Fixed (Android)
 - 5G detection added — `NETWORK_TYPE_NR` now returns `"5G"` on Android API 29+ (Q); previously reported as `"4G"`
