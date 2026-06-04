@@ -1,3 +1,7 @@
+## 2.0.58
+### Changed
+- Version bump: pubspec, podspec, `kUnilitixSdkVersion`, and README all synced to 2.0.58
+
 ## 2.0.57
 ### Fixed
 - Network exceptions (`ClientException`, "Connection closed", "Software caused connection abort") are now filtered out of crash tracking — avoids false-positive crash reports from transient connectivity drops
