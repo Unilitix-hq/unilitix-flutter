@@ -216,13 +216,20 @@ class Unilitix {
           properties: {'sessionId': session.id},
         ));
         unawaited(() async {
-          final payload = await _buildSessionPayload();
-          if (payload != null) {
-            final withCrash = {...payload, 'crashed': true};
-            await _database.savePendingSession(
-              session.id,
-              jsonEncode(withCrash),
-            );
+          try {
+            var payload = await _buildSessionPayload();
+            if (payload == null) {
+              // Platform may not be ready immediately — retry once.
+              await Future.delayed(const Duration(milliseconds: 500));
+              payload = await _buildSessionPayload();
+            }
+            if (payload != null) {
+              final withCrash = {...payload, 'crashed': true};
+              await _database.savePendingSession(
+                  session.id, jsonEncode(withCrash));
+            }
+          } catch (e) {
+            UnilitixLogger.w('Failed to save pending session stub: $e');
           }
         }());
       },

@@ -1,6 +1,8 @@
 ## 2.0.57
 ### Fixed
 - Network exceptions (`ClientException`, "Connection closed", "Software caused connection abort") are now filtered out of crash tracking — avoids false-positive crash reports from transient connectivity drops
+- `onSessionStart` pending-session stub write now wrapped in try/catch — failures logged as warnings instead of silently swallowed
+- Retry once after 500 ms if `_buildSessionPayload()` returns null on first call (platform channel not ready at session start)
 
 ## 2.0.56
 ### Changed
