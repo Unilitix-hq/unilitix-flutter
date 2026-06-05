@@ -1,3 +1,10 @@
+## 2.0.60
+### Changed
+- Version bump to 2.0.60 — includes all fixes and changes from 2.0.58 and 2.0.59:
+  - Pending session stub wrapped in try/catch with 500 ms retry (2.0.57–2.0.58)
+  - Setup pattern updated to `MaterialApp.builder` for correct screenshot capture (2.0.59)
+  - Network exceptions filtered from crash tracker (2.0.57)
+
 ## 2.0.59
 ### Changed
 - Setup pattern updated: `UnilitixWidget` now placed via `MaterialApp.builder` instead of wrapping `MyApp` — ensures screenshots capture fully rendered content including the navigation shell
