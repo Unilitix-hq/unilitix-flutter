@@ -1,3 +1,14 @@
+## 2.0.61
+### Fixed
+- `recordZoneError` now guarded by `_isRecording` flag — prevents recursive crash recording if `onCrashEvent` itself throws
+- 5-second observer warning now uses `_observerConnected` flag — suppressed as soon as `UnilitixWidget` detects a Navigator or the observer fires its first navigation event
+
+### Added
+- `Unilitix.markObserverConnected()` — public static method; call it to suppress the observer warning in custom navigation setups
+- `UnilitixWidget` converted to `StatefulWidget` — auto-calls `markObserverConnected()` via `didChangeDependencies` when a `Navigator` is found in context
+- `UnilitixObserver.didPush` fires `SdkScope.onObserverConnected` on the first navigation event — wired to `markObserverConnected()` in init
+- `SdkScope.onObserverConnected` callback added for observer-to-SDK signalling without circular imports
+
 ## 2.0.60
 ### Changed
 - Version bump to 2.0.60 — includes all fixes and changes from 2.0.58 and 2.0.59:

@@ -15,6 +15,7 @@ class CrashTracker {
   final EventDatabase database;
 
   FlutterExceptionHandler? _previousFlutterHandler;
+  bool _isRecording = false;
 
   CrashTracker({
     required this.onCrashEvent,
@@ -44,7 +45,13 @@ class CrashTracker {
 
   /// Records an error caught by a Zone (e.g. runZonedGuarded in Unilitix.runApp).
   void recordZoneError(Object error, StackTrace stack) {
-    _recordCrash(error, stack);
+    if (_isRecording) return; // prevent recursive crash recording
+    _isRecording = true;
+    try {
+      _recordCrash(error, stack);
+    } finally {
+      _isRecording = false;
+    }
   }
 
   void _recordCrash(Object error, StackTrace? stack) {

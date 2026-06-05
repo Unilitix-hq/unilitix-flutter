@@ -570,7 +570,7 @@ packages:
       path: ".."
       relative: true
     source: path
-    version: "2.0.59"
+    version: "2.0.61"
   vector_math:
     dependency: transitive
     description:

@@ -2,37 +2,43 @@ import 'package:flutter/widgets.dart';
 
 import '../../unilitix.dart';
 
-/// Wrap your app's root widget with [UnilitixWidget] to enable session replay.
-/// Place it in [Unilitix.runApp], wrapping your [MaterialApp] or root widget.
+/// Wrap your app content with [UnilitixWidget] to enable session replay.
+/// Place it in [MaterialApp.builder] so screenshots capture fully rendered content.
 ///
 /// ```dart
-/// void main() async {
-///   WidgetsFlutterBinding.ensureInitialized();
-///   await Unilitix.init('YOUR_API_KEY');
-///   Unilitix.runApp(
-///     UnilitixWidget(child: MyApp()),
-///   );
-/// }
-///
-/// class MyApp extends StatelessWidget {
-///   @override
-///   Widget build(BuildContext context) {
-///     return MaterialApp(
-///       navigatorObservers: [Unilitix.observer],
-///       home: const HomeScreen(),
-///     );
-///   }
-/// }
+/// MaterialApp(
+///   navigatorObservers: [Unilitix.observer],
+///   builder: (context, child) => UnilitixWidget(child: child!),
+/// )
 /// ```
-class UnilitixWidget extends StatelessWidget {
+class UnilitixWidget extends StatefulWidget {
   final Widget child;
   const UnilitixWidget({super.key, required this.child});
+
+  @override
+  State<UnilitixWidget> createState() => _UnilitixWidgetState();
+}
+
+class _UnilitixWidgetState extends State<UnilitixWidget> {
+  bool _observerRegistered = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_observerRegistered) {
+      final navigator = Navigator.maybeOf(context);
+      if (navigator != null) {
+        Unilitix.markObserverConnected();
+        _observerRegistered = true;
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return RepaintBoundary(
       key: Unilitix.repaintKey,
-      child: child,
+      child: widget.child,
     );
   }
 }

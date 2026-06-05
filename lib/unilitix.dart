@@ -65,6 +65,7 @@ class Unilitix {
 
   static UnilitixConfig? _config;
   static bool _initialized = false;
+  static bool _observerConnected = false;
   static final List<Map<String, dynamic>> _breadcrumbs = [];
 
   static late SessionManager _sessionManager;
@@ -101,6 +102,10 @@ class Unilitix {
 
   /// Whether the SDK has been initialized.
   static bool get isInitialized => _initialized;
+
+  /// Marks the navigator observer as connected, suppressing the startup warning.
+  /// Called automatically by [UnilitixWidget] and [UnilitixObserver].
+  static void markObserverConnected() => _observerConnected = true;
 
   /// The current SDK configuration.
   static UnilitixConfig? get config => _config;
@@ -305,6 +310,7 @@ class Unilitix {
     // Wire up SdkScope callbacks
     SdkScope.onScreenChange = _onScreenChange;
     SdkScope.onTap = _onTap;
+    SdkScope.onObserverConnected = markObserverConnected;
     SdkScope.onScroll = (screen, dx, dy) {
       _emitEvent(UnilitixEvent(
         type: EventTypes.scroll,
@@ -341,10 +347,9 @@ class Unilitix {
       UnilitixLogger.d('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
       Future.delayed(const Duration(seconds: 5), () {
-        if (!SdkScope.observerAttached && !SdkScope.screenEventReceived) {
+        if (!_observerConnected) {
           UnilitixLogger.w(
-            'Screen tracking not detected. Replace MaterialApp with UnilitixMaterialApp:\n'
-            '  UnilitixMaterialApp(home: HomeScreen())',
+            'Observer not connected — add Unilitix.observer to MaterialApp.navigatorObservers',
           );
         }
       });
