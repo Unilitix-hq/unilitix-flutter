@@ -14,9 +14,11 @@ import '../logger/logger.dart';
 
 /// Schedules periodic event flushing and handles retry logic.
 ///
-/// Two separate flush paths:
-///   - Events flush  → POST /v1/ingest/events  (every 30 s or on track())
-///   - Session flush → POST /v1/ingest/session (session end only)
+/// Session-end flush order (4-stage sequential via [_flushAll]):
+///   Stage 1 — POST /v1/ingest/session    (must return true; gates everything)
+///   Stage 2 — POST /v1/ingest/events     (must return true; gates Stages 3 and 4)
+///   Stage 3 — POST /v1/ingest/snapshots  (best-effort; runs in parallel with Stage 4)
+///   Stage 4 — R2 presigned upload        (best-effort; runs in parallel with Stage 3)
 class FlushScheduler {
   final int intervalSeconds;
   final EventBuffer buffer;
@@ -57,7 +59,8 @@ class FlushScheduler {
     _timer = null;
   }
 
-  /// Periodic flush — drains events and retries any pending DB records.
+  /// Periodic flush — drains buffered events and retries pending DB records.
+  /// Session POST, snapshots, and screenshots are deferred to session end.
   Future<void> flush() async {
     if (_flushing) return;
     _flushing = true;
@@ -76,30 +79,65 @@ class FlushScheduler {
   /// Drain pending events on app background — no session POST, no screenshots.
   Future<void> flushEventsOnly() => _flushEvents();
 
-  /// Called on session end: flush remaining events (which also uploads
-  /// screenshots on success), then send the session record.
+  /// Full 4-stage flush on session end.
   Future<void> flushOnSessionEnd() async {
     if (_flushing) return;
     _flushing = true;
     try {
-      await _flushEvents(); // calls _uploadScreenshots internally on success
+      await _flushAll();
       await _retryPending(skipPurge: true);
-      await _flushSession();
     } finally {
       _flushing = false;
     }
   }
 
-  // ── Events path ────────────────────────────────────────────────────────────
+  // ── 4-stage orchestrator ───────────────────────────────────────────────────
 
-  Future<void> _flushEvents({String? sessionId}) async {
-    final id = sessionId ??
-        sessionManager.currentSession?.id ??
+  Future<void> _flushAll() async {
+    // Stage 1 — session record must exist on backend before anything else.
+    final sessionOk = await _flushSession();
+    if (!sessionOk) return;
+
+    // Stage 2 — upload buffered events; abort media stages on failure.
+    final eventsOk = await _flushEvents();
+    if (!eventsOk) return;
+
+    // Stages 3 & 4 — media uploads; best-effort, parallel.
+    await Future.wait([
+      _flushSnapshots().catchError((_) => false),
+      _uploadScreenshots().catchError((_) => false),
+    ]);
+  }
+
+  // ── Stage 1: session ───────────────────────────────────────────────────────
+
+  Future<bool> _flushSession() async {
+    try {
+      final sessionPayload = await buildSessionPayload();
+      if (sessionPayload == null) return false;
+      final sessionId = sessionPayload['sessionId'] as String? ?? '';
+      final ok = await apiClient.ingestSession(sessionPayload);
+      if (ok) {
+        UnilitixLogger.d('Flushed session $sessionId');
+        return true;
+      }
+      UnilitixLogger.w('Session flush failed');
+      return false;
+    } catch (e, stack) {
+      UnilitixLogger.e('Session flush failed', e, stack);
+      return false;
+    }
+  }
+
+  // ── Stage 2: events ────────────────────────────────────────────────────────
+
+  Future<bool> _flushEvents() async {
+    final id = sessionManager.currentSession?.id ??
         sessionManager.lastEndedSession?.id;
-    if (id == null) return;
+    if (id == null) return false;
 
     final events = buffer.drain();
-    if (events.isEmpty) return;
+    if (events.isEmpty) return true;
 
     for (final event in events) {
       performanceMonitor.enrichEvent(event);
@@ -119,7 +157,7 @@ class FlushScheduler {
     if (networkMonitor.isOffline()) {
       await _queueEventsForRetry(id, eventsJson, capturedOffline: true);
       UnilitixLogger.d('Offline — queued ${events.length} events');
-      return;
+      return false;
     }
 
     try {
@@ -129,15 +167,15 @@ class FlushScheduler {
       );
       if (ok) {
         UnilitixLogger.d('Flushed ${events.length} events');
-        await _flushSnapshots(id);
-        await _uploadScreenshots(sessionId: id);
-      } else {
-        await _queueEventsForRetry(id, eventsJson, capturedOffline: false);
-        UnilitixLogger.w('Event flush failed — queued for retry');
+        return true;
       }
+      await _queueEventsForRetry(id, eventsJson, capturedOffline: false);
+      UnilitixLogger.w('Event flush failed — queued for retry');
+      return false;
     } catch (e, stack) {
       await _queueEventsForRetry(id, eventsJson, capturedOffline: false);
       UnilitixLogger.e('Event flush failed', e, stack);
+      return false;
     }
   }
 
@@ -156,54 +194,49 @@ class FlushScheduler {
     ));
   }
 
-  // ── Session path ───────────────────────────────────────────────────────────
+  // ── Stage 3: snapshots ─────────────────────────────────────────────────────
 
-  Future<void> _flushSession() async {
-    try {
-      final sessionPayload = await buildSessionPayload();
-      if (sessionPayload == null) return;
-      final sessionId = sessionPayload['sessionId'] as String? ?? '';
-      final ok = await apiClient.ingestSession(sessionPayload);
-      if (ok) {
-        UnilitixLogger.d('Flushed session $sessionId');
-      } else {
-        UnilitixLogger.w('Session flush failed');
-      }
-    } catch (e, stack) {
-      UnilitixLogger.e('Session flush failed', e, stack);
-    }
-  }
-
-  // ── Snapshots / screenshots ────────────────────────────────────────────────
-
-  Future<void> _flushSnapshots(String sessionId) async {
+  Future<bool> _flushSnapshots() async {
     final buf = snapshotBuffer;
-    if (buf == null) return;
+    if (buf == null) return true;
+
+    final id = sessionManager.lastEndedSession?.id ??
+        sessionManager.currentSession?.id;
+    if (id == null) return false;
+
     final snapshots = buf.drain();
-    if (snapshots.isEmpty) return;
+    if (snapshots.isEmpty) return true;
+
     try {
       final ok = await apiClient.ingestSnapshots({
-        'sessionId': sessionId,
+        'sessionId': id,
         'snapshots': snapshots,
       });
       if (ok) {
         UnilitixLogger.d('Flushed ${snapshots.length} snapshots');
-      } else {
-        UnilitixLogger.w('Snapshot flush rejected — dropping batch');
+        return true;
       }
+      for (final s in snapshots) { buf.add(s); }
+      UnilitixLogger.w('Snapshot flush rejected — re-queued ${snapshots.length}');
+      return false;
     } catch (e, stack) {
-      UnilitixLogger.e('Snapshot flush failed', e, stack);
+      for (final s in snapshots) { buf.add(s); }
+      UnilitixLogger.e('Snapshot flush failed — re-queued ${snapshots.length}', e, stack);
+      return false;
     }
   }
 
-  Future<void> _uploadScreenshots({String? sessionId}) async {
-    final id = sessionId ??
-        sessionManager.currentSession?.id ??
-        sessionManager.lastEndedSession?.id;
-    if (id == null) return;
+  // ── Stage 4: screenshots ───────────────────────────────────────────────────
+
+  Future<bool> _uploadScreenshots() async {
+    if (uploadScreenshotsOnWifiOnly && !networkMonitor.isWifi()) return true;
+
+    final id = sessionManager.lastEndedSession?.id ??
+        sessionManager.currentSession?.id;
+    if (id == null) return false;
 
     final pending = await database.getPendingScreenshots(id);
-    if (pending.isEmpty) return;
+    if (pending.isEmpty) return true;
 
     // Single batch init with all ordinals.
     final slots = await apiClient.initScreenshotUpload(
@@ -211,7 +244,7 @@ class FlushScheduler {
       count: pending.length,
       ordinals: pending.map((s) => s.ordinal).toList(),
     );
-    if (slots == null) return;
+    if (slots == null) return false;
 
     // Upload each screenshot to its presigned URL in parallel.
     await Future.wait(
@@ -228,6 +261,7 @@ class FlushScheduler {
         }
       }),
     );
+    return true;
   }
 
   // ── Retry ──────────────────────────────────────────────────────────────────
@@ -280,7 +314,7 @@ class FlushScheduler {
     }
 
     if (ok) {
-      await database.incrementSyncAttempts(p.id!); // only on successful send
+      await database.incrementSyncAttempts(p.id!);
       await database.deleteEventById(p.id!);
       UnilitixLogger.d('Retry succeeded for batch ${p.id}');
     } else {

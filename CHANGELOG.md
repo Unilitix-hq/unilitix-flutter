@@ -1,3 +1,11 @@
+## 2.0.62
+### Changed
+- `FlushScheduler` now uses a strict 4-stage sequential flush via `_flushAll()`: Stage 1 (session POST) → Stage 2 (events) → Stages 3 & 4 (snapshots + screenshots in parallel, best-effort)
+- All four flush methods now return `bool` — stages 3 and 4 only run if stages 1 and 2 both succeed
+- Screenshot upload removed from inside `_flushEvents`; it lives exclusively in Stage 4
+- `uploadScreenshotsOnWifiOnly` gate now enforced in `_uploadScreenshots`
+- Snapshot buffer re-queued on flush rejection or error instead of being silently dropped
+
 ## 2.0.61
 ### Fixed
 - `recordZoneError` now guarded by `_isRecording` flag — prevents recursive crash recording if `onCrashEvent` itself throws
