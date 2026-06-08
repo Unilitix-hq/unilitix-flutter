@@ -6,7 +6,49 @@ import '../core/sdk_scope.dart';
 import '../logger/logger.dart';
 import '../util/json_util.dart';
 
-/// Periodically serialises the widget tree as a JSON snapshot.
+/// Renderable widget types — only these are included in the output.
+/// Everything else is traversed but not serialized (UXCam-style view pruning).
+const Set<String> _kRenderableTypes = {
+  // Text
+  'Text', 'RichText', 'SelectableText',
+  // Layout
+  'Container', 'SizedBox', 'Padding', 'Align', 'Center',
+  'ConstrainedBox', 'FractionallySizedBox', 'AspectRatio',
+  'Expanded', 'Flexible', 'Spacer',
+  // Structure
+  'Column', 'Row', 'Stack', 'Flex', 'Wrap',
+  'ListView', 'GridView', 'CustomScrollView', 'SingleChildScrollView',
+  'Scaffold', 'AppBar', 'BottomNavigationBar', 'Drawer',
+  'TabBar', 'TabBarView', 'BottomAppBar',
+  // Visual
+  'Image', 'Icon', 'CircleAvatar', 'DecoratedBox',
+  'Card', 'Divider', 'VerticalDivider',
+  'ClipRRect', 'ClipOval', 'ClipRect',
+  // Interactive
+  'GestureDetector', 'InkWell', 'InkResponse',
+  'ElevatedButton', 'TextButton', 'OutlinedButton', 'IconButton',
+  'FloatingActionButton', 'CupertinoButton',
+  'Switch', 'Checkbox', 'Radio', 'Slider',
+  'DropdownButton', 'PopupMenuButton',
+  // Inputs
+  'TextField', 'TextFormField', 'EditableText', 'CupertinoTextField',
+  // Feedback
+  'CircularProgressIndicator', 'LinearProgressIndicator',
+  'RefreshIndicator', 'SnackBar',
+  // Overlays
+  'Dialog', 'AlertDialog', 'SimpleDialog',
+  'BottomSheet', 'Tooltip',
+  // List items
+  'ListTile', 'CheckboxListTile', 'SwitchListTile', 'RadioListTile',
+  // Navigation
+  'NavigationBar', 'NavigationRail', 'NavigationDrawer',
+};
+
+/// Input types to mask
+const Set<String> _kInputTypes = {
+  'TextField', 'TextFormField', 'EditableText', 'CupertinoTextField',
+};
+
 class SnapshotCapture {
   final SnapshotBuffer buffer;
   final int intervalMs;
@@ -37,34 +79,57 @@ class SnapshotCapture {
     try {
       final element = WidgetsBinding.instance.rootElement;
       if (element == null) return;
-      final node = _serializeElement(element, 0);
-      if (node != null) {
-        final view = WidgetsBinding.instance.platformDispatcher.views.first;
-        final w = (view.physicalSize.width / view.devicePixelRatio).round();
-        final h = (view.physicalSize.height / view.devicePixelRatio).round();
-        buffer.add({
-          'capturedAt':
-              JsonUtil.toRfc3339(DateTime.now().millisecondsSinceEpoch),
-          'ordinal': _ordinal++,
-          'screenName': SdkScope.currentScreen ?? 'unknown',
-          'viewportWidth': w,
-          'viewportHeight': h,
-          'hierarchy': node,
-        });
-      }
+
+      final children = <Map<String, dynamic>>[];
+      _visitElement(element, children);
+
+      if (children.isEmpty) return;
+
+      final view = WidgetsBinding.instance.platformDispatcher.views.first;
+      final w = (view.physicalSize.width / view.devicePixelRatio).round();
+      final h = (view.physicalSize.height / view.devicePixelRatio).round();
+
+      buffer.add({
+        'capturedAt': JsonUtil.toRfc3339(DateTime.now().millisecondsSinceEpoch),
+        'ordinal': _ordinal++,
+        'screenName': SdkScope.currentScreen ?? 'unknown',
+        'viewportWidth': w,
+        'viewportHeight': h,
+        'hierarchy': {'type': 'Root', 'w': w, 'h': h, 'children': children},
+      });
     } catch (e) {
       UnilitixLogger.e('Snapshot capture failed', e);
     }
   }
 
-  Map<String, dynamic>? _serializeElement(Element element, int depth) {
-    if (depth > 20) return null;
+  /// Traverses the element tree. Renderable nodes are serialized and added
+  /// to [output]. Non-renderable nodes are traversed transparently —
+  /// their children are added to the same [output] list.
+  void _visitElement(Element element, List<Map<String, dynamic>> output) {
+    final type = element.widget.runtimeType.toString();
 
-    // Skip UnilitixPrivate subtrees
-    if (element.widget.runtimeType.toString() == 'UnilitixPrivate') {
-      return {'type': 'masked'};
+    // Always mask private subtrees
+    if (type == 'UnilitixPrivate') {
+      output.add({'type': 'masked'});
+      return;
     }
 
+    if (_kRenderableTypes.contains(type)) {
+      final node = _serializeRenderable(element, type);
+      if (node != null) {
+        // Recurse children into this node
+        final childOutput = <Map<String, dynamic>>[];
+        element.visitChildren((child) => _visitElement(child, childOutput));
+        if (childOutput.isNotEmpty) node['children'] = childOutput;
+        output.add(node);
+      }
+    } else {
+      // Framework/wrapper node — traverse transparently
+      element.visitChildren((child) => _visitElement(child, output));
+    }
+  }
+
+  Map<String, dynamic>? _serializeRenderable(Element element, String type) {
     final renderObject = element.renderObject;
     Size? size;
     Offset? offset;
@@ -76,30 +141,42 @@ class SnapshotCapture {
       } catch (_) {}
     }
 
-    final Map<String, dynamic> node = {
-      'type': element.widget.runtimeType.toString(),
+    // Skip zero-size invisible nodes
+    if (size != null && (size.width == 0 || size.height == 0)) return null;
+
+    final node = <String, dynamic>{
+      'type': type,
       if (size != null) 'w': size.width.round(),
       if (size != null) 'h': size.height.round(),
       if (offset != null) 'x': offset.dx.round(),
       if (offset != null) 'y': offset.dy.round(),
     };
 
-    // Mask text inputs when maskInputs = true
-    if (maskInputs) {
-      final type = element.widget.runtimeType.toString();
-      if (type.contains('TextField') ||
-          type.contains('EditableText') ||
-          type.contains('TextFormField')) {
-        node['text'] = '[MASKED]';
-      }
+    // Extract text content
+    final widget = element.widget;
+    if (widget is Text && widget.data != null) {
+      node['text'] = widget.data;
+    } else if (widget is Text && widget.textSpan != null) {
+      node['text'] = widget.textSpan!.toPlainText();
     }
 
-    final children = <Map<String, dynamic>>[];
-    element.visitChildren((child) {
-      final c = _serializeElement(child, depth + 1);
-      if (c != null) children.add(c);
-    });
-    if (children.isNotEmpty) node['children'] = children;
+    // Mask inputs
+    if (maskInputs && _kInputTypes.contains(type)) {
+      node['text'] = '[MASKED]';
+    }
+
+    // Extract icon name
+    if (widget is Icon && widget.icon != null) {
+      node['icon'] = widget.icon!.codePoint.toRadixString(16);
+    }
+
+    // Extract button label
+    if (type == 'ElevatedButton' || type == 'TextButton' || type == 'OutlinedButton') {
+      node['role'] = 'button';
+    }
+
+    // Visibility hint for images
+    if (type == 'Image') node['role'] = 'image';
 
     return node;
   }

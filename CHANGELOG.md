@@ -1,3 +1,13 @@
+## 2.0.63
+### Changed
+- `SnapshotCapture` rewritten with allowlist approach — only ~60 known renderable widget types serialized; framework/wrapper nodes traversed transparently (UXCam-style view pruning)
+- Zero-size nodes skipped (`w == 0 || h == 0`)
+- `Text.data` and `Text.textSpan` content extracted into `text` field
+- `Icon.codePoint` extracted into `icon` field (hex string)
+- Button widgets (`ElevatedButton`, `TextButton`, `OutlinedButton`) annotated with `role: button`
+- `Image` nodes annotated with `role: image`
+- Input masking now driven by `_kInputTypes` set, consistent with allowlist
+
 ## 2.0.62
 ### Changed
 - `FlushScheduler` now uses a strict 4-stage sequential flush via `_flushAll()`: Stage 1 (session POST) → Stage 2 (events) → Stages 3 & 4 (snapshots + screenshots in parallel, best-effort)
