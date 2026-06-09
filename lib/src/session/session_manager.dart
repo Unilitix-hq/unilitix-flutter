@@ -62,6 +62,15 @@ class SessionManager with WidgetsBindingObserver {
     if (_currentSession != null) _endCurrentSession();
   }
 
+  /// Forcibly ends the current session and starts a fresh one.
+  /// Called when the server rejects a session payload (400/409).
+  void resetSession() {
+    _backgroundTimer?.cancel();
+    _backgroundTimer = null;
+    if (_currentSession != null) _endCurrentSession();
+    _startNewSession();
+  }
+
   void _startNewSession() {
     _currentSession = Session();
     _lastForegroundedAt =

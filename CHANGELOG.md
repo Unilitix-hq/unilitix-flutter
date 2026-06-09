@@ -1,3 +1,8 @@
+## 2.0.64
+### Changed
+- `_recoverPendingSessions` now checks for unsent events before discarding stale sessions — sessions older than 30 minutes are only discarded if they have no pending events in the DB; sessions with unsent events are always recovered regardless of age
+- Added `EventDatabase.hasPendingEventsForSession()` — queries `pending_events` by `sessionId` in `session_json` using a `LIKE` match
+
 ## 2.0.63
 ### Changed
 - `SnapshotCapture` rewritten with allowlist approach — only ~60 known renderable widget types serialized; framework/wrapper nodes traversed transparently (UXCam-style view pruning)

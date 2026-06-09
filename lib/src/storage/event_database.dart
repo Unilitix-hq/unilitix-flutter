@@ -239,6 +239,19 @@ class EventDatabase {
     await _db!.delete(_tSessions, where: 'id = ?', whereArgs: [sessionId]);
   }
 
+  /// Returns true if the pending_events table has any rows whose session_json
+  /// references [sessionId]. Used during crash-recovery to decide whether a
+  /// stale session still has unsent events worth flushing.
+  Future<bool> hasPendingEventsForSession(String sessionId) async {
+    if (!_available) return false;
+    final rows = await _db!.rawQuery(
+      'SELECT COUNT(*) AS count FROM $_tEvents WHERE session_json LIKE ?',
+      ['%"sessionId":"$sessionId"%'],
+    );
+    final count = rows.isNotEmpty ? (rows.first['count'] as int? ?? 0) : 0;
+    return count > 0;
+  }
+
   /// Returns sessions saved on start that were never deleted (app crashed/killed).
   Future<List<Map<String, dynamic>>> getPendingSessions() async {
     if (!_available) return [];

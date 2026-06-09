@@ -116,12 +116,23 @@ class FlushScheduler {
       final sessionPayload = await buildSessionPayload();
       if (sessionPayload == null) return false;
       final sessionId = sessionPayload['sessionId'] as String? ?? '';
-      final ok = await apiClient.ingestSession(sessionPayload);
-      if (ok) {
+      final resp = await apiClient.ingestSessionRaw(sessionPayload);
+      if (resp == null) {
+        UnilitixLogger.w('Session flush failed — no response');
+        return false;
+      }
+      if (resp.statusCode == 400 || resp.statusCode == 409) {
+        // Server rejected this session record — reset so the next cycle
+        // generates a fresh session rather than retrying a bad payload.
+        UnilitixLogger.w('Session rejected (${resp.statusCode}) — resetting session');
+        sessionManager.resetSession();
+        return false;
+      }
+      if (resp.statusCode >= 200 && resp.statusCode < 300) {
         UnilitixLogger.d('Flushed session $sessionId');
         return true;
       }
-      UnilitixLogger.w('Session flush failed');
+      UnilitixLogger.w('Session flush failed (${resp.statusCode})');
       return false;
     } catch (e, stack) {
       UnilitixLogger.e('Session flush failed', e, stack);

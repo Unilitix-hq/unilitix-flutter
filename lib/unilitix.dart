@@ -482,12 +482,40 @@ class Unilitix {
   static Future<void> _recoverPendingSessions() async {
     try {
       final sessions = await _database.getPendingSessions();
+      if (sessions.isEmpty) return;
+
       for (final s in sessions) {
         final id = s['id'] as String?;
         final raw = s['session_json'] as String?;
         if (id == null || raw == null) continue;
         try {
           final payload = jsonDecode(raw) as Map<String, dynamic>;
+
+          final startedAtStr = payload['startedAt'] as String?;
+          final startedAt = startedAtStr != null
+              ? DateTime.tryParse(startedAtStr)
+              : null;
+          final age = startedAt != null
+              ? DateTime.now().difference(startedAt)
+              : const Duration(days: 999);
+
+          // Check for unsent events before deciding whether to discard.
+          final hasPendingEvents =
+              await _database.hasPendingEventsForSession(id);
+
+          // Recovery rules:
+          // 1. Always recover if session has unsent events (offline recovery).
+          // 2. Recover if session is < 30 minutes old (recent crash/kill).
+          // 3. Discard if old AND no unsent events (stale, nothing to save).
+          if (!hasPendingEvents && age.inMinutes >= 30) {
+            await _database.deletePendingSession(id);
+            UnilitixLogger.d(
+                'Discarding stale session $id (${age.inMinutes}m old, no pending events)');
+            continue;
+          }
+
+          UnilitixLogger.d(
+              'Recovering session $id (${age.inMinutes}m old, hasPendingEvents: $hasPendingEvents)');
           final ok = await _apiClient.ingestSession(payload);
           if (ok) {
             await _database.deletePendingSession(id);

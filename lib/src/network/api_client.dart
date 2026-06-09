@@ -94,6 +94,10 @@ class ApiClient {
     return resp != null && resp.statusCode < 300;
   }
 
+  /// Returns the raw response so callers can inspect status codes (e.g. 400/409).
+  Future<http.Response?> ingestSessionRaw(Map<String, dynamic> payload) =>
+      _postWithRetry('/v1/ingest/session', payload);
+
   Future<bool> ingestEvents({
     required String sessionId,
     required List<Map<String, dynamic>> events,
