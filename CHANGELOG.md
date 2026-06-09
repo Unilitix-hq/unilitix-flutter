@@ -1,3 +1,12 @@
+## 2.0.67
+
+### Fixed
+- `Unilitix.runApp()` called itself recursively instead of Flutter's
+  `runApp()` — would have caused a stack overflow on every app launch
+- `onCrashEvent` `flush()` call created a recursive loop when a network
+  error occurred during crash reporting
+- Corrected `PixelCopy` import from `android.graphics` to `android.view`
+
 ## 2.0.66
 ### Fixed
 - **Android black frames on Impeller/Vulkan** — four-part fix:

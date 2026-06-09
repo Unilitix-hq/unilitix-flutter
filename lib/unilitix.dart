@@ -17,7 +17,7 @@
 /// ```
 library unilitix;
 
-import 'dart:async' show runZonedGuarded, unawaited;
+import 'dart:async' show unawaited;
 import 'dart:convert' show jsonDecode, jsonEncode;
 
 import 'package:flutter/widgets.dart';
@@ -56,6 +56,12 @@ export 'src/tracking/unilitix_widget.dart';
 export 'src/tracking/unilitix_material_app.dart';
 export 'src/privacy/privacy_mask.dart';
 export 'src/events/event.dart';
+
+// Top-level alias so Unilitix.runApp can call Flutter's runApp without
+// triggering Dart's static-scope resolution, which would make the bare
+// identifier `runApp` inside class Unilitix resolve to the static method
+// itself and recurse infinitely.
+void _flutterRunApp(Widget app) => runApp(app);
 
 /// The Unilitix SDK entry point.
 ///
@@ -301,7 +307,9 @@ class Unilitix {
       onCrashEvent: (event) {
         _sessionManager.currentSession?.crashed = true;
         _eventBuffer.emit(event);
-        _flushScheduler.flush();
+        // Do NOT call flush() here — it runs inside the zone error handler and
+        // any network error from flush() re-enters the zone, creating infinite
+        // recursion. The periodic flush timer picks up the crash event instead.
       },
       breadcrumbs: _breadcrumbs,
       database: _database,
@@ -374,10 +382,12 @@ class Unilitix {
   /// Do NOT wrap [MaterialApp] itself — use [MaterialApp.builder] to ensure
   /// screenshots capture fully rendered content.
   static void runApp(Widget app) {
-    runZonedGuarded(
-      () => runApp(app),
-      (error, stack) => _crashTracker.recordZoneError(error, stack),
-    );
+    // CrashTracker.install() already hooks FlutterError.onError and
+    // PlatformDispatcher.instance.onError, covering all error paths.
+    // runZonedGuarded is NOT used here: it would create a child zone after
+    // WidgetsFlutterBinding.ensureInitialized() ran in the parent zone,
+    // causing Flutter's "Zone mismatch" assertion on every runApp call.
+    _flutterRunApp(app);
   }
 
   // ── Tracking ──────────────────────────────────────────────────────

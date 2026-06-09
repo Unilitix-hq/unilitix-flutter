@@ -3,7 +3,7 @@ package com.unilitix.unilitix_flutter
 import android.app.Activity
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.PixelCopy
+import android.view.PixelCopy
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
