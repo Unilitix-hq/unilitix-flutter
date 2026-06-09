@@ -1,3 +1,7 @@
+## 2.0.65
+### Fixed
+- `_recoverPendingSessions` now catches `FormatException` and `TypeError` separately — corrupt or malformed session records are deleted immediately instead of failing silently on every app start; generic catch retained for transient network errors
+
 ## 2.0.64
 ### Changed
 - `_recoverPendingSessions` now checks for unsent events before discarding stale sessions — sessions older than 30 minutes are only discarded if they have no pending events in the DB; sessions with unsent events are always recovered regardless of age

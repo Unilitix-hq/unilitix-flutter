@@ -521,7 +521,16 @@ class Unilitix {
             await _database.deletePendingSession(id);
             UnilitixLogger.d('Recovered session $id');
           }
+        } on FormatException catch (e) {
+          // Corrupt session_json — will never succeed, discard immediately.
+          UnilitixLogger.d('Discarding corrupt session $id (invalid JSON): $e');
+          await _database.deletePendingSession(id);
+        } on TypeError catch (e) {
+          // Malformed payload structure — discard so it stops retrying.
+          UnilitixLogger.d('Discarding malformed session $id (type error): $e');
+          await _database.deletePendingSession(id);
         } catch (e) {
+          // Transient error (network, timeout) — leave in DB for next cycle.
           UnilitixLogger.e('Failed to recover session $id', e);
         }
       }
