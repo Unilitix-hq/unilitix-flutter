@@ -1,3 +1,14 @@
+## 2.0.66
+### Fixed
+- **Android black frames on Impeller/Vulkan** — four-part fix:
+  1. `screenshot_capture.dart`: replaced `Timer.periodic` with `SchedulerBinding.addPostFrameCallback` — captures are now frame-synchronised and stop automatically when the app backgrounds
+  2. `screenshot_capture.dart`: `toImage(pixelRatio: 1.0)` → `(devicePixelRatio * 0.5).clamp(1.0, 2.0)` — avoids Impeller allocating an oversized DEVICE_LOCAL texture
+  3. `screenshot_capture.dart`: added `await SchedulerBinding.instance.endOfFrame` between `toImage()` and `toByteData()` — flushes Impeller's Vulkan command buffer before CPU pixel readback
+  4. `UnilitixPlugin.kt`: added native `captureScreenshot` via `PixelCopy.request()` (API 26+) on a new `unilitix/screenshot` channel — reads from the window compositor, immune to Impeller; Dart `RepaintBoundary` path retained as fallback
+- `android/build.gradle`: `compileSdk 34` → `compileSdk 35` for Android 16 (API 36) compatibility
+- `UnilitixPlugin.kt`: implements `ActivityAware` to supply `Activity.window` to `PixelCopy`
+- `ScreenshotCapture`: added `WidgetsBindingObserver` — re-anchors post-frame callback chain after app returns from background (prevents capture stoppage within a long session)
+
 ## 2.0.65
 ### Fixed
 - `_recoverPendingSessions` now catches `FormatException` and `TypeError` separately — corrupt or malformed session records are deleted immediately instead of failing silently on every app start; generic catch retained for transient network errors

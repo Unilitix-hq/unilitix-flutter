@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'unilitix_flutter'
-  s.version          = '2.0.65'
+  s.version          = '2.0.66'
   s.summary          = 'African-first mobile UX analytics for Flutter.'
   s.description      = 'Unilitix Flutter SDK — track sessions, screens, events and crashes.'
   s.homepage         = 'https://unilitix.com'
