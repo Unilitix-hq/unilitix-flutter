@@ -345,8 +345,6 @@ class Unilitix {
       UnilitixLogger.d(
           'Session started  ✅  ${sid.length > 8 ? sid.substring(0, 8) : sid}…');
       UnilitixLogger.d(
-          'Observer         ⚠️   not connected — add Unilitix.observer to MaterialApp.navigatorObservers');
-      UnilitixLogger.d(
           'API key          ${effectiveConfig.apiKey.length > 8 ? "${effectiveConfig.apiKey.substring(0, 4)}****${effectiveConfig.apiKey.substring(effectiveConfig.apiKey.length - 4)}" : "****"}');
       UnilitixLogger.d(
           'Device           ${_deviceInfo.manufacturer} ${_deviceInfo.model} (${_deviceInfo.os} ${_deviceInfo.osVersion})');
@@ -354,7 +352,7 @@ class Unilitix {
           'App              ${_packageInfo.appName} ${_packageInfo.version}+${_packageInfo.buildNumber}');
       UnilitixLogger.d('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
-      Future.delayed(const Duration(seconds: 5), () {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!_observerConnected) {
           UnilitixLogger.w(
             'Observer not connected — add Unilitix.observer to MaterialApp.navigatorObservers',
