@@ -3,7 +3,7 @@ import 'package:unilitix/unilitix.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Unilitix.init('YOUR_API_KEY', config: const UnilitixConfig(apiKey: 'YOUR_API_KEY', debug: true));
+  await Unilitix.init('ul_live_0dd2ba11-83d1-4d8b-89cf-4579bbac3f0b', config: const UnilitixConfig(apiKey: 'ul_live_0dd2ba11-83d1-4d8b-89cf-4579bbac3f0b', debug: true));
   Unilitix.runApp(const UnilitixWidget(child: MyApp()));
 }
 
