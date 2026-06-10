@@ -1,3 +1,15 @@
+## 2.0.68
+
+### Fixed
+- Screenshots not appearing in session replay — Content-Type
+  mismatch on R2 presigned PUT (`image/jpeg` sent, `image/webp` expected)
+  caused R2 to silently reject every screenshot upload
+- `confirmScreenshotUpload` fired even when PUT to R2 failed —
+  screenshots marked as uploaded when they weren't
+- Screenshots deleted from local DB after failed upload causing
+  permanent data loss — now only deleted after confirmed success
+- Silent upload failures now logged for observability
+
 ## 2.0.67
 
 ### Fixed

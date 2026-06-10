@@ -140,10 +140,16 @@ class ApiClient {
       final resp = await _client
           .put(
             Uri.parse(presignedUrl),
-            headers: {'Content-Type': 'image/jpeg'},
+            headers: {'Content-Type': 'image/webp'},
             body: bytes,
           )
           .timeout(const Duration(seconds: 60));
+      if (resp.statusCode >= 300) {
+        UnilitixLogger.e(
+          'uploadScreenshotBytes failed: ${resp.statusCode}',
+          null, null,
+        );
+      }
       return resp.statusCode < 300;
     } catch (e, stack) {
       UnilitixLogger.e('uploadScreenshotBytes failed', e, stack);

@@ -263,12 +263,29 @@ class FlushScheduler {
         try {
           final slot =
               slots.firstWhere((s) => s.ordinal == screenshot.ordinal);
-          await apiClient.uploadScreenshotBytes(
-              slot.presignedUrl, screenshot.imageBytes);
+
+          final uploaded = await apiClient.uploadScreenshotBytes(
+            slot.presignedUrl,
+            screenshot.imageBytes,
+          );
+
+          if (!uploaded) {
+            UnilitixLogger.e(
+              'Screenshot upload failed for ordinal ${screenshot.ordinal} '
+              '— leaving in DB for retry',
+              null, null,
+            );
+            return; // skip confirm and delete, leave in DB
+          }
+
           await apiClient.confirmScreenshotUpload(id, screenshot.ordinal);
           await database.deleteScreenshotById(screenshot.id!);
-        } catch (e) {
-          // leave in DB for retry
+        } catch (e, stack) {
+          UnilitixLogger.e(
+            'Screenshot upload error for ordinal ${screenshot.ordinal}',
+            e, stack,
+          );
+          // leave in DB for retry — do NOT delete
         }
       }),
     );
