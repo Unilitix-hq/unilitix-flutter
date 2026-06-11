@@ -1,3 +1,37 @@
+## 2.0.69
+
+### Fixed
+- **Periodic flush now runs all 4 stages** — previously only flushed events
+  and retried pending DB records; screenshots and snapshots were deferred to
+  session end only. Every 30s cycle now also uploads pending screenshots and
+  snapshots (best-effort, background)
+- **HTTP 409 on session upsert no longer resets the session** — 409 means the
+  session already exists on the server; treated as success so events are
+  flushed under the correct session ID instead of being re-attributed to a
+  new session
+- **Events restored to buffer on DB queue failure** — if `_queueEventsForRetry`
+  fails to insert into SQLite, drained events are put back in the in-memory
+  buffer instead of being silently dropped
+- **`firstWhere` → safe `where + isEmpty` guard in screenshot upload** —
+  eliminates `StateError` when the server omits a presigned slot for an
+  ordinal; affected ordinal is skipped and retried next cycle
+- **Session ID priority corrected in `_flushSnapshots` and
+  `_uploadScreenshots`** — was `lastEndedSession ?? currentSession`; changed
+  to `currentSession ?? lastEndedSession` so media captured during an active
+  session uploads on periodic flush, not only after session end
+- **`flushOnSessionEnd` no longer bails if a periodic flush is in progress** —
+  polls up to 3 seconds for the flush to complete before proceeding, ensuring
+  session-end data is always uploaded
+- **`deletePendingSession` moved inside `flushOnSessionEnd`** — stub is only
+  deleted after the flush succeeds, not before
+- **Observer warning deferred to `addPostFrameCallback`** — removed
+  unconditional `⚠️ not connected` line from the init banner; check now fires
+  after the first frame when `MaterialApp` is fully built, eliminating the
+  false-positive warning when `Unilitix.observer` is correctly wired
+- **NDK version pinned in example app** — `example/android/app/build.gradle.kts`
+  now specifies `ndkVersion = "27.0.12077973"` to silence plugin NDK mismatch
+  warnings
+
 ## 2.0.68
 
 ### Fixed
