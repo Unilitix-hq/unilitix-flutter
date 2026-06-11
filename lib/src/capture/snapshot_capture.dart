@@ -49,6 +49,14 @@ const Set<String> _kInputTypes = {
   'TextField', 'TextFormField', 'EditableText', 'CupertinoTextField',
 };
 
+/// Pure layout nodes — localToGlobal is skipped for these types.
+/// They have no meaningful screen position independent of their children.
+const Set<String> _kSkipPositionTypes = {
+  'Padding', 'Align', 'Center', 'Column', 'Row', 'Stack',
+  'Flex', 'Wrap', 'Expanded', 'Flexible', 'SizedBox',
+  'ConstrainedBox', 'FractionallySizedBox',
+};
+
 class SnapshotCapture {
   final SnapshotBuffer buffer;
   final int intervalMs;
@@ -56,6 +64,7 @@ class SnapshotCapture {
 
   int _ordinal = 0;
   Timer? _timer;
+  bool _capturing = false;
 
   SnapshotCapture({
     required this.buffer,
@@ -65,7 +74,7 @@ class SnapshotCapture {
 
   void start() {
     final clamped = intervalMs.clamp(1000, 60000);
-    _timer = Timer.periodic(Duration(milliseconds: clamped), (_) => _capture());
+    _timer = Timer.periodic(Duration(milliseconds: clamped), (_) => _scheduledCapture());
   }
 
   void stop() {
@@ -75,13 +84,24 @@ class SnapshotCapture {
 
   void resetOrdinal() => _ordinal = 0;
 
-  void _capture() {
+  // Fix 1: defer capture to after the current frame is committed so the
+  // traversal does not block rasterisation.
+  void _scheduledCapture() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _capture();
+    });
+  }
+
+  Future<void> _capture() async {
+    if (_capturing) return;
+    _capturing = true;
     try {
       final element = WidgetsBinding.instance.rootElement;
       if (element == null) return;
 
       final children = <Map<String, dynamic>>[];
-      _visitElement(element, children);
+      // Fix 3: async traversal yields between top-level subtrees.
+      await _visitElementAsync(element, children);
 
       if (children.isEmpty) return;
 
@@ -97,18 +117,22 @@ class SnapshotCapture {
         'viewportHeight': h,
         'hierarchy': {'type': 'Root', 'w': w, 'h': h, 'children': children},
       });
-    } catch (e) {
-      UnilitixLogger.e('Snapshot capture failed', e);
+    } catch (e, stack) {
+      UnilitixLogger.e('Snapshot capture failed', e, stack);
+    } finally {
+      _capturing = false;
     }
   }
 
-  /// Traverses the element tree. Renderable nodes are serialized and added
-  /// to [output]. Non-renderable nodes are traversed transparently —
-  /// their children are added to the same [output] list.
-  void _visitElement(Element element, List<Map<String, dynamic>> output) {
+  /// Async top-level visitor — collects direct children then yields a
+  /// microtask between each one so the event loop can process input and
+  /// frames between major subtrees.
+  Future<void> _visitElementAsync(
+    Element element,
+    List<Map<String, dynamic>> output,
+  ) async {
     final type = element.widget.runtimeType.toString();
 
-    // Always mask private subtrees
     if (type == 'UnilitixPrivate') {
       output.add({'type': 'masked'});
       return;
@@ -117,14 +141,42 @@ class SnapshotCapture {
     if (_kRenderableTypes.contains(type)) {
       final node = _serializeRenderable(element, type);
       if (node != null) {
-        // Recurse children into this node
+        final childOutput = <Map<String, dynamic>>[];
+        final childElements = <Element>[];
+        element.visitChildren(childElements.add);
+        for (final child in childElements) {
+          await Future.microtask(() => _visitElement(child, childOutput));
+        }
+        if (childOutput.isNotEmpty) node['children'] = childOutput;
+        output.add(node);
+      }
+    } else {
+      final childElements = <Element>[];
+      element.visitChildren(childElements.add);
+      for (final child in childElements) {
+        await Future.microtask(() => _visitElement(child, output));
+      }
+    }
+  }
+
+  /// Synchronous recursive visitor used within each microtask chunk.
+  void _visitElement(Element element, List<Map<String, dynamic>> output) {
+    final type = element.widget.runtimeType.toString();
+
+    if (type == 'UnilitixPrivate') {
+      output.add({'type': 'masked'});
+      return;
+    }
+
+    if (_kRenderableTypes.contains(type)) {
+      final node = _serializeRenderable(element, type);
+      if (node != null) {
         final childOutput = <Map<String, dynamic>>[];
         element.visitChildren((child) => _visitElement(child, childOutput));
         if (childOutput.isNotEmpty) node['children'] = childOutput;
         output.add(node);
       }
     } else {
-      // Framework/wrapper node — traverse transparently
       element.visitChildren((child) => _visitElement(child, output));
     }
   }
@@ -136,9 +188,14 @@ class SnapshotCapture {
 
     if (renderObject is RenderBox && renderObject.hasSize) {
       size = renderObject.size;
-      try {
-        offset = renderObject.localToGlobal(Offset.zero);
-      } catch (_) {}
+      // Fix 2: skip localToGlobal for pure layout nodes — the matrix
+      // multiplication up the render tree is expensive and position is
+      // not meaningful for these container types.
+      if (!_kSkipPositionTypes.contains(type)) {
+        try {
+          offset = renderObject.localToGlobal(Offset.zero);
+        } catch (_) {}
+      }
     }
 
     // Skip zero-size invisible nodes
@@ -152,7 +209,6 @@ class SnapshotCapture {
       if (offset != null) 'y': offset.dy.round(),
     };
 
-    // Extract text content
     final widget = element.widget;
     if (widget is Text && widget.data != null) {
       node['text'] = widget.data;
@@ -160,22 +216,18 @@ class SnapshotCapture {
       node['text'] = widget.textSpan!.toPlainText();
     }
 
-    // Mask inputs
     if (maskInputs && _kInputTypes.contains(type)) {
       node['text'] = '[MASKED]';
     }
 
-    // Extract icon name
     if (widget is Icon && widget.icon != null) {
       node['icon'] = widget.icon!.codePoint.toRadixString(16);
     }
 
-    // Extract button label
     if (type == 'ElevatedButton' || type == 'TextButton' || type == 'OutlinedButton') {
       node['role'] = 'button';
     }
 
-    // Visibility hint for images
     if (type == 'Image') node['role'] = 'image';
 
     return node;
