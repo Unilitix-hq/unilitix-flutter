@@ -247,10 +247,7 @@ class Unilitix {
         }());
       },
       onSessionEnd: (session) {
-        unawaited(() async {
-          await _flushScheduler.flushOnSessionEnd();
-          await _database.deletePendingSession(session.id);
-        }());
+        unawaited(_flushScheduler.flushOnSessionEnd(session));
       },
       resetScreenshotOrdinal: () {
         _screenshotCapture.resetOrdinal();
