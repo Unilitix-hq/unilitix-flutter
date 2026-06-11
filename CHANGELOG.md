@@ -1,3 +1,12 @@
+## 2.0.70
+
+### Changed
+- Renamed iOS podspec from `unilitix_flutter.podspec` to `unilitix.podspec`
+- Updated podspec `s.name` from `unilitix_flutter` to `unilitix` — module name
+  now matches the Dart package name
+- Renamed privacy resource bundle from `unilitix_flutter_privacy` to
+  `unilitix_privacy` for consistency
+
 ## 2.0.69
 
 ### Fixed
