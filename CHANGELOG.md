@@ -1,3 +1,8 @@
+## 2.0.72
+
+- fix: persist session end payload to SQLite before network call — recovers incomplete sessions on next launch
+- fix: remove dead SESSION_END constant
+
 ## 2.0.71
 
 ### Fixed

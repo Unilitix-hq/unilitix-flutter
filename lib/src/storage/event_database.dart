@@ -221,6 +221,11 @@ class EventDatabase {
     await _db!.delete(_tScreenshots, where: 'id = ?', whereArgs: [id]);
   }
 
+  /// Upserts a pending session stub. Called twice per session:
+  /// 1. On session start with `crashed: true` — acts as a crash sentinel.
+  /// 2. On session end with the final payload (`crashed: false`, `endedAt` set)
+  ///    — overwrites the sentinel with real data before the network flush.
+  /// Deleted by [deletePendingSession] once the server confirms receipt.
   Future<void> savePendingSession(String sessionId, String sessionJson) async {
     if (!_available) return;
     await _db!.insert(
