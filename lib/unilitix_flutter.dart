@@ -4,7 +4,9 @@ export 'unilitix.dart'
         Unilitix,
         UnilitixConfig,
         UnilitixObserver,
+        // ignore: deprecated_member_use_from_same_package
         UnilitixApp,
-        UnilitixWidget,
+        // ignore: deprecated_member_use_from_same_package
         UnilitixMaterialApp,
+        UnilitixWidget,
         UnilitixPrivate;
