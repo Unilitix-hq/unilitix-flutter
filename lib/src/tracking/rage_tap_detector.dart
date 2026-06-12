@@ -26,7 +26,7 @@ class RageTapDetector {
     _taps.removeWhere((t) => now - t.time > _windowMs);
     _taps.add(_Tap(screen: screen, x: x, y: y, time: now));
 
-    final cluster = _findCluster(x, y);
+    final cluster = _findCluster(screen, x, y);
     if (cluster.length >= _minTaps) {
       final cx =
           cluster.map((t) => t.x).reduce((a, b) => a + b) / cluster.length;
@@ -39,8 +39,8 @@ class RageTapDetector {
     return false;
   }
 
-  List<_Tap> _findCluster(double x, double y) {
-    return _taps.where((t) => _distance(t.x, t.y, x, y) <= _radiusPx).toList();
+  List<_Tap> _findCluster(String screen, double x, double y) {
+    return _taps.where((t) => t.screen == screen && _distance(t.x, t.y, x, y) <= _radiusPx).toList();
   }
 
   double _distance(double ax, double ay, double bx, double by) {

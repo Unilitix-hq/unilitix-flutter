@@ -33,9 +33,10 @@ public class UnilitixPlugin: NSObject, FlutterPlugin {
       result(carrier?.carrierName ?? "")
 
     case "getBatteryLevel":
-      UIDevice.current.isBatteryMonitoringEnabled = true
+      let wasMonitoring = UIDevice.current.isBatteryMonitoringEnabled
+      if !wasMonitoring { UIDevice.current.isBatteryMonitoringEnabled = true }
       let level = UIDevice.current.batteryLevel
-      UIDevice.current.isBatteryMonitoringEnabled = false // cleanup
+      if !wasMonitoring { UIDevice.current.isBatteryMonitoringEnabled = false }
       result(level < 0 ? -1.0 : Double(level))
 
     default:
@@ -50,9 +51,8 @@ public class UnilitixPlugin: NSObject, FlutterPlugin {
     if path.usesInterfaceType(.wiredEthernet) { return "ETHERNET" }
 
     if path.usesInterfaceType(.cellular) {
-      // Resolve cellular generation via CTTelephonyNetworkInfo
-      let info = CTTelephonyNetworkInfo()
-      let radioTech = info.serviceCurrentRadioAccessTechnology?.values.first ?? ""
+      let networkInfo = CTTelephonyNetworkInfo()
+      let radioTech = networkInfo.serviceCurrentRadioAccessTechnology?.values.first ?? ""
       if #available(iOS 14.1, *) {
         if radioTech == CTRadioAccessTechnologyNRNSA ||
            radioTech == CTRadioAccessTechnologyNR {

@@ -92,7 +92,13 @@ class Unilitix {
   static late RageTapDetector _rageTapDetector;
   static late AfricaContext _africaContext;
 
-  static final GlobalKey _repaintKey = GlobalKey();
+  // Device info cache — refreshed at most once every 5 minutes to avoid
+  // redundant platform channel round-trips on every periodic flush.
+  static DateTime? _lastDeviceInfoRefresh;
+  static double? _cachedBattery;
+  static String? _cachedCarrier;
+  static double? _cachedStorage;
+
   static final UnilitixObserver _observer = UnilitixObserver();
 
   /// The navigator observer for screen tracking.
@@ -103,15 +109,10 @@ class Unilitix {
   /// ```
   static UnilitixObserver get observer => _observer;
 
-  /// The repaint boundary key used by [UnilitixWidget].
-  static GlobalKey get repaintKey => _repaintKey;
-
   /// Whether the SDK has been initialized.
   static bool get isInitialized => _initialized;
 
-  /// Marks the navigator observer as connected, suppressing the startup warning.
-  /// Called automatically by [UnilitixWidget] and [UnilitixObserver].
-  static void markObserverConnected() => _observerConnected = true;
+  static void _markObserverConnected() => _observerConnected = true;
 
   /// The current SDK configuration.
   static UnilitixConfig? get config => _config;
@@ -121,6 +122,8 @@ class Unilitix {
   /// Initializes the Unilitix SDK.
   /// Call once in [main] before [runApp].
   ///
+  /// Calling [init] more than once is a no-op — the first API key and config win.
+  ///
   /// ```dart
   /// await Unilitix.init('your_api_key');
   /// ```
@@ -128,35 +131,16 @@ class Unilitix {
     String apiKey, {
     UnilitixConfig? config,
   }) async {
-    final effectiveConfig = config != null
-        ? UnilitixConfig(
-            apiKey: apiKey,
-            apiUrl: config.apiUrl,
-            autoTrackTaps: config.autoTrackTaps,
-            autoTrackCrashes: config.autoTrackCrashes,
-            autoTrackRageTaps: config.autoTrackRageTaps,
-            flushIntervalSeconds: config.flushIntervalSeconds,
-            flushBatchSize: config.flushBatchSize,
-            maxOfflineEvents: config.maxOfflineEvents,
-            sessionTimeoutSeconds: config.sessionTimeoutSeconds,
-            debug: config.debug,
-            maskInputs: config.maskInputs,
-            captureSnapshots: config.captureSnapshots,
-            snapshotIntervalMs: config.snapshotIntervalMs,
-            maxSnapshotsPerSession: config.maxSnapshotsPerSession,
-            captureScreenshots: config.captureScreenshots,
-            screenshotIntervalMs: config.screenshotIntervalMs,
-            screenshotQuality: config.screenshotQuality,
-            screenshotMaxWidth: config.screenshotMaxWidth,
-            uploadScreenshotsOnWifiOnly: config.uploadScreenshotsOnWifiOnly,
-            maxScreenshotsPerSession: config.maxScreenshotsPerSession,
-          )
-        : UnilitixConfig(apiKey: apiKey);
-
     if (_initialized) {
-      UnilitixLogger.w('init() called more than once — ignoring');
+      UnilitixLogger.w(
+        'Unilitix.init() called more than once — ignoring. '
+        'The first API key and config are used.',
+      );
       return;
     }
+
+    final effectiveConfig =
+        config?.copyWith(apiKey: apiKey) ?? UnilitixConfig(apiKey: apiKey);
     _config = effectiveConfig;
     UnilitixLogger.enabled = effectiveConfig.debug;
 
@@ -193,7 +177,7 @@ class Unilitix {
     );
     _networkMonitor.start();
 
-    _africaContext = AfricaContext(networkMonitor: _networkMonitor);
+    _africaContext = const AfricaContext();
 
     _snapshotBuffer =
         SnapshotBuffer(capacity: effectiveConfig.maxSnapshotsPerSession);
@@ -273,7 +257,7 @@ class Unilitix {
     };
 
     _screenshotCapture = ScreenshotCapture(
-      repaintKey: _repaintKey,
+      repaintKey: SdkScope.repaintKey,
       intervalMs: effectiveConfig.screenshotIntervalMs,
       maxScreenshots: effectiveConfig.maxScreenshotsPerSession,
       maxWidth: effectiveConfig.screenshotMaxWidth,
@@ -315,7 +299,7 @@ class Unilitix {
     // Wire up SdkScope callbacks
     SdkScope.onScreenChange = _onScreenChange;
     SdkScope.onTap = _onTap;
-    SdkScope.onObserverConnected = markObserverConnected;
+    SdkScope.onObserverConnected = _markObserverConnected;
     SdkScope.onScroll = (screen, dx, dy) {
       _emitEvent(UnilitixEvent(
         type: EventTypes.scroll,
@@ -586,17 +570,29 @@ class Unilitix {
     if (_breadcrumbs.length > 50) _breadcrumbs.removeAt(0);
   }
 
+  static Future<void> _refreshDeviceInfoIfNeeded() async {
+    final now = DateTime.now();
+    if (_lastDeviceInfoRefresh != null &&
+        now.difference(_lastDeviceInfoRefresh!) < const Duration(minutes: 5)) {
+      return;
+    }
+    _cachedBattery = await _africaContext.batteryLevel;
+    _cachedCarrier = await _africaContext.carrierName;
+    _cachedStorage = await _africaContext.totalStorageGb;
+    _lastDeviceInfoRefresh = now;
+  }
+
   static Future<Map<String, dynamic>?> _buildSessionPayload() async {
     // Prefer the active session; fall back to the most recently ended session
     // (the case when a flush fires right after _endCurrentSession nulls it).
     final session =
         _sessionManager.currentSession ?? _sessionManager.lastEndedSession;
     if (session == null) return null;
+
+    await _refreshDeviceInfoIfNeeded();
+
     final view = WidgetsBinding.instance.platformDispatcher.views.first;
     final screenSize = view.physicalSize / view.devicePixelRatio;
-    final batteryLvl = await _africaContext.batteryLevel;
-    final carrier = await _africaContext.carrierName;
-    final storageGb = await _africaContext.totalStorageGb;
     final orientation =
         screenSize.width > screenSize.height ? 'landscape' : 'portrait';
 
@@ -622,17 +618,18 @@ class Unilitix {
       'packageName': _packageInfo.packageName,
       'sdkVersion': kUnilitixSdkVersion,
       'networkType': _networkMonitor.currentType(),
-      'carrierName': carrier,
+      'carrierName': _cachedCarrier ?? '',
       'orientation': orientation,
       'locale': WidgetsBinding.instance.platformDispatcher.locale.toString(),
       'timezone': DateTime.now().timeZoneName,
       'installId': _identity.installId,
-      'batteryLevel': batteryLvl,
-      'totalStorageGb': storageGb,
+      'batteryLevel': _cachedBattery ?? -1.0,
+      'totalStorageGb': _cachedStorage ?? -1.0,
       'startedAt': JsonUtil.toRfc3339(session.startedAt),
-      'endedAt':
-          session.endedAt != null ? JsonUtil.toRfc3339(session.endedAt!) : null,
-      'durationMs': session.durationMs,
+      if (session.endedAt != null) ...{
+        'endedAt': JsonUtil.toRfc3339(session.endedAt!),
+        'durationMs': session.durationMs,
+      },
       'foregroundTimeMs': _sessionManager.currentForegroundTimeMs,
       'backgroundTimeMs': session.backgroundTimeMs,
       'crashed': session.crashed,

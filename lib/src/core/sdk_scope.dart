@@ -1,3 +1,5 @@
+import 'package:flutter/widgets.dart';
+
 /// Shared mutable state and inter-component callbacks.
 /// Imported by both lib/unilitix.dart and lib/src/ files to avoid
 /// circular imports.
@@ -5,6 +7,10 @@ class SdkScope {
   static bool observerAttached = false;
   static bool screenEventReceived = false;
   static String? currentScreen;
+
+  /// The repaint boundary key shared between [ScreenshotCapture] and the
+  /// widget wrappers ([UnilitixWidget], [UnilitixMaterialApp]).
+  static final GlobalKey repaintKey = GlobalKey();
 
   static void Function(String screen)? onScreenChange;
   static void Function(String screen, double x, double y)? onTap;

@@ -52,7 +52,15 @@ class UnilitixObserver extends NavigatorObserver {
     }
   }
 
-  String _name(Route<dynamic> route) => route.settings.name?.isNotEmpty == true
-      ? route.settings.name!
-      : route.runtimeType.toString();
+  String _name(Route<dynamic> route) =>
+      resolveName(route.settings.name, route.runtimeType.toString());
+
+  @visibleForTesting
+  static String resolveName(String? name, String typeName) {
+    if (name != null && name.isNotEmpty) return name;
+    if (typeName.startsWith('_DialogRoute')) return 'Dialog';
+    if (typeName.startsWith('_ModalBottomSheetRoute')) return 'BottomSheet';
+    if (typeName.startsWith('_PopupMenuRoute')) return 'PopupMenu';
+    return typeName;
+  }
 }

@@ -57,7 +57,7 @@ const Set<String> _kSkipPositionTypes = {
   'ConstrainedBox', 'FractionallySizedBox',
 };
 
-class SnapshotCapture {
+class SnapshotCapture with WidgetsBindingObserver {
   final SnapshotBuffer buffer;
   final int intervalMs;
   final bool maskInputs;
@@ -65,6 +65,7 @@ class SnapshotCapture {
   int _ordinal = 0;
   Timer? _timer;
   bool _capturing = false;
+  bool _active = false;
 
   SnapshotCapture({
     required this.buffer,
@@ -73,20 +74,34 @@ class SnapshotCapture {
   });
 
   void start() {
+    _active = true;
+    WidgetsBinding.instance.addObserver(this);
     final clamped = intervalMs.clamp(1000, 60000);
     _timer = Timer.periodic(Duration(milliseconds: clamped), (_) => _scheduledCapture());
   }
 
   void stop() {
+    _active = false;
+    WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
     _timer = null;
   }
 
   void resetOrdinal() => _ordinal = 0;
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused) {
+      _active = false;
+    } else if (state == AppLifecycleState.resumed) {
+      _active = true;
+    }
+  }
+
   // Fix 1: defer capture to after the current frame is committed so the
   // traversal does not block rasterisation.
   void _scheduledCapture() {
+    if (!_active) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _capture();
     });
