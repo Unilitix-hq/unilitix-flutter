@@ -231,7 +231,20 @@ class Unilitix {
         }());
       },
       onSessionEnd: (session) {
-        unawaited(_flushScheduler.flushOnSessionEnd(session));
+        unawaited(() async {
+          try {
+            final payload = await _buildSessionPayload();
+            if (payload != null) {
+              // Overwrite the crash stub with the final payload (includes endedAt,
+              // durationMs, crashed: false). Survives as a recovery record if the
+              // flush below fails; deleted by flushOnSessionEnd on success.
+              await _database.savePendingSession(session.id, jsonEncode(payload));
+            }
+          } catch (e) {
+            UnilitixLogger.w('Failed to update pending session stub on end: $e');
+          }
+          await _flushScheduler.flushOnSessionEnd(session);
+        }());
       },
       resetScreenshotOrdinal: () {
         _screenshotCapture.resetOrdinal();

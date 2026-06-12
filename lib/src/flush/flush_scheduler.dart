@@ -114,9 +114,13 @@ class FlushScheduler {
     if (_disposed) return;
     _flushing = true;
     try {
-      await _flushAll(session: session);
+      final sessionDelivered = await _flushAll(session: session);
       await _retryPending(skipPurge: true);
-      await database.deletePendingSession(session.id);
+      // Only delete the pending stub once the session record is confirmed on the
+      // server. If delivery failed the stub survives for recovery on next launch.
+      if (sessionDelivered) {
+        await database.deletePendingSession(session.id);
+      }
     } finally {
       _flushing = false;
     }
@@ -124,20 +128,23 @@ class FlushScheduler {
 
   // ── 4-stage orchestrator ───────────────────────────────────────────────────
 
-  Future<void> _flushAll({Session? session}) async {
+  // Returns true if the session record was successfully delivered to the server
+  // (stage 1 succeeded). Events and media have their own retry paths.
+  Future<bool> _flushAll({Session? session}) async {
     // Stage 1 — session record must exist on backend before anything else.
     final sessionOk = await _flushSession();
-    if (!sessionOk) return;
+    if (!sessionOk) return false;
 
     // Stage 2 — upload buffered events; abort media stages on failure.
     final eventsOk = await _flushEvents();
-    if (!eventsOk) return;
+    if (!eventsOk) return true; // session delivered — stub can be cleared
 
     // Stages 3 & 4 — media uploads; best-effort, parallel.
     await Future.wait([
       _flushSnapshots().catchError((_) => false),
       _uploadScreenshots().catchError((_) => false),
     ]);
+    return true;
   }
 
   // ── Stage 1: session ───────────────────────────────────────────────────────

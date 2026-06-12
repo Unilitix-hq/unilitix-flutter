@@ -6,6 +6,5 @@ class EventTypes {
   static const String crash = 'CRASH';
   static const String custom = 'CUSTOM';
   static const String sessionStart = 'SESSION_START';
-  static const String sessionEnd = 'SESSION_END';
   static const String scroll = 'SCROLL';
 }

@@ -80,7 +80,6 @@ void main() {
       expect(EventTypes.crash, 'CRASH');
       expect(EventTypes.custom, 'CUSTOM');
       expect(EventTypes.sessionStart, 'SESSION_START');
-      expect(EventTypes.sessionEnd, 'SESSION_END');
     });
   });
 
@@ -118,12 +117,6 @@ void main() {
           type: EventTypes.sessionStart,
           properties: {'sessionId': 'abc-123'});
       expect(e.toJson()['type'], 'SESSION_START');
-    });
-
-    test('SESSION_END: type correct', () {
-      expect(
-          UnilitixEvent(type: EventTypes.sessionEnd).toJson()['type'],
-          'SESSION_END');
     });
 
     test('CRASH: serializes exceptionType, exceptionMessage, stackTrace, breadcrumbs', () {
