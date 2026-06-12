@@ -1,14 +1,10 @@
 import 'package:flutter/services.dart';
 
-import '../network/network_monitor.dart';
-
 /// Africa-first context: battery, carrier, storage.
 class AfricaContext {
-  final NetworkMonitor networkMonitor;
-
   static const _channel = MethodChannel('com.unilitix/sdk');
 
-  AfricaContext({required this.networkMonitor});
+  const AfricaContext();
 
   /// Battery level 0.0–1.0, via the existing com.unilitix/sdk channel.
   Future<double> get batteryLevel async {

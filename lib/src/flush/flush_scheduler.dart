@@ -101,7 +101,10 @@ class FlushScheduler {
 
   /// Full 4-stage flush on session end.
   Future<void> flushOnSessionEnd(Session session) async {
-    // Wait for any in-progress periodic flush to complete (max 3s)
+    // Wait for any in-progress periodic flush to complete before running session-end flush.
+    // Timeout after 3s — a stalled periodic flush (e.g. severe network degradation with
+    // max retry backoff) may still be running. In that case we proceed anyway and both
+    // flushes run concurrently. Data integrity is preserved since each stage is idempotent.
     int waited = 0;
     while (_flushing && waited < 3000) {
       await Future.delayed(const Duration(milliseconds: 100));

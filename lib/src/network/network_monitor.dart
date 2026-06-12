@@ -9,6 +9,12 @@ class NetworkMonitor {
   final void Function(String type) onNetworkChanged;
 
   static const _channel = EventChannel('com.unilitix/network');
+
+  // Polling fallback for web/desktop. Note: this endpoint may be blocked
+  // by some ISPs in African markets. Mobile uses native EventChannel instead.
+  // Cloudflare's 1.1.1.1 has better availability in African markets than
+  // Google's generate_204 endpoint.
+  static const _pollUrl = 'https://1.1.1.1/cdn-cgi/trace';
   StreamSubscription? _sub;
   String _current = 'UNKNOWN';
   Timer? _pollTimer;
@@ -55,9 +61,9 @@ class NetworkMonitor {
   static Future<String> _checkConnectivity() async {
     try {
       final response = await http
-          .get(Uri.parse('https://clients3.google.com/generate_204'))
+          .get(Uri.parse(_pollUrl))
           .timeout(const Duration(seconds: 5));
-      return response.statusCode == 204 ? 'WIFI' : 'OFFLINE';
+      return response.statusCode < 300 ? 'WIFI' : 'OFFLINE';
     } catch (_) {
       return 'OFFLINE';
     }

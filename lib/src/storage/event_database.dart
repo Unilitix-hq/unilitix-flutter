@@ -118,6 +118,7 @@ class EventDatabase {
     if (!_available) return [];
     final rows = await _db!.query(
       _tEvents,
+      where: 'retry_count < 10',
       orderBy: 'created_at ASC',
       limit: limit,
     );

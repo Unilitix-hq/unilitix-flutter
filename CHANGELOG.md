@@ -1,3 +1,33 @@
+## 2.0.71
+
+### Fixed
+- `_recordCrash` now has a re-entrancy guard (`_isRecording`) — prevents
+  recursive crash recording if an error fires during crash event handling
+- Removed dead `recordZoneError` method — unreachable since `runZonedGuarded`
+  was removed from `Unilitix.runApp` in v2.0.67
+- `SnapshotCapture` now implements `WidgetsBindingObserver` and tracks `_active`
+  state — timer callbacks are suppressed while the app is backgrounded, preventing
+  accumulated `addPostFrameCallback` registrations that would fire in a burst on resume
+- Navigator observer `_name()` fallback now maps common unnamed route types to
+  clean names (`_DialogRoute` → `Dialog`, `_ModalBottomSheetRoute` → `BottomSheet`,
+  `_PopupMenuRoute` → `PopupMenu`) instead of raw runtime type strings
+
+### Changed
+- `UnilitixPrivate` doc comment updated to clarify it only masks wireframe
+  snapshot JSON, not pixel screenshots — use `captureScreenshots: false` in
+  `UnilitixConfig` to prevent sensitive content in pixel screenshots
+- Network connectivity polling URL changed from Google `generate_204` to
+  Cloudflare `1.1.1.1/cdn-cgi/trace` — better availability in African markets
+  where the Google endpoint may be blocked by some ISPs
+- `memoryUsageMb` documented as RSS (resident set size), not Dart heap —
+  on iOS this metric may read higher than heap-only tools
+- Anonymous ID no longer includes `buildNumber` in its hash input — previously
+  every app update generated a new anon ID, breaking user continuity across
+  versions; now stable across builds on the same device
+- fix: anonymous ID now stable across app updates (sha256 of deviceId + packageName only)
+  Note: existing users will receive a new anonymous ID on first launch after upgrading to
+  v2.0.71 — this is a one-time break; continuity holds for all future updates.
+
 ## 2.0.70
 
 ### Changed

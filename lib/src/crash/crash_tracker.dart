@@ -43,37 +43,32 @@ class CrashTracker {
     };
   }
 
-  /// Records an error caught by a Zone (e.g. runZonedGuarded in Unilitix.runApp).
-  void recordZoneError(Object error, StackTrace stack) {
-    if (_isRecording) return; // prevent recursive crash recording
+  void _recordCrash(Object error, StackTrace? stack) {
+    if (_isRecording) return;
     _isRecording = true;
     try {
-      _recordCrash(error, stack);
+      // Network errors are not crashes — skip to avoid false positives.
+      if (error is ClientException ||
+          error.toString().contains('Connection closed') ||
+          error.toString().contains('Software caused connection abort')) {
+        return;
+      }
+      UnilitixLogger.e('Crash captured', error, stack);
+      final raw = '${error.runtimeType}: ${error.toString()}';
+      final title = raw.length > 200 ? raw.substring(0, 200) : raw;
+      final event = UnilitixEvent(
+        type: EventTypes.crash,
+        screen: SdkScope.currentScreen,
+      )
+        ..title = title
+        ..exceptionType = error.runtimeType.toString()
+        ..exceptionMessage = error.toString()
+        ..stackTrace = stack?.toString()
+        ..breadcrumbs = List.of(breadcrumbs);
+      onCrashEvent(event);
     } finally {
       _isRecording = false;
     }
-  }
-
-  void _recordCrash(Object error, StackTrace? stack) {
-    // Network errors are not crashes — skip to avoid false positives.
-    if (error is ClientException ||
-        error.toString().contains('Connection closed') ||
-        error.toString().contains('Software caused connection abort')) {
-      return;
-    }
-    UnilitixLogger.e('Crash captured', error, stack);
-    final raw = '${error.runtimeType}: ${error.toString()}';
-    final title = raw.length > 200 ? raw.substring(0, 200) : raw;
-    final event = UnilitixEvent(
-      type: EventTypes.crash,
-      screen: SdkScope.currentScreen,
-    )
-      ..title = title
-      ..exceptionType = error.runtimeType.toString()
-      ..exceptionMessage = error.toString()
-      ..stackTrace = stack?.toString()
-      ..breadcrumbs = List.of(breadcrumbs);
-    onCrashEvent(event);
   }
 
   /// On next launch, logs any crash batches persisted from the previous session.

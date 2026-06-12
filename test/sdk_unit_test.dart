@@ -2,9 +2,12 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:unilitix/unilitix.dart';
 import 'package:unilitix/src/capture/snapshot_buffer.dart';
+import 'package:unilitix/src/core/sdk_scope.dart';
 import 'package:unilitix/src/events/event_buffer.dart';
 import 'package:unilitix/src/network/retry_policy.dart';
+import 'package:unilitix/src/privacy/identity.dart';
 import 'package:unilitix/src/session/session.dart';
+import 'package:unilitix/src/session/session_manager.dart';
 import 'package:unilitix/src/tracking/rage_tap_detector.dart';
 import 'package:unilitix/src/util/json_util.dart';
 
@@ -592,16 +595,147 @@ void main() {
       expect(Unilitix.observer, isA<UnilitixObserver>());
     });
 
-    test('repaintKey returns a GlobalKey', () {
-      expect(Unilitix.repaintKey, isA<GlobalKey>());
-    });
-
     test('observer is the same singleton on repeated access', () {
       expect(identical(Unilitix.observer, Unilitix.observer), true);
     });
+  });
 
-    test('repaintKey is the same singleton on repeated access', () {
-      expect(identical(Unilitix.repaintKey, Unilitix.repaintKey), true);
+  // ── SdkScope.repaintKey ────────────────────────────────────────────────────
+
+  group('SdkScope.repaintKey', () {
+    test('returns a GlobalKey', () {
+      expect(SdkScope.repaintKey, isA<GlobalKey>());
+    });
+
+    test('is the same singleton on repeated access', () {
+      expect(identical(SdkScope.repaintKey, SdkScope.repaintKey), true);
+    });
+  });
+
+  // ── RageTapDetector cross-screen isolation ─────────────────────────────────
+
+  group('RageTapDetector cross-screen isolation', () {
+    late List<String> fired;
+    late RageTapDetector detector;
+
+    setUp(() {
+      fired = [];
+      detector = RageTapDetector(
+        onRageTap: (screen, _, __, ___, ____) => fired.add(screen),
+      );
+    });
+
+    test('does not fire when third tap is on a different screen', () {
+      detector.recordTap('screenA', 100, 100);
+      detector.recordTap('screenA', 102, 101);
+      final result = detector.recordTap('screenB', 101, 100);
+      expect(result, false);
+      expect(fired, isEmpty);
+    });
+
+    test('fires when all three taps are on the same screen', () {
+      detector.recordTap('screenA', 100, 100);
+      detector.recordTap('screenA', 102, 101);
+      final result = detector.recordTap('screenA', 101, 99);
+      expect(result, true);
+      expect(fired, ['screenA']);
+    });
+
+    test('each screen tracked independently — both can rage independently', () {
+      final detectorB = RageTapDetector(
+        onRageTap: (screen, _, __, ___, ____) => fired.add(screen),
+      );
+      detectorB.recordTap('B', 10, 10);
+      detectorB.recordTap('B', 11, 10);
+      final result = detectorB.recordTap('B', 12, 10);
+      expect(result, true);
+      expect(fired, ['B']);
+    });
+  });
+
+  // ── Identity.computeAnonIdHash ─────────────────────────────────────────────
+
+  group('Identity.computeAnonIdHash', () {
+    test('same inputs produce same hash', () {
+      final id1 = Identity.computeAnonIdHash('device123', 'com.example.app');
+      final id2 = Identity.computeAnonIdHash('device123', 'com.example.app');
+      expect(id1, equals(id2));
+    });
+
+    test('different device IDs produce different hashes', () {
+      final id1 = Identity.computeAnonIdHash('device123', 'com.example.app');
+      final id2 = Identity.computeAnonIdHash('device456', 'com.example.app');
+      expect(id1, isNot(equals(id2)));
+    });
+
+    test('different package names produce different hashes', () {
+      final id1 = Identity.computeAnonIdHash('device123', 'com.example.app');
+      final id2 = Identity.computeAnonIdHash('device123', 'com.other.app');
+      expect(id1, isNot(equals(id2)));
+    });
+
+    test('hash is 24 characters', () {
+      final id = Identity.computeAnonIdHash('device123', 'com.example.app');
+      expect(id.length, 24);
+    });
+  });
+
+  // ── SessionManager.resetSession ────────────────────────────────────────────
+
+  group('SessionManager.resetSession', () {
+    late SessionManager manager;
+    late List<Session> started;
+
+    setUp(() {
+      started = [];
+      manager = SessionManager(
+        sessionTimeoutSeconds: 1800,
+        onSessionStart: started.add,
+        onSessionEnd: (_) {},
+        resetScreenshotOrdinal: () {},
+      );
+      manager.resetSession(); // establish initial session without WidgetsBinding
+    });
+
+    test('isBackgrounded is false after reset', () {
+      manager.didChangeAppLifecycleState(AppLifecycleState.paused);
+      expect(manager.isBackgrounded, true);
+      manager.resetSession();
+      expect(manager.isBackgrounded, false);
+    });
+
+    test('currentSession is non-null after reset', () {
+      expect(manager.currentSession, isNotNull);
+    });
+
+    test('reset starts a new session with a different id', () {
+      final idBefore = manager.currentSession!.id;
+      manager.resetSession();
+      expect(manager.currentSession!.id, isNot(equals(idBefore)));
+    });
+  });
+
+  // ── UnilitixObserver.resolveName ───────────────────────────────────────────
+
+  group('UnilitixObserver.resolveName', () {
+    test('named route returns name as-is', () {
+      expect(UnilitixObserver.resolveName('/home', 'MaterialPageRoute'), '/home');
+    });
+
+    test('empty name falls back to type mapping', () {
+      expect(UnilitixObserver.resolveName('', '_DialogRoute<dynamic>'), 'Dialog');
+    });
+
+    test('null name falls back to type mapping', () {
+      expect(UnilitixObserver.resolveName(null, '_ModalBottomSheetRoute<dynamic>'), 'BottomSheet');
+    });
+
+    test('popup menu route maps to PopupMenu', () {
+      expect(UnilitixObserver.resolveName(null, '_PopupMenuRoute<dynamic>'), 'PopupMenu');
+    });
+
+    test('unknown unnamed type returns the type string', () {
+      expect(UnilitixObserver.resolveName(null, 'CustomRoute<void>'), 'CustomRoute<void>');
     });
   });
 }

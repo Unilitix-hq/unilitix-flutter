@@ -64,6 +64,13 @@ class Identity {
     }
   }
 
+  @visibleForTesting
+  static String computeAnonIdHash(String deviceId, String packageName) {
+    final input = '$deviceId$packageName';
+    final hash = sha256.convert(utf8.encode(input));
+    return hash.toString().substring(0, 24);
+  }
+
   Future<String> _generateAnonId() async {
     try {
       final packageInfo = await PackageInfo.fromPlatform();
@@ -77,10 +84,7 @@ class Identity {
         deviceId = info.identifierForVendor ?? 'unknown';
       }
 
-      final input =
-          '$deviceId${packageInfo.packageName}${packageInfo.buildNumber}';
-      final hash = sha256.convert(utf8.encode(input));
-      return hash.toString().substring(0, 24);
+      return computeAnonIdHash(deviceId, packageInfo.packageName);
     } catch (e) {
       UnilitixLogger.w('Failed to generate anon ID — using fallback');
       return DateTime.now().millisecondsSinceEpoch.toRadixString(16);

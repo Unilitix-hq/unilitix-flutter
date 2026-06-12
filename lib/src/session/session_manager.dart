@@ -25,6 +25,8 @@ class SessionManager with WidgetsBindingObserver {
 
   Session? get currentSession => _currentSession;
 
+  bool get isBackgrounded => _backgroundedAt != null;
+
   /// The most recently completed session. Non-null immediately after
   /// [_endCurrentSession] runs, so [_buildSessionPayload] can still
   /// read its fields after [_currentSession] is nulled.
@@ -67,6 +69,7 @@ class SessionManager with WidgetsBindingObserver {
   void resetSession() {
     _backgroundTimer?.cancel();
     _backgroundTimer = null;
+    _backgroundedAt = null; // clear background state so new session starts clean
     if (_currentSession != null) _endCurrentSession();
     _startNewSession();
   }

@@ -1,6 +1,6 @@
 import 'package:flutter/widgets.dart';
 
-import '../../unilitix.dart';
+import '../core/sdk_scope.dart';
 
 /// Wrap your app content with [UnilitixWidget] to enable session replay.
 /// Place it in [MaterialApp.builder] so screenshots capture fully rendered content.
@@ -28,7 +28,7 @@ class _UnilitixWidgetState extends State<UnilitixWidget> {
     if (!_observerRegistered) {
       final navigator = Navigator.maybeOf(context);
       if (navigator != null) {
-        Unilitix.markObserverConnected();
+        SdkScope.onObserverConnected?.call();
         _observerRegistered = true;
       }
     }
@@ -37,7 +37,7 @@ class _UnilitixWidgetState extends State<UnilitixWidget> {
   @override
   Widget build(BuildContext context) {
     return RepaintBoundary(
-      key: Unilitix.repaintKey,
+      key: SdkScope.repaintKey,
       child: widget.child,
     );
   }

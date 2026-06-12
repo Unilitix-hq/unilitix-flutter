@@ -34,6 +34,10 @@ class PerformanceMonitor {
     return drops;
   }
 
+  /// Returns current memory usage in MB using [ProcessInfo.currentRss].
+  /// This is the resident set size (physical RAM allocated to the process),
+  /// not the Dart heap size — on iOS this may be significantly higher than
+  /// heap-only metrics.
   double get memoryUsageMb {
     try {
       return ProcessInfo.currentRss / (1024 * 1024);

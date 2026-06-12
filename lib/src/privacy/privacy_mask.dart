@@ -1,7 +1,10 @@
 import 'package:flutter/widgets.dart';
 
-/// Wrap any widget with [UnilitixPrivate] to exclude it from
-/// snapshot capture and screenshot masking.
+/// Excludes this widget subtree from wireframe snapshot JSON capture.
+///
+/// Note: [UnilitixPrivate] does NOT mask pixel screenshots (PixelCopy/toImage path).
+/// To prevent sensitive content appearing in screenshots, use `captureScreenshots: false`
+/// in [UnilitixConfig] or implement OS-level screenshot prevention.
 ///
 /// ```dart
 /// UnilitixPrivate(

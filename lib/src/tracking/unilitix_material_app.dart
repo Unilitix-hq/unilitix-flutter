@@ -165,7 +165,7 @@ class UnilitixMaterialApp extends StatelessWidget {
           return false;
         },
         child: RepaintBoundary(
-          key: Unilitix.repaintKey,
+          key: SdkScope.repaintKey,
           child: MaterialApp.router(
           routerConfig: routerConfig,
           scaffoldMessengerKey: scaffoldMessengerKey,
@@ -216,7 +216,7 @@ class UnilitixMaterialApp extends StatelessWidget {
           return false;
         },
         child: RepaintBoundary(
-          key: Unilitix.repaintKey,
+          key: SdkScope.repaintKey,
           child: MaterialApp.router(
           routeInformationProvider: routeInformationProvider,
           routeInformationParser: routeInformationParser,
@@ -269,7 +269,7 @@ class UnilitixMaterialApp extends StatelessWidget {
         return false;
       },
       child: RepaintBoundary(
-        key: Unilitix.repaintKey,
+        key: SdkScope.repaintKey,
         child: MaterialApp(
         navigatorKey: navigatorKey,
         scaffoldMessengerKey: scaffoldMessengerKey,
