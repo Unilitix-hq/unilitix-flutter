@@ -1,3 +1,7 @@
+## 2.0.73
+
+- fix: screenshot uploads now processed in batches of 3 instead of all at once — fixes connection saturation causing request timeouts and white frames in session replay on heavy sessions
+
 ## 2.0.72
 
 - fix: persist session end payload to SQLite before network call — recovers incomplete sessions on next launch
