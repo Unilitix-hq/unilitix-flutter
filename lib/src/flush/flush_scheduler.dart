@@ -319,9 +319,12 @@ class FlushScheduler {
     );
     if (slots == null) return false;
 
-    // Upload each screenshot to its presigned URL in parallel.
-    await Future.wait(
-      pending.map((screenshot) async {
+    // Upload screenshots in batches of 3 — avoids saturating the connection
+    // on large sessions which causes request timeouts and white frames in replay.
+    const batchSize = 3;
+    for (int i = 0; i < pending.length; i += batchSize) {
+      final batch = pending.skip(i).take(batchSize).toList();
+      await Future.wait(batch.map((screenshot) async {
         try {
           final matches = slots.where((s) => s.ordinal == screenshot.ordinal);
           if (matches.isEmpty) {
@@ -353,8 +356,8 @@ class FlushScheduler {
           );
           // leave in DB for retry — do NOT delete
         }
-      }),
-    );
+      }));
+    }
     return true;
   }
 
