@@ -22,6 +22,9 @@ class EventBuffer {
   }
 
   /// Atomically clear and return all buffered events.
+  /// Discards everything buffered without flushing (opt-out).
+  void clear() => _buffer.clear();
+
   List<UnilitixEvent> drain() {
     final events = List<UnilitixEvent>.from(_buffer);
     _buffer.clear();

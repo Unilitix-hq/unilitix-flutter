@@ -1,0 +1,24 @@
+# Extends the default gitleaks rules with the key formats this product issues.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "unilitix-sdk-key"
+description = "Unilitix SDK API key"
+regex = '''ul_live_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'''
+keywords = ["ul_live_"]
+
+[[rules]]
+id = "unilitix-data-key"
+description = "Unilitix data access API key"
+regex = '''udk_live_[A-Za-z0-9_\-]{16,}'''
+keywords = ["udk_live_"]
+
+[allowlist]
+paths = [
+  '''\.gitleaks\.toml$''',
+]
+regexes = [
+  '''ul_live_\*{4}''',       # masked placeholder used in docs/onboarding UI
+  '''YOUR_API_KEY''',
+]

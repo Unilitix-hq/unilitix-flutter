@@ -267,6 +267,20 @@ class EventDatabase {
         .toList();
   }
 
+  /// Deletes every locally queued event, screenshot and session stub. Called on
+  /// opt-out so that nothing captured before consent was withdrawn can be
+  /// uploaded later by a retry or by crash recovery.
+  Future<void> purgeAll() async {
+    if (!_available) return;
+    final db = _db;
+    if (db == null) return;
+    await db.transaction((txn) async {
+      await txn.delete(_tEvents);
+      await txn.delete(_tScreenshots);
+      await txn.delete(_tSessions);
+    });
+  }
+
   Future<void> close() async {
     await _db?.close();
     _db = null;

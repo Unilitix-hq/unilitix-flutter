@@ -39,6 +39,10 @@ class FlushScheduler {
   bool _flushing = false;
   bool _disposed = false;
 
+  /// Consent gate. When it returns true nothing leaves the device: every
+  /// public flush entry point returns immediately without a network call.
+  final bool Function() isOptedOut;
+
   FlushScheduler({
     required this.intervalSeconds,
     required this.buffer,
@@ -50,7 +54,10 @@ class FlushScheduler {
     required this.buildSessionPayload,
     required this.uploadScreenshotsOnWifiOnly,
     this.snapshotBuffer,
-  });
+    bool Function()? isOptedOut,
+  }) : isOptedOut = isOptedOut ?? _neverOptedOut;
+
+  static bool _neverOptedOut() => false;
 
   void start() {
     _timer = Timer.periodic(
@@ -68,6 +75,7 @@ class FlushScheduler {
   /// Periodic flush — runs all 4 stages every cycle.
   /// Stages 3+4 (snapshots/screenshots) are best-effort and run in background.
   Future<void> flush() async {
+    if (isOptedOut()) return;
     if (_flushing) return;
     _flushing = true;
     try {
@@ -94,10 +102,16 @@ class FlushScheduler {
 
   /// Immediate events-only flush called from track() — bypasses re-entrancy
   /// guard. Safe: drain() is atomic in single-isolate Dart.
-  Future<void> flushNow() => _flushEvents();
+  Future<void> flushNow() async {
+    if (isOptedOut()) return;
+    await _flushEvents();
+  }
 
   /// Drain pending events on app background — no session POST, no screenshots.
-  Future<void> flushEventsOnly() => _flushEvents();
+  Future<void> flushEventsOnly() async {
+    if (isOptedOut()) return;
+    await _flushEvents();
+  }
 
   /// Full 4-stage flush on session end.
   Future<void> flushOnSessionEnd(Session session) async {
@@ -112,6 +126,12 @@ class FlushScheduler {
     }
 
     if (_disposed) return;
+    if (isOptedOut()) {
+      // Opted out: nothing is uploaded and the local stub must not survive to be
+      // recovered (and uploaded) on the next launch.
+      await database.deletePendingSession(session.id);
+      return;
+    }
     _flushing = true;
     try {
       final sessionDelivered = await _flushAll(session: session);
@@ -364,6 +384,7 @@ class FlushScheduler {
   // ── Retry ──────────────────────────────────────────────────────────────────
 
   Future<void> _retryPending({bool skipPurge = false}) async {
+    if (isOptedOut()) return;
     final pending = await database.getOldestEvents(20);
     for (var i = 0; i < pending.length; i += 5) {
       final chunk = pending.sublist(i, min(i + 5, pending.length));

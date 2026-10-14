@@ -263,6 +263,7 @@ class Unilitix {
       buildSessionPayload: _buildSessionPayload,
       uploadScreenshotsOnWifiOnly: effectiveConfig.uploadScreenshotsOnWifiOnly,
       snapshotBuffer: _snapshotBuffer,
+      isOptedOut: () => _optManager.isOptedOut,
     );
 
     _sessionManager.onEventsFlush = () {
@@ -327,8 +328,12 @@ class Unilitix {
     await _crashTracker.logPendingCrashesIfAny();
     _flushScheduler.start();
     unawaited(_recoverPendingSessions());
-    if (effectiveConfig.captureSnapshots) _snapshotCapture.start();
-    if (effectiveConfig.captureScreenshots) _screenshotCapture.start();
+    // Replay capture only runs with consent; a user who opted out in a previous
+    // launch stays opted out until optIn() is called.
+    if (!_optManager.isOptedOut) {
+      if (effectiveConfig.captureSnapshots) _snapshotCapture.start();
+      if (effectiveConfig.captureScreenshots) _screenshotCapture.start();
+    }
 
     _initialized = true;
 
@@ -450,16 +455,30 @@ class Unilitix {
   // ── Privacy ───────────────────────────────────────────────────────
 
   /// Stops all tracking and analytics collection.
+  ///
+  /// Stops session replay (snapshots and screenshots), discards everything
+  /// buffered in memory, purges the on-device queue, and gates every upload path
+  /// so nothing captured after this call leaves the device.
   static Future<void> optOut() async {
     _assertInitialized('optOut');
     await _optManager.optOut();
-    UnilitixLogger.d('Opted out');
+    _snapshotCapture.stop();
+    _screenshotCapture.stop();
+    _snapshotBuffer.clear();
+    _eventBuffer.clear();
+    await _database.purgeAll();
+    UnilitixLogger.d('Opted out — capture stopped and local queue purged');
   }
 
   /// Resumes tracking after [optOut].
   static Future<void> optIn() async {
     _assertInitialized('optIn');
     await _optManager.optIn();
+    final cfg = _config;
+    if (cfg != null) {
+      if (cfg.captureSnapshots) _snapshotCapture.start();
+      if (cfg.captureScreenshots) _screenshotCapture.start();
+    }
     UnilitixLogger.d('Opted in');
   }
 
