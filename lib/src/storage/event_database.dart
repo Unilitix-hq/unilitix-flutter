@@ -8,7 +8,11 @@ import '../logger/logger.dart';
 /// sqflite-backed persistent queue for events and screenshots.
 class EventDatabase {
   static const _dbName = 'unilitix_events.db';
-  static const _version = 3;
+  static const _version = 4;
+  static const _tWal = 'wal_events';
+
+  /// Upper bound on write-ahead rows kept on disk; oldest are evicted beyond it.
+  static const _maxWalRows = 5000;
   static const _tEvents = 'pending_events';
   static const _tScreenshots = 'pending_screenshots';
   static const _tSessions = 'pending_sessions';
@@ -77,6 +81,27 @@ class EventDatabase {
         created_at INTEGER NOT NULL
       )
     ''');
+    await _createWal(db);
+  }
+
+  /// Write-ahead log: one row per emitted event, written before the event
+  /// leaves memory and deleted once the server acknowledges it (or once it has
+  /// been folded into a pending retry batch). On the next launch any rows left
+  /// here belong to a process that died before flushing; they are turned into
+  /// retry batches by [recoverWalToPending].
+  Future<void> _createWal(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS $_tWal (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        seq INTEGER,
+        event_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )
+    ''');
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_wal_session ON $_tWal(session_id, seq)',
+    );
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
@@ -95,13 +120,114 @@ class EventDatabase {
         )
       ''');
     }
+    if (oldVersion < 4) {
+      // v3 upgrades never created the screenshots table (only fresh installs
+      // did); create it here so upgraded installs can store screenshots too.
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS $_tScreenshots (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id TEXT NOT NULL,
+          ordinal INTEGER NOT NULL,
+          screen_name TEXT NOT NULL,
+          viewport_width INTEGER NOT NULL,
+          viewport_height INTEGER NOT NULL,
+          captured_at INTEGER NOT NULL,
+          image_bytes BLOB NOT NULL,
+          created_at INTEGER NOT NULL
+        )
+      ''');
+      await _createWal(db);
+    }
+  }
+
+  // ── Write-ahead log ────────────────────────────────────────────────────────
+
+  /// Persists an emitted event before it is uploaded. Best-effort: a storage
+  /// failure must never break event emission.
+  Future<void> walInsert(
+      String sessionId, String eventId, int? seq, String eventJson) async {
+    if (!_available) return;
+    try {
+      await _db!.insert(
+        _tWal,
+        {
+          'id': eventId,
+          'session_id': sessionId,
+          'seq': seq,
+          'event_json': eventJson,
+          'created_at': DateTime.now().millisecondsSinceEpoch,
+        },
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
+    } catch (e) {
+      UnilitixLogger.w('WAL insert failed: $e');
+    }
+  }
+
+  /// Removes acknowledged (or re-queued) events from the write-ahead log.
+  Future<void> walDelete(List<String> eventIds) async {
+    if (!_available || eventIds.isEmpty) return;
+    try {
+      final batch = _db!.batch();
+      for (final id in eventIds) {
+        batch.delete(_tWal, where: 'id = ?', whereArgs: [id]);
+      }
+      await batch.commit(noResult: true);
+    } catch (e) {
+      UnilitixLogger.w('WAL delete failed: $e');
+    }
+  }
+
+  Future<int> walCount() async {
+    if (!_available) return 0;
+    final r = await _db!.rawQuery('SELECT COUNT(*) AS c FROM $_tWal');
+    return (r.first['c'] as int?) ?? 0;
+  }
+
+  /// Converts every row still in the write-ahead log into pending retry
+  /// batches (one per session, in seq order) and clears the log. Called once
+  /// at startup: anything here was emitted by a process that never flushed it.
+  /// Returns the number of events recovered.
+  Future<int> recoverWalToPending() async {
+    if (!_available) return 0;
+    try {
+      // Evict beyond the cap first so a runaway session can't fill the disk.
+      final count = await walCount();
+      if (count > _maxWalRows) {
+        await _db!.rawDelete(
+          'DELETE FROM $_tWal WHERE id IN (SELECT id FROM $_tWal ORDER BY created_at ASC LIMIT ?)',
+          [count - _maxWalRows],
+        );
+      }
+      final rows = await _db!
+          .query(_tWal, orderBy: 'session_id ASC, seq ASC, created_at ASC');
+      if (rows.isEmpty) return 0;
+
+      final bySession = <String, List<String>>{};
+      for (final r in rows) {
+        bySession
+            .putIfAbsent(r['session_id'] as String, () => [])
+            .add(r['event_json'] as String);
+      }
+      for (final entry in bySession.entries) {
+        await insertEvent(PendingEvent(
+          sessionJson: '{"sessionId":"${entry.key}"}',
+          eventsJson: '[${entry.value.join(',')}]',
+          createdAt: DateTime.now().millisecondsSinceEpoch,
+        ));
+      }
+      await _db!.delete(_tWal);
+      return rows.length;
+    } catch (e) {
+      UnilitixLogger.w('WAL recovery failed: $e');
+      return 0;
+    }
   }
 
   Future<void> insertEvent(PendingEvent event) async {
     if (!_available) return;
     await _db!.transaction((txn) async {
-      final result =
-          await txn.rawQuery('SELECT COUNT(*) as c FROM $_tEvents');
+      final result = await txn.rawQuery('SELECT COUNT(*) as c FROM $_tEvents');
       final count = (result.first['c'] as int?) ?? 0;
       if (count >= maxOfflineEvents) {
         await txn.rawDelete(
@@ -278,6 +404,7 @@ class EventDatabase {
       await txn.delete(_tEvents);
       await txn.delete(_tScreenshots);
       await txn.delete(_tSessions);
+      await txn.delete(_tWal);
     });
   }
 

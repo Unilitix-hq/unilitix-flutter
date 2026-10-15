@@ -1,6 +1,6 @@
 # Unilitix Flutter SDK
 
-**Version:** 2.0.73 · [pub.dev](https://pub.dev/packages/unilitix) · [GitHub](https://github.com/unilitix/unilitix-flutter)
+**Version:** 2.0.74 · [pub.dev](https://pub.dev/packages/unilitix) · [GitHub](https://github.com/unilitix/unilitix-flutter)
 
 Unilitix is a mobile analytics SDK built for African markets. It captures session replays, screen flows, custom events, and user identity — with offline-first data delivery and Africa-specific context (network type, carrier, power outage correlation).
 
@@ -27,7 +27,7 @@ Or add manually to `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  unilitix: ^2.0.73
+  unilitix: ^2.0.74
 ```
 
 Then run:
@@ -83,7 +83,7 @@ class MyApp extends StatelessWidget {
 Run your app in debug mode. Within 5 seconds you should see:
 
 ```
-[Unilitix] SDK initialized ✅ v2.0.73
+[Unilitix] SDK initialized ✅ v2.0.74
 [Unilitix] Session started ✅ abc123…
 [Unilitix] Screen → /home
 ```
@@ -193,7 +193,16 @@ await Unilitix.init(
 
 ## Privacy Masking
 
-Exclude sensitive widgets from session recordings:
+The SDK is private by default:
+
+- **Text is redacted** in wireframe snapshots (`maskAllText`, on by default):
+  every `Text` widget's content is replaced with same-length placeholders, so
+  balances, names, phone numbers and OTPs never leave the device while layout
+  fidelity is kept.
+- **Input fields** are masked in snapshots and screenshots (`maskInputs`).
+- **`UnilitixPrivate`** marks a subtree as sensitive in *both* snapshots and
+  pixel screenshots. In screenshots its on-screen bounds are painted over on
+  the device before the frame is encoded (`maskScreenshots`, on by default):
 
 ```dart
 UnilitixPrivate(
@@ -201,7 +210,23 @@ UnilitixPrivate(
 )
 ```
 
-> ⚠️ `UnilitixPrivate` excludes widgets from the **wireframe snapshot** only. It does not mask pixel screenshots. To prevent sensitive content in screenshots, set `captureScreenshots: false` in `UnilitixConfig`.
+- **Images** can be blacked out too with `maskImages: true` (off by default).
+
+```dart
+await Unilitix.init(
+  'YOUR_API_KEY',
+  config: UnilitixConfig(
+    maskAllText: true,        // redact all text in wireframes (default)
+    maskInputs: true,         // mask TextField content (default)
+    maskScreenshots: true,    // paint over UnilitixPrivate in screenshots (default)
+    maskImages: false,        // black out images
+  ),
+);
+```
+
+The anonymous id is a random UUID stored on the device — it is never derived
+from the advertising id, IMEI or any hardware identifier — and `Unilitix.reset()`
+rotates it.
 
 ---
 
@@ -215,9 +240,12 @@ await Unilitix.init(
     captureSnapshots: true,              // wireframe replay
     captureScreenshots: true,            // pixel screenshot replay
     maskInputs: true,                    // mask text field input
+    maskAllText: true,                   // redact text in wireframe snapshots
     flushIntervalSeconds: 30,            // how often to upload data
     sessionTimeoutSeconds: 1800,         // session inactivity timeout (30 min)
     uploadScreenshotsOnWifiOnly: false,  // restrict uploads to WiFi
+    maxScreenshotsPerMinute: 20,         // cap for continuously redrawing screens
+    screenshotHeartbeatMs: 10000,        // frame at least this often when static
   ),
 );
 ```
@@ -242,8 +270,9 @@ await Unilitix.flush();
 ## Privacy Controls
 
 ```dart
-// Stop tracking (e.g. user opts out)
-Unilitix.optOut();
+// Stop tracking: ends replay capture, discards buffered data and purges the
+// on-device queue so nothing captured afterwards leaves the device
+await Unilitix.optOut();
 
 // Resume tracking
 Unilitix.optIn();
@@ -315,7 +344,7 @@ This warning fires during SDK init before `MaterialApp` is built. It clears auto
 
 ### Anonymous ID changes after app update
 
-If upgrading from v2.0.70 or earlier to v2.0.73, users will receive a new anonymous ID on first launch. This is a one-time break — anonymous IDs are now stable across all future app updates.
+If upgrading from v2.0.70 or earlier to v2.0.74, users will receive a new anonymous ID on first launch. This is a one-time break — anonymous IDs are now stable across all future app updates.
 
 ### Events returning 402
 

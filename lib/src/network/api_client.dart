@@ -7,7 +7,9 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 
 import 'retry_policy.dart';
+import '../generated/ingest_models.dart';
 import '../logger/logger.dart';
+import '../storage/pending_screenshot.dart';
 
 /// A presigned-URL slot returned by the batch screenshot init endpoint.
 class ScreenshotSlot {
@@ -76,8 +78,8 @@ class ApiClient {
         final retryAfterSecs = resp.headers['retry-after'] != null
             ? int.tryParse(resp.headers['retry-after']!)
             : null;
-        await Future.delayed(
-            RetryPolicy.delayFor(attempt - 1, retryAfterSeconds: retryAfterSecs));
+        await Future.delayed(RetryPolicy.delayFor(attempt - 1,
+            retryAfterSeconds: retryAfterSecs));
       } on SocketException {
         if (attempt == RetryPolicy.maxRetries) return null;
         await Future.delayed(RetryPolicy.delayFor(attempt - 1));
@@ -119,19 +121,28 @@ class ApiClient {
     required int count,
     required List<int> ordinals,
   }) async {
-    final resp = await _postWithRetry('/v1/ingest/screenshots/init', {
-      'sessionId': sessionId,
-      'count': count,
-      'ordinals': ordinals,
-    });
+    final resp = await _postWithRetry(
+      '/v1/ingest/screenshots/init',
+      ScreenshotInitRequest(
+        sessionId: sessionId,
+        count: count,
+        ordinals: ordinals,
+      ).toJson(),
+    );
     if (resp == null || resp.statusCode >= 300) return null;
-    final json = jsonDecode(resp.body) as Map<String, dynamic>;
-    final raw = json['slots'] as List?;
-    if (raw == null) return null;
-    return raw.cast<Map<String, dynamic>>().map((s) => ScreenshotSlot(
-          ordinal: s['ordinal'] as int,
-          presignedUrl: s['presignedUrl'] as String,
-        )).toList();
+    try {
+      final parsed = ScreenshotInitResponse.fromJson(
+          jsonDecode(resp.body) as Map<String, dynamic>);
+      return parsed.slots
+          .map((s) => ScreenshotSlot(
+                ordinal: s.ordinal,
+                presignedUrl: s.presignedUrl,
+              ))
+          .toList();
+    } catch (e, stack) {
+      UnilitixLogger.e('screenshots/init: unexpected response shape', e, stack);
+      return null;
+    }
   }
 
   Future<bool> uploadScreenshotBytes(
@@ -147,7 +158,8 @@ class ApiClient {
       if (resp.statusCode >= 300) {
         UnilitixLogger.e(
           'uploadScreenshotBytes failed: ${resp.statusCode}',
-          null, null,
+          null,
+          null,
         );
       }
       return resp.statusCode < 300;
@@ -157,11 +169,29 @@ class ApiClient {
     }
   }
 
-  Future<bool> confirmScreenshotUpload(String sessionId, int ordinal) async {
-    final resp = await _postWithRetry('/v1/ingest/screenshots/confirm', {
-      'sessionId': sessionId,
-      'ordinal': ordinal,
-    });
+  /// Confirms an uploaded screenshot and sends its metadata (screen name,
+  /// viewport, size, capture time). The server stores that metadata only
+  /// from this call, so sending just the ordinal (as versions before 2.0.74
+  /// did) left replay frames without a screen name or capture time.
+  Future<bool> confirmScreenshotUpload(
+      String sessionId, PendingScreenshot screenshot) async {
+    final body = ScreenshotConfirmRequest(
+      sessionId: sessionId,
+      screenshots: [
+        ScreenshotConfirmItem(
+          ordinal: screenshot.ordinal,
+          screenName: screenshot.screenName,
+          viewportWidth: screenshot.viewportWidth,
+          viewportHeight: screenshot.viewportHeight,
+          bytes: screenshot.imageBytes.length,
+          capturedAt: DateTime.fromMillisecondsSinceEpoch(
+            screenshot.capturedAt,
+            isUtc: true,
+          ).toIso8601String(),
+        ),
+      ],
+    ).toJson();
+    final resp = await _postWithRetry('/v1/ingest/screenshots/confirm', body);
     return resp != null && resp.statusCode < 300;
   }
 

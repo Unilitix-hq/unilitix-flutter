@@ -1,32 +1,39 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
-import 'package:image/image.dart' as img;
 
+import 'image_encode.dart';
 import '../logger/logger.dart';
 import '../core/sdk_scope.dart';
+import '../privacy/privacy_mask.dart';
 
 /// Captures screenshots and encodes them as JPEG.
 ///
-/// Uses native PixelCopy (Android API 26+) as the primary path — it reads
-/// directly from the window compositor and is immune to Impeller/Vulkan
-/// DEVICE_LOCAL texture issues.  Falls back to [RepaintBoundary.toImage]
-/// with an [endOfFrame] GPU flush barrier when native is unavailable (iOS,
-/// Android < 26, or any platform error).
+/// Capture is change-driven, not timer-driven: a frame is taken when the UI
+/// is marked dirty (navigation, tap, scroll, or the wireframe snapshot's
+/// structural hash changing) and at least [intervalMs] has passed since the
+/// last one. A quiet screen produces no frames; an idle heartbeat
+/// ([heartbeatMs]) keeps long static screens represented in the replay.
 ///
-/// Scheduling uses [SchedulerBinding.addPostFrameCallback] instead of a
-/// [Timer] so captures are always frame-synchronised and stop automatically
-/// when the app is backgrounded (no frames → no callbacks).
+/// All image work (downscale, occlusion, JPEG) runs off the UI isolate: on
+/// Android and iOS the native plugin does it on a background thread and
+/// returns JPEG bytes; the Dart [RepaintBoundary] fallback hands raw RGBA to
+/// a `compute()` isolate.
 class ScreenshotCapture with WidgetsBindingObserver {
   final GlobalKey repaintKey;
   final int intervalMs;
   final int maxScreenshots;
+  final int maxPerMinute;
+  final int heartbeatMs;
   final int maxWidth;
   final int quality;
+  final bool maskScreenshots;
+  final bool maskImages;
   final Future<void> Function(
     Uint8List bytes,
     String screenName,
@@ -39,7 +46,9 @@ class ScreenshotCapture with WidgetsBindingObserver {
   int _ordinal = 0;
   bool _isCapturing = false;
   bool _active = false;
+  bool _dirty = true; // first frame of a session is always wanted
   int _lastCaptureMs = 0;
+  final List<int> _recentCaptureMs = [];
 
   static const _nativeChannel = MethodChannel('unilitix/screenshot');
 
@@ -50,11 +59,16 @@ class ScreenshotCapture with WidgetsBindingObserver {
     required this.maxWidth,
     required this.quality,
     required this.onCapture,
+    this.maxPerMinute = 20,
+    this.heartbeatMs = 10000,
+    this.maskScreenshots = true,
+    this.maskImages = false,
   });
 
   void start() {
     _active = true;
     _lastCaptureMs = 0;
+    _dirty = true;
     WidgetsBinding.instance.addObserver(this);
     SchedulerBinding.instance.addPostFrameCallback(_onFrame);
   }
@@ -66,29 +80,45 @@ class ScreenshotCapture with WidgetsBindingObserver {
 
   void resetOrdinal() {
     _ordinal = 0;
+    _recentCaptureMs.clear();
+    _dirty = true;
     // Re-anchor the callback chain — session resets happen on foreground resume.
     if (_active) SchedulerBinding.instance.addPostFrameCallback(_onFrame);
   }
 
+  /// Marks the screen as changed; the next frame after [intervalMs] is captured.
+  void markDirty() => _dirty = true;
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && _active) {
-      // The post-frame chain breaks when Flutter stops rendering in background.
-      // Re-register on resume so captures continue in the same session.
+      _dirty = true;
       SchedulerBinding.instance.addPostFrameCallback(_onFrame);
     }
   }
 
   void _onFrame(Duration _) {
     if (!_active) return;
-    // Re-register before capture so the chain continues even if capture throws.
     SchedulerBinding.instance.addPostFrameCallback(_onFrame);
 
     final now = DateTime.now().millisecondsSinceEpoch;
-    if (now - _lastCaptureMs >= intervalMs) {
-      _lastCaptureMs = now;
-      _capture(); // not awaited — _isCapturing guards re-entrancy
-    }
+    final since = now - _lastCaptureMs;
+    final wanted = (_dirty && since >= intervalMs) || since >= heartbeatMs;
+    if (!wanted) return;
+    if (!_withinBudget(now)) return;
+
+    _dirty = false;
+    _lastCaptureMs = now;
+    _capture(); // not awaited — _isCapturing guards re-entrancy
+  }
+
+  /// Rolling one-minute budget so a screen that redraws continuously (a
+  /// ticker, an animation) cannot flood the session.
+  bool _withinBudget(int now) {
+    _recentCaptureMs.removeWhere((t) => now - t > 60000);
+    if (_recentCaptureMs.length >= maxPerMinute) return false;
+    _recentCaptureMs.add(now);
+    return true;
   }
 
   Future<void> _capture() async {
@@ -98,21 +128,20 @@ class ScreenshotCapture with WidgetsBindingObserver {
     final ordinal = _ordinal++;
 
     try {
-      // Stage 1: native PixelCopy — reads from the window compositor, Impeller-safe.
-      Uint8List? jpegBytes = await _tryNativeCapture();
+      // Occlusion regions are read in the same frame the pixels come from.
+      final masks = _collectMasks();
+      final view = SchedulerBinding.instance.platformDispatcher.views.first;
+      final dpr = view.devicePixelRatio;
 
-      // Stage 2: Dart RepaintBoundary fallback with Impeller endOfFrame flush.
-      jpegBytes ??= await _tryDartCapture();
-
+      Uint8List? jpegBytes = await _tryNativeCapture(masks, dpr);
+      jpegBytes ??= await _tryDartCapture(masks);
       if (jpegBytes == null) return;
 
       final screen = SdkScope.currentScreen ?? 'unknown';
-      final view = SchedulerBinding.instance.platformDispatcher.views.first;
-      final w = (view.physicalSize.width / view.devicePixelRatio).round();
-      final h = (view.physicalSize.height / view.devicePixelRatio).round();
-      final capturedAt = DateTime.now().millisecondsSinceEpoch;
-
-      await onCapture(jpegBytes, screen, ordinal, w, h, capturedAt);
+      final w = (view.physicalSize.width / dpr).round();
+      final h = (view.physicalSize.height / dpr).round();
+      await onCapture(jpegBytes, screen, ordinal, w, h,
+          DateTime.now().millisecondsSinceEpoch);
     } catch (e) {
       UnilitixLogger.e('Screenshot capture failed', e);
     } finally {
@@ -120,64 +149,71 @@ class ScreenshotCapture with WidgetsBindingObserver {
     }
   }
 
-  /// Calls the Android-native PixelCopy channel (API 26+).
-  /// Returns PNG bytes re-encoded as JPEG, or null on any error / unsupported platform.
-  Future<Uint8List?> _tryNativeCapture() async {
+  List<ui.Rect> _collectMasks() {
+    if (!maskScreenshots) return const [];
     try {
-      final pngBytes =
-          await _nativeChannel.invokeMethod<Uint8List>('captureScreenshot');
-      if (pngBytes == null) return null;
+      final rects = <ui.Rect>[...PrivacyRegistry.privateRects()];
+      if (maskImages) rects.addAll(PrivacyRegistry.imageRects());
+      return rects;
+    } catch (e) {
+      UnilitixLogger.w('Mask collection failed: $e');
+      return const [];
+    }
+  }
 
-      final decoded = img.decodePng(pngBytes);
-      if (decoded == null) return null;
-
-      final resized =
-          decoded.width > maxWidth ? img.copyResize(decoded, width: maxWidth) : decoded;
-      return Uint8List.fromList(img.encodeJpg(resized, quality: quality));
+  /// Native capture: PixelCopy on Android, drawHierarchy on iOS. The plugin
+  /// downscales, occludes and encodes on its own thread and returns JPEG.
+  Future<Uint8List?> _tryNativeCapture(List<ui.Rect> masks, double dpr) async {
+    try {
+      return await _nativeChannel.invokeMethod<Uint8List>('captureScreenshot', {
+        'maxWidth': maxWidth,
+        'quality': quality,
+        'scale': dpr,
+        'masks': masks.map((r) => [r.left, r.top, r.right, r.bottom]).toList(),
+      });
     } catch (_) {
-      // MissingPluginException on iOS, null result on Android < 26, or any error.
+      // MissingPluginException on unsupported platforms, or any native error.
       return null;
     }
   }
 
-  /// RepaintBoundary → rawRgba → JPEG with an [endOfFrame] GPU flush barrier.
-  /// The barrier lets Impeller's Vulkan command buffer drain before pixel readback,
-  /// preventing the black frames caused by reading DEVICE_LOCAL GPU texture data.
-  Future<Uint8List?> _tryDartCapture() async {
+  /// RepaintBoundary → rawRgba, then everything else in a background isolate.
+  /// An [endOfFrame] barrier lets Impeller drain before pixel readback.
+  Future<Uint8List?> _tryDartCapture(List<ui.Rect> masks) async {
     final boundary =
         repaintKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
     if (boundary == null) return null;
 
     ui.Image? uiImage;
     try {
-      final dpr =
-          SchedulerBinding.instance.platformDispatcher.views.first.devicePixelRatio;
-      // Half device DPR keeps texture size manageable; clamp ensures 1x–2x range.
-      final captureRatio = (dpr * 0.5).clamp(1.0, 2.0);
-
+      final view = SchedulerBinding.instance.platformDispatcher.views.first;
+      final captureRatio = (view.devicePixelRatio * 0.5).clamp(1.0, 2.0);
       uiImage = await boundary.toImage(pixelRatio: captureRatio);
-
-      // Flush Impeller's GPU pipeline before reading pixels back to CPU.
       await SchedulerBinding.instance.endOfFrame;
-
       final byteData =
           await uiImage.toByteData(format: ui.ImageByteFormat.rawRgba);
       if (byteData == null) return null;
 
-      final rawBytes = byteData.buffer.asUint8List();
-      var imgObj = img.Image.fromBytes(
-        width: uiImage.width,
-        height: uiImage.height,
-        bytes: rawBytes.buffer,
-        numChannels: 4,
-        order: img.ChannelOrder.rgba,
+      // Masks are in logical px; the image is logical × captureRatio.
+      final scaledMasks = masks
+          .map((r) => [
+                r.left * captureRatio,
+                r.top * captureRatio,
+                r.right * captureRatio,
+                r.bottom * captureRatio
+              ])
+          .toList();
+      return await compute(
+        encodeFrame,
+        EncodeRequest(
+          rgba: byteData.buffer.asUint8List(),
+          width: uiImage.width,
+          height: uiImage.height,
+          maxWidth: maxWidth,
+          quality: quality,
+          masks: scaledMasks,
+        ),
       );
-
-      if (imgObj.width > maxWidth) {
-        imgObj = img.copyResize(imgObj, width: maxWidth);
-      }
-
-      return Uint8List.fromList(img.encodeJpg(imgObj, quality: quality));
     } catch (e) {
       UnilitixLogger.e('Dart screenshot capture failed', e);
       return null;

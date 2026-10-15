@@ -1,12 +1,8 @@
-import 'dart:convert';
-import 'package:crypto/crypto.dart';
-import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../logger/logger.dart';
+import '../util/ids.dart';
 
 /// Manages anonymous ID, user ID, install ID, and user traits.
 class Identity {
@@ -53,41 +49,31 @@ class Identity {
       _anonymousId = prefs.getString(_keyAnonId);
     }
 
-    if (_anonymousId == null) {
-      _anonymousId = await _generateAnonId();
-      try {
-        await _secure.write(key: _keyAnonId, value: _anonymousId!);
-      } catch (_) {
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString(_keyAnonId, _anonymousId!);
-      }
+    // SDK < 2.1 derived this id from Android's Build.ID, which is the firmware
+    // fingerprint shared by every device on the same ROM, so unrelated users
+    // collapsed into one anonymous id. Replace any legacy (non-UUID) value once.
+    if (_anonymousId == null || !isValidAnonymousId(_anonymousId!)) {
+      _anonymousId = generateAnonymousId();
+      await _persistAnonId(_anonymousId!);
     }
   }
 
+  /// Anonymous ids are random UUID v4s: unique per install, never derived
+  /// from hardware or OS identifiers, rotated by [reset].
+  static String generateAnonymousId() => generateUuidV4();
+
+  static final RegExp _uuidV4 = RegExp(
+      r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$');
+
   @visibleForTesting
-  static String computeAnonIdHash(String deviceId, String packageName) {
-    final input = '$deviceId$packageName';
-    final hash = sha256.convert(utf8.encode(input));
-    return hash.toString().substring(0, 24);
-  }
+  static bool isValidAnonymousId(String id) => _uuidV4.hasMatch(id);
 
-  Future<String> _generateAnonId() async {
+  Future<void> _persistAnonId(String id) async {
     try {
-      final packageInfo = await PackageInfo.fromPlatform();
-      String deviceId = 'unknown';
-
-      if (defaultTargetPlatform == TargetPlatform.android) {
-        final info = await DeviceInfoPlugin().androidInfo;
-        deviceId = info.id;
-      } else if (defaultTargetPlatform == TargetPlatform.iOS) {
-        final info = await DeviceInfoPlugin().iosInfo;
-        deviceId = info.identifierForVendor ?? 'unknown';
-      }
-
-      return computeAnonIdHash(deviceId, packageInfo.packageName);
-    } catch (e) {
-      UnilitixLogger.w('Failed to generate anon ID — using fallback');
-      return DateTime.now().millisecondsSinceEpoch.toRadixString(16);
+      await _secure.write(key: _keyAnonId, value: id);
+    } catch (_) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_keyAnonId, id);
     }
   }
 
@@ -126,12 +112,8 @@ class Identity {
       await prefs.remove(_keyUserId);
       await prefs.remove(_keyAnonId);
     }
-    _anonymousId = await _generateAnonId();
-    try {
-      await _secure.write(key: _keyAnonId, value: _anonymousId!);
-    } catch (_) {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_keyAnonId, _anonymousId!);
-    }
+    // A fresh random id: the pre-logout and post-logout users are unlinkable.
+    _anonymousId = generateAnonymousId();
+    await _persistAnonId(_anonymousId!);
   }
 }

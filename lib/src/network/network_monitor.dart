@@ -71,10 +71,12 @@ class NetworkMonitor {
 
   static String _parseNativeType(String raw) {
     final r = raw.toUpperCase();
-    if (r.contains('WIFI'))      return 'WIFI';
-    if (r.contains('LTE') || r.contains('4G'))  return '4G';
+    if (r.contains('WIFI')) return 'WIFI';
+    if (r.contains('LTE') || r.contains('4G')) return '4G';
     if (r.contains('3G') || r.contains('HSPA')) return '3G';
-    if (r.contains('2G') || r.contains('EDGE') || r.contains('GPRS')) return '2G';
+    if (r.contains('2G') || r.contains('EDGE') || r.contains('GPRS')) {
+      return '2G';
+    }
     if (r.contains('CELLULAR') || r.contains('MOBILE')) return 'CELLULAR';
     if (r.contains('ETHERNET')) return 'ETHERNET';
     if (r.contains('NONE') || r.contains('OFFLINE')) return 'OFFLINE';

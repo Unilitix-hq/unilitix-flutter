@@ -3,6 +3,7 @@ import 'package:flutter/widgets.dart';
 
 import 'snapshot_buffer.dart';
 import '../core/sdk_scope.dart';
+import '../privacy/privacy_mask.dart';
 import '../logger/logger.dart';
 import '../util/json_util.dart';
 
@@ -46,15 +47,28 @@ const Set<String> _kRenderableTypes = {
 
 /// Input types to mask
 const Set<String> _kInputTypes = {
-  'TextField', 'TextFormField', 'EditableText', 'CupertinoTextField',
+  'TextField',
+  'TextFormField',
+  'EditableText',
+  'CupertinoTextField',
 };
 
 /// Pure layout nodes — localToGlobal is skipped for these types.
 /// They have no meaningful screen position independent of their children.
 const Set<String> _kSkipPositionTypes = {
-  'Padding', 'Align', 'Center', 'Column', 'Row', 'Stack',
-  'Flex', 'Wrap', 'Expanded', 'Flexible', 'SizedBox',
-  'ConstrainedBox', 'FractionallySizedBox',
+  'Padding',
+  'Align',
+  'Center',
+  'Column',
+  'Row',
+  'Stack',
+  'Flex',
+  'Wrap',
+  'Expanded',
+  'Flexible',
+  'SizedBox',
+  'ConstrainedBox',
+  'FractionallySizedBox',
 };
 
 class SnapshotCapture with WidgetsBindingObserver {
@@ -62,22 +76,37 @@ class SnapshotCapture with WidgetsBindingObserver {
   final int intervalMs;
   final bool maskInputs;
 
+  /// Redact all text (length-preserving). Default on; see [UnilitixConfig].
+  final bool maskAllText;
+
+  /// Mark image nodes as masked.
+  final bool maskImages;
+
+  /// Notified when the structural hash of the tree changes between captures,
+  /// so screenshot capture can take a frame only when the UI actually moved.
+  void Function()? onChanged;
+
   int _ordinal = 0;
   Timer? _timer;
   bool _capturing = false;
   bool _active = false;
+  int _lastHash = 0;
+  int _hash = 0;
 
   SnapshotCapture({
     required this.buffer,
     required this.intervalMs,
     required this.maskInputs,
+    this.maskAllText = true,
+    this.maskImages = false,
   });
 
   void start() {
     _active = true;
     WidgetsBinding.instance.addObserver(this);
     final clamped = intervalMs.clamp(1000, 60000);
-    _timer = Timer.periodic(Duration(milliseconds: clamped), (_) => _scheduledCapture());
+    _timer = Timer.periodic(
+        Duration(milliseconds: clamped), (_) => _scheduledCapture());
   }
 
   void stop() {
@@ -115,10 +144,17 @@ class SnapshotCapture with WidgetsBindingObserver {
       if (element == null) return;
 
       final children = <Map<String, dynamic>>[];
+      _hash = 17;
       // Fix 3: async traversal yields between top-level subtrees.
       await _visitElementAsync(element, children);
 
       if (children.isEmpty) return;
+
+      // Identical tree to the previous capture: nothing to add. Replays
+      // interpolate across the gap, and the session stays within its caps.
+      if (_hash == _lastHash) return;
+      _lastHash = _hash;
+      onChanged?.call();
 
       final view = WidgetsBinding.instance.platformDispatcher.views.first;
       final w = (view.physicalSize.width / view.devicePixelRatio).round();
@@ -223,28 +259,52 @@ class SnapshotCapture with WidgetsBindingObserver {
       if (offset != null) 'x': offset.dx.round(),
       if (offset != null) 'y': offset.dy.round(),
     };
+    _mix(type.hashCode);
+    if (size != null) _mix(size.width.round() * 7919 + size.height.round());
+    if (offset != null) _mix(offset.dx.round() * 7919 + offset.dy.round());
 
     final widget = element.widget;
+    String? text;
     if (widget is Text && widget.data != null) {
-      node['text'] = widget.data;
+      text = widget.data;
     } else if (widget is Text && widget.textSpan != null) {
-      node['text'] = widget.textSpan!.toPlainText();
+      text = widget.textSpan!.toPlainText();
+    } else if (widget is RichText) {
+      text = widget.text.toPlainText();
+    }
+    if (text != null) {
+      // Default is to redact: the replay keeps word shapes and lengths for
+      // layout fidelity but never carries the characters themselves.
+      node['text'] = maskAllText ? redactText(text) : text;
+      if (maskAllText) node['redacted'] = true;
+      _mix(text.hashCode);
     }
 
     if (maskInputs && _kInputTypes.contains(type)) {
       node['text'] = '[MASKED]';
     }
 
+    if (maskImages && PrivacyRegistry.imageTypes.contains(type)) {
+      node['masked'] = true;
+    }
+
     if (widget is Icon && widget.icon != null) {
       node['icon'] = widget.icon!.codePoint.toRadixString(16);
     }
 
-    if (type == 'ElevatedButton' || type == 'TextButton' || type == 'OutlinedButton') {
+    if (type == 'ElevatedButton' ||
+        type == 'TextButton' ||
+        type == 'OutlinedButton') {
       node['role'] = 'button';
     }
 
     if (type == 'Image') node['role'] = 'image';
 
     return node;
+  }
+
+  /// Order-sensitive structural hash; cheap enough to run on every node.
+  void _mix(int v) {
+    _hash = (_hash * 31 + v) & 0x3fffffff;
   }
 }

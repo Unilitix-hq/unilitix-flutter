@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.32.8'
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Check formatting
+        # The generated contract models are exempt; they are copied verbatim
+        # from the API repo.
+        run: |
+          dart format --output=none --set-exit-if-changed \
+            $(git ls-files 'lib/**.dart' 'test/**.dart' | grep -v '^lib/src/generated/')
+
+      - name: Analyze
+        run: dart analyze --fatal-infos --fatal-warnings
+
+      - name: Tests
+        run: flutter test --coverage
+
+      - name: Dry-run publish
+        # Catches pubspec/README problems before a tag triggers publish.yml.
+        run: dart pub publish --dry-run
+        continue-on-error: true
+
+  android-build:
+    runs-on: ubuntu-latest
+    needs: analyze-and-test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.32.8'
+          channel: stable
+          cache: true
+      - name: Build example APK (exercises the Kotlin plugin)
+        working-directory: example
+        run: |
+          flutter pub get
+          flutter build apk --debug
+
+  ios-build:
+    runs-on: macos-14
+    needs: analyze-and-test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.32.8'
+          channel: stable
+          cache: true
+      - name: Build example for iOS simulator (compiles the Swift plugin)
+        working-directory: example
+        run: |
+          flutter pub get
+          flutter build ios --simulator --no-codesign

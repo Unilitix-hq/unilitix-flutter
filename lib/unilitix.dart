@@ -17,7 +17,7 @@
 /// ```
 library unilitix;
 
-import 'dart:async' show unawaited;
+import 'dart:async' show Timer, unawaited;
 import 'dart:convert' show jsonDecode, jsonEncode;
 
 import 'package:flutter/widgets.dart';
@@ -238,10 +238,12 @@ class Unilitix {
               // Overwrite the crash stub with the final payload (includes endedAt,
               // durationMs, crashed: false). Survives as a recovery record if the
               // flush below fails; deleted by flushOnSessionEnd on success.
-              await _database.savePendingSession(session.id, jsonEncode(payload));
+              await _database.savePendingSession(
+                  session.id, jsonEncode(payload));
             }
           } catch (e) {
-            UnilitixLogger.w('Failed to update pending session stub on end: $e');
+            UnilitixLogger.w(
+                'Failed to update pending session stub on end: $e');
           }
           await _flushScheduler.flushOnSessionEnd(session);
         }());
@@ -276,6 +278,10 @@ class Unilitix {
       maxScreenshots: effectiveConfig.maxScreenshotsPerSession,
       maxWidth: effectiveConfig.screenshotMaxWidth,
       quality: effectiveConfig.screenshotQuality,
+      maskScreenshots: effectiveConfig.maskScreenshots,
+      maskImages: effectiveConfig.maskImages,
+      maxPerMinute: effectiveConfig.maxScreenshotsPerMinute,
+      heartbeatMs: effectiveConfig.screenshotHeartbeatMs,
       onCapture: (bytes, screenName, ordinal, w, h, capturedAt) async {
         final sessionId = _sessionManager.currentSession?.id ?? '';
         await _database.insertScreenshot(PendingScreenshot(
@@ -296,15 +302,30 @@ class Unilitix {
       buffer: _snapshotBuffer,
       intervalMs: effectiveConfig.snapshotIntervalMs,
       maskInputs: effectiveConfig.maskInputs,
+      maskAllText: effectiveConfig.maskAllText,
+      maskImages: effectiveConfig.maskImages,
     );
+    // A structural change in the widget tree is what makes a screenshot worth
+    // taking; taps and navigation mark it dirty directly (below).
+    _snapshotCapture.onChanged = () => _screenshotCapture.markDirty();
 
     _crashTracker = CrashTracker(
       onCrashEvent: (event) {
         _sessionManager.currentSession?.crashed = true;
+        _attachAndPersist(event); // durable before anything else happens
         _eventBuffer.emit(event);
-        // Do NOT call flush() here — it runs inside the zone error handler and
-        // any network error from flush() re-enters the zone, creating infinite
-        // recursion. The periodic flush timer picks up the crash event instead.
+        // The upload is scheduled on a fresh timer tick rather than awaited here:
+        // this callback runs inside the zone error handler, and an exception
+        // thrown synchronously from flush() would re-enter it. flushCrash()
+        // swallows its own errors and is bounded by a timeout, so the worst
+        // case is that the WAL copy is uploaded on the next launch instead.
+        Timer.run(() {
+          _flushScheduler.flushCrash().catchError((_) {});
+        });
+      },
+      onExceptionEvent: (event) {
+        // Non-fatal: recorded, never marks the session crashed, no urgent flush.
+        _emitEvent(event);
       },
       breadcrumbs: _breadcrumbs,
       database: _database,
@@ -315,6 +336,7 @@ class Unilitix {
     SdkScope.onTap = _onTap;
     SdkScope.onObserverConnected = _markObserverConnected;
     SdkScope.onScroll = (screen, dx, dy) {
+      _screenshotCapture.markDirty();
       _emitEvent(UnilitixEvent(
         type: EventTypes.scroll,
         screen: screen,
@@ -326,7 +348,15 @@ class Unilitix {
     _sessionManager.start();
     if (effectiveConfig.autoTrackCrashes) _crashTracker.install();
     await _crashTracker.logPendingCrashesIfAny();
+    // A native crash (JVM exception, NSException, fatal signal) from the last
+    // process is reported now as a fatal CRASH against the new session.
+    unawaited(_crashTracker.reportNativeCrashIfAny());
     _flushScheduler.start();
+    // Events written to the write-ahead log by a previous process that never
+    // flushed them become retry batches first, then session stubs are handled.
+    unawaited(_database.recoverWalToPending().then((n) {
+      if (n > 0) UnilitixLogger.d('Recovered $n unflushed events from WAL');
+    }));
     unawaited(_recoverPendingSessions());
     // Replay capture only runs with consent; a user who opted out in a previous
     // launch stays opted out until optIn() is called.
@@ -513,9 +543,8 @@ class Unilitix {
           final payload = jsonDecode(raw) as Map<String, dynamic>;
 
           final startedAtStr = payload['startedAt'] as String?;
-          final startedAt = startedAtStr != null
-              ? DateTime.tryParse(startedAtStr)
-              : null;
+          final startedAt =
+              startedAtStr != null ? DateTime.tryParse(startedAtStr) : null;
           final age = startedAt != null
               ? DateTime.now().difference(startedAt)
               : const Duration(days: 999);
@@ -563,6 +592,7 @@ class Unilitix {
   static void _onScreenChange(String name) {
     if (_optManager.isOptedOut) return;
     SdkScope.currentScreen = name;
+    _screenshotCapture.markDirty();
     _addBreadcrumb(EventTypes.navigate, name);
     _emitEvent(UnilitixEvent(
       type: EventTypes.navigate,
@@ -572,6 +602,7 @@ class Unilitix {
 
   static void _onTap(String screen, double x, double y) {
     if (_optManager.isOptedOut) return;
+    _screenshotCapture.markDirty();
     if (_config?.autoTrackTaps != true) return;
     bool isRage = false;
     if (_config?.autoTrackRageTaps == true) {
@@ -590,7 +621,24 @@ class Unilitix {
 
   static void _emitEvent(UnilitixEvent event) {
     if (_optManager.isOptedOut) return;
+    _attachAndPersist(event);
     _eventBuffer.emit(event);
+  }
+
+  /// Assigns the per-session sequence number and writes the event to the
+  /// on-device write-ahead log before it is buffered in memory, so a process
+  /// kill between now and the next flush loses nothing.
+  static void _attachAndPersist(UnilitixEvent event) {
+    final session =
+        _sessionManager.currentSession ?? _sessionManager.lastEndedSession;
+    if (session == null) return;
+    event.seq ??= session.takeSeq();
+    unawaited(_database.walInsert(
+      session.id,
+      event.id,
+      event.seq,
+      jsonEncode(event.toJson()),
+    ));
   }
 
   static void _addBreadcrumb(String type, String? screen) {
@@ -628,8 +676,7 @@ class Unilitix {
     final orientation =
         screenSize.width > screenSize.height ? 'landscape' : 'portrait';
 
-    UnilitixLogger.d(
-        'BUILD PAYLOAD deviceModel="${_deviceInfo.model}" '
+    UnilitixLogger.d('BUILD PAYLOAD deviceModel="${_deviceInfo.model}" '
         'manufacturer="${_deviceInfo.manufacturer}" '
         'appVersion="${_packageInfo.version}" '
         'buildNumber="${_packageInfo.buildNumber}"');

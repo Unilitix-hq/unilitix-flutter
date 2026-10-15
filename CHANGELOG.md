@@ -1,3 +1,53 @@
+## 2.0.74
+
+### Durability
+- Every event carries a client-generated UUID (`eventId`) and a per-session
+  sequence number (`seq`). Retried batches are de-duplicated by the server and
+  never billed twice.
+- Events are written to an on-device write-ahead queue the moment they are
+  emitted, before any network call, and recovered on the next launch.
+- Uploads are serialised — one in-flight request at a time — so a slow network
+  no longer stacks up parallel retries.
+- A crash event is flushed synchronously before the process exits.
+- Session timeout uses wall-clock time, so a device sleeping through the
+  timeout starts a fresh session on resume.
+
+### Privacy
+- `maskAllText` (default **on**): the content of every `Text` widget is
+  redacted in wireframe snapshots, preserving length for layout fidelity.
+- `UnilitixPrivate` now also masks **pixel screenshots**: the subtree's bounds
+  are painted over on the device before the frame is encoded
+  (`maskScreenshots`, default on).
+- `maskImages` (default off) blacks out `Image`, `RawImage`, `CircleAvatar`
+  and `FadeInImage` in screenshots and snapshots.
+- The anonymous id is a random UUID, never derived from device identifiers,
+  and `reset()` rotates it.
+- `optOut()` stops replay capture, discards buffered data, purges the
+  on-device queue and gates every upload path.
+
+### Performance
+- Screenshots are encoded natively off the main thread (Android and iOS) and
+  captured on change or navigation rather than on a fixed timer, with
+  `maxScreenshotsPerMinute` (20) and `screenshotHeartbeatMs` (10 s) as the
+  new tuning knobs.
+
+### Crash reporting
+- Native uncaught-exception handlers on Android (`Thread` default handler) and
+  iOS (signal handlers) record a fatal `CRASH` on the next launch.
+- Caught Flutter errors are reported as non-fatal `EXCEPTION` events; crash
+  events now carry `fatal` and `title` so the dashboard groups them correctly.
+
+### Contract
+- `lib/src/generated/ingest_models.dart` is generated from the API's OpenAPI
+  contract; `test/contract_test.dart` fails if the SDK ever sends a field the
+  server does not declare.
+- Fixed: screenshot confirmation now sends screen name, viewport, byte size
+  and capture time, so replay frames are labelled (previously only the
+  ordinal was sent and the server ignored it).
+
+### Example app
+- iOS deployment target raised to 13.0.
+
 ## 2.0.73
 
 - fix: screenshot uploads now processed in batches of 3 instead of all at once — fixes connection saturation causing request timeouts and white frames in session replay on heavy sessions

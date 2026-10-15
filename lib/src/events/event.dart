@@ -1,3 +1,4 @@
+import '../util/ids.dart';
 import '../util/json_util.dart';
 import 'event_types.dart';
 
@@ -5,6 +6,14 @@ export 'event_types.dart';
 
 /// A single tracked event.
 class UnilitixEvent {
+  /// Client-generated UUID v4. Stable across retries so the server can
+  /// deduplicate; also the key of the on-device write-ahead row.
+  final String id;
+
+  /// Per-session capture order, assigned when the event is emitted. Null until
+  /// the SDK attaches the event to a session.
+  int? seq;
+
   final String type;
   final String? screen;
   final double? x;
@@ -18,7 +27,10 @@ class UnilitixEvent {
   double? cpuUsagePct;
   int? frameDrops;
 
-  // CRASH fields
+  // CRASH / EXCEPTION fields
+  /// True when the process could not continue (native crash, signal). Dart
+  /// errors are non-fatal: the app keeps running.
+  bool fatal = false;
   String? title;
   String? stackTrace;
   String? exceptionType;
@@ -34,11 +46,14 @@ class UnilitixEvent {
     this.x,
     this.y,
     Map<String, dynamic>? properties,
-  })  : properties = properties ?? {},
+  })  : id = generateUuidV4(),
+        properties = properties ?? {},
         timestamp = DateTime.now().millisecondsSinceEpoch;
 
   Map<String, dynamic> toJson() {
     final map = <String, dynamic>{
+      'eventId': id,
+      if (seq != null) 'seq': seq,
       'type': type,
       if (screen != null) 'screen': screen,
       if (x != null) 'x': x,
@@ -51,7 +66,8 @@ class UnilitixEvent {
       if (frameDrops != null) 'frameDrops': frameDrops,
     };
 
-    if (type == EventTypes.crash) {
+    if (type == EventTypes.crash || type == EventTypes.exception) {
+      map['fatal'] = fatal;
       if (title != null) map['title'] = title;
       if (stackTrace != null) map['stackTrace'] = stackTrace;
       if (exceptionType != null) map['exceptionType'] = exceptionType;

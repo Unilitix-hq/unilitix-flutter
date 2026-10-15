@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math' show min;
 
 import '../capture/snapshot_buffer.dart';
 import '../events/event_buffer.dart';
@@ -38,6 +37,23 @@ class FlushScheduler {
   Timer? _timer;
   bool _flushing = false;
   bool _disposed = false;
+
+  /// Serialises every event upload: periodic flush, [flushNow] from track(),
+  /// background drain and retries all go through this one gate, so at most one
+  /// events request is in flight and batches leave in capture order.
+  Future<void> _uploadGate = Future.value();
+
+  Future<T> _serialized<T>(Future<T> Function() work) {
+    final completer = Completer<T>();
+    _uploadGate = _uploadGate.then((_) async {
+      try {
+        completer.complete(await work());
+      } catch (e, st) {
+        completer.completeError(e, st);
+      }
+    });
+    return completer.future;
+  }
 
   /// Consent gate. When it returns true nothing leaves the device: every
   /// public flush entry point returns immediately without a network call.
@@ -111,6 +127,20 @@ class FlushScheduler {
   Future<void> flushEventsOnly() async {
     if (isOptedOut()) return;
     await _flushEvents();
+  }
+
+  /// Flush a crash as soon as it is recorded. The event is already in the
+  /// write-ahead log, so this is an opportunistic upload bounded by [timeout];
+  /// if the process dies first, the next launch recovers and uploads it.
+  Future<void> flushCrash(
+      {Duration timeout = const Duration(seconds: 3)}) async {
+    if (isOptedOut()) return;
+    try {
+      await _flushEvents().timeout(timeout);
+      await _retryPending(skipPurge: true, limit: 1).timeout(timeout);
+    } catch (_) {
+      // Timeout or transport error: the WAL and pending queue hold the event.
+    }
   }
 
   /// Full 4-stage flush on session end.
@@ -204,13 +234,16 @@ class FlushScheduler {
 
   // ── Stage 2: events ────────────────────────────────────────────────────────
 
-  Future<bool> _flushEvents() async {
+  Future<bool> _flushEvents() => _serialized(_flushEventsUnlocked);
+
+  Future<bool> _flushEventsUnlocked() async {
     final id = sessionManager.currentSession?.id ??
         sessionManager.lastEndedSession?.id;
     if (id == null) return false;
 
     final events = buffer.drain();
     if (events.isEmpty) return true;
+    final eventIds = events.map((e) => e.id).toList(growable: false);
 
     for (final event in events) {
       performanceMonitor.enrichEvent(event);
@@ -227,14 +260,28 @@ class FlushScheduler {
 
     final eventsJson = jsonEncode(events.map((e) => e.toJson()).toList());
 
-    if (networkMonitor.isOffline()) {
-      final queued = await _queueEventsForRetry(id, eventsJson, capturedOffline: true);
-      if (!queued) {
-        for (final event in events) { buffer.emit(event); }
-        UnilitixLogger.w('Failed to queue ${events.length} events for retry — restored to buffer');
-        return false;
+    // Once a batch is in the pending-retry table it is durable there, so its
+    // write-ahead rows can go. If queuing fails the events return to memory and
+    // their WAL rows stay as the only durable copy.
+    Future<bool> queueOrRestore({required bool capturedOffline}) async {
+      final queued = await _queueEventsForRetry(id, eventsJson,
+          capturedOffline: capturedOffline);
+      if (queued) {
+        await database.walDelete(eventIds);
+        return true;
       }
-      UnilitixLogger.d('Offline — queued ${events.length} events');
+      for (final event in events) {
+        buffer.emit(event);
+      }
+      UnilitixLogger.w(
+          'Failed to queue ${events.length} events for retry — restored to buffer');
+      return false;
+    }
+
+    if (networkMonitor.isOffline()) {
+      if (await queueOrRestore(capturedOffline: true)) {
+        UnilitixLogger.d('Offline — queued ${events.length} events');
+      }
       return false;
     }
 
@@ -244,23 +291,16 @@ class FlushScheduler {
         events: events.map((e) => e.toJson()).toList(),
       );
       if (ok) {
+        await database.walDelete(eventIds);
         UnilitixLogger.d('Flushed ${events.length} events');
         return true;
       }
-      final queued = await _queueEventsForRetry(id, eventsJson, capturedOffline: false);
-      if (!queued) {
-        for (final event in events) { buffer.emit(event); }
-        UnilitixLogger.w('Failed to queue ${events.length} events for retry — restored to buffer');
-        return false;
+      if (await queueOrRestore(capturedOffline: false)) {
+        UnilitixLogger.w('Event flush failed — queued for retry');
       }
-      UnilitixLogger.w('Event flush failed — queued for retry');
       return false;
     } catch (e, stack) {
-      final queued = await _queueEventsForRetry(id, eventsJson, capturedOffline: false);
-      if (!queued) {
-        for (final event in events) { buffer.emit(event); }
-        UnilitixLogger.w('Failed to queue ${events.length} events for retry — restored to buffer');
-      }
+      await queueOrRestore(capturedOffline: false);
       UnilitixLogger.e('Event flush failed', e, stack);
       return false;
     }
@@ -309,12 +349,18 @@ class FlushScheduler {
         UnilitixLogger.d('Flushed ${snapshots.length} snapshots');
         return true;
       }
-      for (final s in snapshots) { buf.add(s); }
-      UnilitixLogger.w('Snapshot flush rejected — re-queued ${snapshots.length}');
+      for (final s in snapshots) {
+        buf.add(s);
+      }
+      UnilitixLogger.w(
+          'Snapshot flush rejected — re-queued ${snapshots.length}');
       return false;
     } catch (e, stack) {
-      for (final s in snapshots) { buf.add(s); }
-      UnilitixLogger.e('Snapshot flush failed — re-queued ${snapshots.length}', e, stack);
+      for (final s in snapshots) {
+        buf.add(s);
+      }
+      UnilitixLogger.e(
+          'Snapshot flush failed — re-queued ${snapshots.length}', e, stack);
       return false;
     }
   }
@@ -348,7 +394,8 @@ class FlushScheduler {
         try {
           final matches = slots.where((s) => s.ordinal == screenshot.ordinal);
           if (matches.isEmpty) {
-            UnilitixLogger.w('No presigned slot for ordinal ${screenshot.ordinal} — skipping');
+            UnilitixLogger.w(
+                'No presigned slot for ordinal ${screenshot.ordinal} — skipping');
             return;
           }
           final slot = matches.first;
@@ -362,17 +409,19 @@ class FlushScheduler {
             UnilitixLogger.e(
               'Screenshot upload failed for ordinal ${screenshot.ordinal} '
               '— leaving in DB for retry',
-              null, null,
+              null,
+              null,
             );
             return; // skip confirm and delete, leave in DB
           }
 
-          await apiClient.confirmScreenshotUpload(id, screenshot.ordinal);
+          await apiClient.confirmScreenshotUpload(id, screenshot);
           await database.deleteScreenshotById(screenshot.id!);
         } catch (e, stack) {
           UnilitixLogger.e(
             'Screenshot upload error for ordinal ${screenshot.ordinal}',
-            e, stack,
+            e,
+            stack,
           );
           // leave in DB for retry — do NOT delete
         }
@@ -383,12 +432,13 @@ class FlushScheduler {
 
   // ── Retry ──────────────────────────────────────────────────────────────────
 
-  Future<void> _retryPending({bool skipPurge = false}) async {
+  Future<void> _retryPending({bool skipPurge = false, int limit = 20}) async {
     if (isOptedOut()) return;
-    final pending = await database.getOldestEvents(20);
-    for (var i = 0; i < pending.length; i += 5) {
-      final chunk = pending.sublist(i, min(i + 5, pending.length));
-      await Future.wait(chunk.map(_processBatch));
+    final pending = await database.getOldestEvents(limit);
+    // Strictly one batch in flight, oldest first: concurrent retries reorder
+    // events on the server and multiply load on a degraded link.
+    for (final p in pending) {
+      await _serialized(() => _processBatch(p));
     }
     if (!skipPurge) {
       await database.deleteEventsOlderThan(

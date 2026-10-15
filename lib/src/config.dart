@@ -40,6 +40,20 @@ class UnilitixConfig {
   /// Mask text input fields in snapshots and screenshots.
   final bool maskInputs;
 
+  /// Redact the content of every text widget in wireframe snapshots,
+  /// preserving length so layout fidelity is kept. On by default: balances,
+  /// names, phone numbers and OTPs are usually rendered as plain [Text].
+  /// Set to false only for apps that show no personal data on screen.
+  final bool maskAllText;
+
+  /// Black out image widgets (Image, RawImage, CircleAvatar, FadeInImage) in
+  /// screenshots and mark them masked in snapshots. Off by default.
+  final bool maskImages;
+
+  /// Paint an opaque box over every [UnilitixPrivate] subtree (and images when
+  /// [maskImages] is on) in pixel screenshots before they leave the device.
+  final bool maskScreenshots;
+
   /// Capture widget-tree snapshots.
   final bool captureSnapshots;
 
@@ -64,8 +78,17 @@ class UnilitixConfig {
   /// Only upload screenshots on WiFi.
   final bool uploadScreenshotsOnWifiOnly;
 
-  /// Maximum screenshots per session.
+  /// Hard cap on screenshots per session (safety net; capture is
+  /// change-driven so a normal session stays far below it).
   final int maxScreenshotsPerSession;
+
+  /// Rolling one-minute budget for screenshots, so a continuously redrawing
+  /// screen (ticker, animation) cannot flood the session.
+  final int maxScreenshotsPerMinute;
+
+  /// Take a frame at least this often while the screen is static, so long
+  /// idle screens still appear in replay.
+  final int screenshotHeartbeatMs;
 
   const UnilitixConfig({
     required this.apiKey,
@@ -79,15 +102,20 @@ class UnilitixConfig {
     this.sessionTimeoutSeconds = 1800,
     this.debug = false,
     this.maskInputs = true,
+    this.maskAllText = true,
+    this.maskImages = false,
+    this.maskScreenshots = true,
     this.captureSnapshots = true,
     this.snapshotIntervalMs = 1000,
-    this.maxSnapshotsPerSession = 200,
+    this.maxSnapshotsPerSession = 1500,
     this.captureScreenshots = true,
     this.screenshotIntervalMs = 1000,
     this.screenshotQuality = 30,
     this.screenshotMaxWidth = 480,
     this.uploadScreenshotsOnWifiOnly = true,
-    this.maxScreenshotsPerSession = 300,
+    this.maxScreenshotsPerSession = 1500,
+    this.maxScreenshotsPerMinute = 20,
+    this.screenshotHeartbeatMs = 10000,
   });
 
   UnilitixConfig copyWith({
@@ -102,6 +130,9 @@ class UnilitixConfig {
     int? sessionTimeoutSeconds,
     bool? debug,
     bool? maskInputs,
+    bool? maskAllText,
+    bool? maskImages,
+    bool? maskScreenshots,
     bool? captureSnapshots,
     int? snapshotIntervalMs,
     int? maxSnapshotsPerSession,
@@ -111,6 +142,8 @@ class UnilitixConfig {
     int? screenshotMaxWidth,
     bool? uploadScreenshotsOnWifiOnly,
     int? maxScreenshotsPerSession,
+    int? maxScreenshotsPerMinute,
+    int? screenshotHeartbeatMs,
   }) {
     return UnilitixConfig(
       apiKey: apiKey ?? this.apiKey,
@@ -121,18 +154,29 @@ class UnilitixConfig {
       flushIntervalSeconds: flushIntervalSeconds ?? this.flushIntervalSeconds,
       flushBatchSize: flushBatchSize ?? this.flushBatchSize,
       maxOfflineEvents: maxOfflineEvents ?? this.maxOfflineEvents,
-      sessionTimeoutSeconds: sessionTimeoutSeconds ?? this.sessionTimeoutSeconds,
+      sessionTimeoutSeconds:
+          sessionTimeoutSeconds ?? this.sessionTimeoutSeconds,
       debug: debug ?? this.debug,
       maskInputs: maskInputs ?? this.maskInputs,
+      maskAllText: maskAllText ?? this.maskAllText,
+      maskImages: maskImages ?? this.maskImages,
+      maskScreenshots: maskScreenshots ?? this.maskScreenshots,
       captureSnapshots: captureSnapshots ?? this.captureSnapshots,
       snapshotIntervalMs: snapshotIntervalMs ?? this.snapshotIntervalMs,
-      maxSnapshotsPerSession: maxSnapshotsPerSession ?? this.maxSnapshotsPerSession,
+      maxSnapshotsPerSession:
+          maxSnapshotsPerSession ?? this.maxSnapshotsPerSession,
       captureScreenshots: captureScreenshots ?? this.captureScreenshots,
       screenshotIntervalMs: screenshotIntervalMs ?? this.screenshotIntervalMs,
       screenshotQuality: screenshotQuality ?? this.screenshotQuality,
       screenshotMaxWidth: screenshotMaxWidth ?? this.screenshotMaxWidth,
-      uploadScreenshotsOnWifiOnly: uploadScreenshotsOnWifiOnly ?? this.uploadScreenshotsOnWifiOnly,
-      maxScreenshotsPerSession: maxScreenshotsPerSession ?? this.maxScreenshotsPerSession,
+      uploadScreenshotsOnWifiOnly:
+          uploadScreenshotsOnWifiOnly ?? this.uploadScreenshotsOnWifiOnly,
+      maxScreenshotsPerSession:
+          maxScreenshotsPerSession ?? this.maxScreenshotsPerSession,
+      maxScreenshotsPerMinute:
+          maxScreenshotsPerMinute ?? this.maxScreenshotsPerMinute,
+      screenshotHeartbeatMs:
+          screenshotHeartbeatMs ?? this.screenshotHeartbeatMs,
     );
   }
 }

@@ -69,7 +69,8 @@ class SessionManager with WidgetsBindingObserver {
   void resetSession() {
     _backgroundTimer?.cancel();
     _backgroundTimer = null;
-    _backgroundedAt = null; // clear background state so new session starts clean
+    _backgroundedAt =
+        null; // clear background state so new session starts clean
     if (_currentSession != null) _endCurrentSession();
     _startNewSession();
   }
@@ -147,17 +148,20 @@ class SessionManager with WidgetsBindingObserver {
         final bg = _backgroundedAt!;
         _backgroundedAt = null;
 
-        if (_backgroundTimer?.isActive == true) {
-          // Within timeout — cancel the timer and continue the same session.
-          _backgroundTimer?.cancel();
-          _backgroundTimer = null;
+        _backgroundTimer?.cancel();
+        _backgroundTimer = null;
+
+        // Decide on wall-clock time, not on whether the timer fired: iOS (and
+        // Android in Doze) suspend the isolate, so a Dart Timer may still look
+        // "active" hours later and would otherwise keep one session open forever.
+        final awayMs = DateTime.now().difference(bg).inMilliseconds;
+        final expired =
+            _currentSession == null || awayMs >= sessionTimeoutSeconds * 1000;
+        if (!expired) {
           _lastForegroundedAt = DateTime.now();
-          _currentSession?.backgroundTimeMs +=
-              DateTime.now().millisecondsSinceEpoch -
-                  bg.millisecondsSinceEpoch;
+          _currentSession?.backgroundTimeMs += awayMs;
         } else {
-          // Timer already fired or was never started — start a fresh session.
-          _backgroundTimer = null;
+          if (_currentSession != null) _endCurrentSession();
           _startNewSession();
         }
         break;

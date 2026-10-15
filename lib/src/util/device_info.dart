@@ -28,8 +28,7 @@ class DeviceInfoCollector {
         model = info.utsname.machine;
         osVersion = info.systemVersion;
       }
-      UnilitixLogger.d(
-          'DeviceInfo collected: manufacturer="$manufacturer" '
+      UnilitixLogger.d('DeviceInfo collected: manufacturer="$manufacturer" '
           'model="$model" osVersion="$osVersion"');
     } catch (e, stack) {
       UnilitixLogger.e('DeviceInfo collection failed', e, stack);

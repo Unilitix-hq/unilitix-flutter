@@ -40,7 +40,10 @@ class RageTapDetector {
   }
 
   List<_Tap> _findCluster(String screen, double x, double y) {
-    return _taps.where((t) => t.screen == screen && _distance(t.x, t.y, x, y) <= _radiusPx).toList();
+    return _taps
+        .where(
+            (t) => t.screen == screen && _distance(t.x, t.y, x, y) <= _radiusPx)
+        .toList();
   }
 
   double _distance(double ax, double ay, double bx, double by) {

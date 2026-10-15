@@ -34,13 +34,15 @@ void main() {
       expect(c.maskInputs, true);
       expect(c.captureSnapshots, true);
       expect(c.snapshotIntervalMs, 1000);
-      expect(c.maxSnapshotsPerSession, 200);
+      expect(c.maxSnapshotsPerSession, 1500);
       expect(c.captureScreenshots, true);
       expect(c.screenshotIntervalMs, 1000);
       expect(c.screenshotQuality, 30);
       expect(c.screenshotMaxWidth, 480);
       expect(c.uploadScreenshotsOnWifiOnly, true);
-      expect(c.maxScreenshotsPerSession, 300);
+      expect(c.maxScreenshotsPerSession, 1500);
+      expect(c.maxScreenshotsPerMinute, 20);
+      expect(c.screenshotHeartbeatMs, 10000);
     });
 
     test('custom values override defaults', () {
@@ -114,12 +116,13 @@ void main() {
 
     test('SESSION_START: type correct', () {
       final e = UnilitixEvent(
-          type: EventTypes.sessionStart,
-          properties: {'sessionId': 'abc-123'});
+          type: EventTypes.sessionStart, properties: {'sessionId': 'abc-123'});
       expect(e.toJson()['type'], 'SESSION_START');
     });
 
-    test('CRASH: serializes exceptionType, exceptionMessage, stackTrace, breadcrumbs', () {
+    test(
+        'CRASH: serializes exceptionType, exceptionMessage, stackTrace, breadcrumbs',
+        () {
       final e = UnilitixEvent(type: EventTypes.crash, screen: '/home')
         ..exceptionType = 'NullCheckFailure'
         ..exceptionMessage = 'Null check operator used on a null value'
@@ -136,8 +139,7 @@ void main() {
     });
 
     test('CRASH: does not include metadata or properties keys', () {
-      final e = UnilitixEvent(type: EventTypes.crash)
-        ..exceptionType = 'Error';
+      final e = UnilitixEvent(type: EventTypes.crash)..exceptionType = 'Error';
       final j = e.toJson();
       expect(j.containsKey('metadata'), false);
       expect(j.containsKey('properties'), false);
@@ -204,8 +206,8 @@ void main() {
     test('timestamp is RFC3339 UTC string', () {
       final e = UnilitixEvent(type: EventTypes.tap);
       final ts = e.toJson()['timestamp'] as String;
-      expect(ts,
-          matches(RegExp(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z$')));
+      expect(
+          ts, matches(RegExp(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z$')));
     });
 
     test('toMap() equals toJson()', () {
@@ -296,16 +298,23 @@ void main() {
 
   group('RetryPolicy', () {
     test('maxRetries is 5', () => expect(RetryPolicy.maxRetries, 5));
-    test('maxDelayMs is 5 minutes (300000)', () => expect(RetryPolicy.maxDelayMs, 300000));
+    test('maxDelayMs is 5 minutes (300000)',
+        () => expect(RetryPolicy.maxDelayMs, 300000));
 
     // ── delayFor ──────────────────────────────────────────────────────────────
 
-    test('exponential backoff: attempt 0→~1s, 1→~2s, 2→~4s, 3→~8s (±20% jitter)', () {
+    test(
+        'exponential backoff: attempt 0→~1s, 1→~2s, 2→~4s, 3→~8s (±20% jitter)',
+        () {
       // base * [1.0, 1.2) due to jitter
-      expect(RetryPolicy.delayFor(0).inMilliseconds, inInclusiveRange(1000, 1199));
-      expect(RetryPolicy.delayFor(1).inMilliseconds, inInclusiveRange(2000, 2399));
-      expect(RetryPolicy.delayFor(2).inMilliseconds, inInclusiveRange(4000, 4799));
-      expect(RetryPolicy.delayFor(3).inMilliseconds, inInclusiveRange(8000, 9599));
+      expect(
+          RetryPolicy.delayFor(0).inMilliseconds, inInclusiveRange(1000, 1199));
+      expect(
+          RetryPolicy.delayFor(1).inMilliseconds, inInclusiveRange(2000, 2399));
+      expect(
+          RetryPolicy.delayFor(2).inMilliseconds, inInclusiveRange(4000, 4799));
+      expect(
+          RetryPolicy.delayFor(3).inMilliseconds, inInclusiveRange(8000, 9599));
     });
 
     test('retryAfterSeconds is honoured when provided', () {
@@ -330,7 +339,8 @@ void main() {
     });
 
     test('negative attempt is clamped to 0 — returns ~1s (±20% jitter)', () {
-      expect(RetryPolicy.delayFor(-1).inMilliseconds, inInclusiveRange(1000, 1199));
+      expect(RetryPolicy.delayFor(-1).inMilliseconds,
+          inInclusiveRange(1000, 1199));
     });
 
     // ── shouldRetry ───────────────────────────────────────────────────────────
@@ -487,7 +497,8 @@ void main() {
       expect(count, 1);
     });
 
-    test('onFlushNeeded fires again after drain when batchSize reached again', () {
+    test('onFlushNeeded fires again after drain when batchSize reached again',
+        () {
       var count = 0;
       final buf = EventBuffer(batchSize: 2, onFlushNeeded: () => count++);
       buf.emit(UnilitixEvent(type: EventTypes.tap));
@@ -646,30 +657,20 @@ void main() {
     });
   });
 
-  // ── Identity.computeAnonIdHash ─────────────────────────────────────────────
+  // ── Identity anonymous id ──────────────────────────────────────────────────
 
-  group('Identity.computeAnonIdHash', () {
-    test('same inputs produce same hash', () {
-      final id1 = Identity.computeAnonIdHash('device123', 'com.example.app');
-      final id2 = Identity.computeAnonIdHash('device123', 'com.example.app');
-      expect(id1, equals(id2));
+  group('Identity anonymous id', () {
+    test('is a random UUID v4, unique per call', () {
+      final a = Identity.generateAnonymousId();
+      final b = Identity.generateAnonymousId();
+      expect(Identity.isValidAnonymousId(a), isTrue);
+      expect(Identity.isValidAnonymousId(b), isTrue);
+      expect(a, isNot(equals(b)));
     });
 
-    test('different device IDs produce different hashes', () {
-      final id1 = Identity.computeAnonIdHash('device123', 'com.example.app');
-      final id2 = Identity.computeAnonIdHash('device456', 'com.example.app');
-      expect(id1, isNot(equals(id2)));
-    });
-
-    test('different package names produce different hashes', () {
-      final id1 = Identity.computeAnonIdHash('device123', 'com.example.app');
-      final id2 = Identity.computeAnonIdHash('device123', 'com.other.app');
-      expect(id1, isNot(equals(id2)));
-    });
-
-    test('hash is 24 characters', () {
-      final id = Identity.computeAnonIdHash('device123', 'com.example.app');
-      expect(id.length, 24);
+    test('legacy 24-char device hashes are detected for migration', () {
+      expect(Identity.isValidAnonymousId('0123456789abcdef01234567'), isFalse);
+      expect(Identity.isValidAnonymousId('unknown'), isFalse);
     });
   });
 
@@ -687,7 +688,8 @@ void main() {
         onSessionEnd: (_) {},
         resetScreenshotOrdinal: () {},
       );
-      manager.resetSession(); // establish initial session without WidgetsBinding
+      manager
+          .resetSession(); // establish initial session without WidgetsBinding
     });
 
     test('isBackgrounded is false after reset', () {
@@ -706,29 +708,63 @@ void main() {
       manager.resetSession();
       expect(manager.currentSession!.id, isNot(equals(idBefore)));
     });
+
+    test('resume within the timeout continues the same session (wall clock)',
+        () {
+      final idBefore = manager.currentSession!.id;
+      manager.didChangeAppLifecycleState(AppLifecycleState.paused);
+      manager.didChangeAppLifecycleState(AppLifecycleState.resumed);
+      expect(manager.currentSession!.id, idBefore);
+      expect(started.length, 1);
+    });
+
+    test(
+        'resume after the timeout starts a new session even if the timer never fired',
+        () async {
+      // A 0-second timeout stands in for "the isolate was suspended for hours":
+      // the decision must come from elapsed wall-clock time, not from the timer.
+      final short = SessionManager(
+        sessionTimeoutSeconds: 0,
+        onSessionStart: started.add,
+        onSessionEnd: (_) {},
+        resetScreenshotOrdinal: () {},
+      );
+      short.resetSession();
+      final idBefore = short.currentSession!.id;
+      short.didChangeAppLifecycleState(AppLifecycleState.paused);
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      short.didChangeAppLifecycleState(AppLifecycleState.resumed);
+      expect(short.currentSession!.id, isNot(equals(idBefore)));
+    });
   });
 
   // ── UnilitixObserver.resolveName ───────────────────────────────────────────
 
   group('UnilitixObserver.resolveName', () {
     test('named route returns name as-is', () {
-      expect(UnilitixObserver.resolveName('/home', 'MaterialPageRoute'), '/home');
+      expect(
+          UnilitixObserver.resolveName('/home', 'MaterialPageRoute'), '/home');
     });
 
     test('empty name falls back to type mapping', () {
-      expect(UnilitixObserver.resolveName('', '_DialogRoute<dynamic>'), 'Dialog');
+      expect(
+          UnilitixObserver.resolveName('', '_DialogRoute<dynamic>'), 'Dialog');
     });
 
     test('null name falls back to type mapping', () {
-      expect(UnilitixObserver.resolveName(null, '_ModalBottomSheetRoute<dynamic>'), 'BottomSheet');
+      expect(
+          UnilitixObserver.resolveName(null, '_ModalBottomSheetRoute<dynamic>'),
+          'BottomSheet');
     });
 
     test('popup menu route maps to PopupMenu', () {
-      expect(UnilitixObserver.resolveName(null, '_PopupMenuRoute<dynamic>'), 'PopupMenu');
+      expect(UnilitixObserver.resolveName(null, '_PopupMenuRoute<dynamic>'),
+          'PopupMenu');
     });
 
     test('unknown unnamed type returns the type string', () {
-      expect(UnilitixObserver.resolveName(null, 'CustomRoute<void>'), 'CustomRoute<void>');
+      expect(UnilitixObserver.resolveName(null, 'CustomRoute<void>'),
+          'CustomRoute<void>');
     });
   });
 }

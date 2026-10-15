@@ -14,12 +14,15 @@ class UnilitixPluginWeb {
     );
     channel.setMethodCallHandler((call) async {
       switch (call.method) {
-        case 'getCarrierName': return '';
-        case 'getBatteryLevel': return -1.0;
-        default: throw PlatformException(
-          code: 'Unimplemented',
-          message: '${call.method} not implemented on web',
-        );
+        case 'getCarrierName':
+          return '';
+        case 'getBatteryLevel':
+          return -1.0;
+        default:
+          throw PlatformException(
+            code: 'Unimplemented',
+            message: '${call.method} not implemented on web',
+          );
       }
     });
   }

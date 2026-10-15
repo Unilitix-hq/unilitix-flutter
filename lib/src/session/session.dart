@@ -1,20 +1,16 @@
-import 'dart:math';
-
-String _uuid() {
-  final rand = Random.secure();
-  final bytes = List<int>.generate(16, (_) => rand.nextInt(256));
-  bytes[6] = (bytes[6] & 0x0f) | 0x40;
-  bytes[8] = (bytes[8] & 0x3f) | 0x80;
-  String hex(int b) => b.toRadixString(16).padLeft(2, '0');
-  final h = bytes.map(hex).join();
-  return '${h.substring(0, 8)}-${h.substring(8, 12)}-'
-      '${h.substring(12, 16)}-${h.substring(16, 20)}-${h.substring(20)}';
-}
+import '../util/ids.dart';
 
 /// A single user session.
 class Session {
   final String id;
   final int startedAt;
+
+  int _nextSeq = 0;
+
+  /// Returns the next per-session capture sequence number (0-based). The
+  /// server uses it to restore capture order when batches arrive out of order
+  /// and, together with the event id, to deduplicate retried uploads.
+  int takeSeq() => _nextSeq++;
   int foregroundTimeMs = 0;
   int backgroundTimeMs = 0;
   bool crashed = false;
@@ -24,7 +20,7 @@ class Session {
   int? endedAt;
 
   Session()
-      : id = _uuid(),
+      : id = generateUuidV4(),
         startedAt = DateTime.now().millisecondsSinceEpoch;
 
   int get durationMs =>
