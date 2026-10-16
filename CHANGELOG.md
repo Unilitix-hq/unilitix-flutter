@@ -1,3 +1,15 @@
+## 2.0.75
+
+### Fixed
+- **iOS: the plugin did not compile** (since 2.0.50). `UnilitixFlutterPlugin.swift`
+  referenced two CoreTelephony symbols that do not exist
+  (`CTTelephonyNetworkInfo.serviceOrder`, `CTRadioAccessTechnologyHSPA`), so any
+  app building for iOS failed with a Swift compiler error. Carrier lookup now uses
+  `dataServiceIdentifier` (the SIM carrying data) with a fallback to any SIM, and
+  the 3G radio set is HSDPA/HSUPA/WCDMA/EVDO/eHRPD.
+- CI now compiles the iOS plugin on macOS (`ios-build` job) so this cannot
+  regress silently; the publish workflow is unchanged.
+
 ## 2.0.74
 
 ### Durability
