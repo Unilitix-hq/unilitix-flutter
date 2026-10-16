@@ -5,8 +5,10 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   // Pass the key at build time, never commit it:
   //   flutter run --dart-define=UNILITIX_API_KEY=<your key>
-  const apiKey = String.fromEnvironment('UNILITIX_API_KEY', defaultValue: 'YOUR_API_KEY');
-  await Unilitix.init(apiKey, config: const UnilitixConfig(apiKey: apiKey, debug: true));
+  const apiKey =
+      String.fromEnvironment('UNILITIX_API_KEY', defaultValue: 'YOUR_API_KEY');
+  await Unilitix.init(apiKey,
+      config: const UnilitixConfig(apiKey: apiKey, debug: true));
   Unilitix.runApp(const UnilitixWidget(child: MyApp()));
 }
 

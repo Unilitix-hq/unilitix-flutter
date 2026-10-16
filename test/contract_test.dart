@@ -8,20 +8,24 @@ import 'package:unilitix/src/generated/ingest_models.dart';
 import 'package:unilitix/src/storage/pending_screenshot.dart';
 import 'dart:typed_data';
 
-void expectKnownKeys(Map<String, dynamic> wire, Set<String> known, String what) {
+void expectKnownKeys(
+    Map<String, dynamic> wire, Set<String> known, String what) {
   final unknown = wire.keys.where((k) => !known.contains(k)).toList();
   expect(unknown, isEmpty,
-      reason: '$what sends keys the server contract does not declare: $unknown');
+      reason:
+          '$what sends keys the server contract does not declare: $unknown');
 }
 
 void main() {
   group('ingest contract', () {
     test('tap, navigation and custom events only use declared fields', () {
-      final tap = UnilitixEvent(type: EventTypes.tap, screen: '/home', x: 1, y: 2)
-        ..seq = 0
-        ..memoryUsageMb = 12.5
-        ..frameDrops = 1;
-      final nav = UnilitixEvent(type: EventTypes.navigate, screen: '/profile')..seq = 1;
+      final tap =
+          UnilitixEvent(type: EventTypes.tap, screen: '/home', x: 1, y: 2)
+            ..seq = 0
+            ..memoryUsageMb = 12.5
+            ..frameDrops = 1;
+      final nav = UnilitixEvent(type: EventTypes.navigate, screen: '/profile')
+        ..seq = 1;
       final custom = UnilitixEvent(
           type: EventTypes.custom, screen: '/cart', properties: {'sku': 'A1'})
         ..eventName = 'add_to_cart'
@@ -36,7 +40,8 @@ void main() {
       }
     });
 
-    test('crash and exception events carry title and fatal in declared fields', () {
+    test('crash and exception events carry title and fatal in declared fields',
+        () {
       final crash = UnilitixEvent(type: EventTypes.crash, screen: '/pay')
         ..fatal = true
         ..title = 'SIGSEGV'
@@ -60,7 +65,8 @@ void main() {
     });
 
     test('events batch matches IngestEventsRequest', () {
-      final e = UnilitixEvent(type: EventTypes.tap, screen: '/home', x: 0, y: 0);
+      final e =
+          UnilitixEvent(type: EventTypes.tap, screen: '/home', x: 0, y: 0);
       final body = {
         'sessionId': 'sess-1',
         'events': [e.toJson()],
@@ -74,17 +80,40 @@ void main() {
     test('session payload keys are all declared on IngestSessionRequest', () {
       // Mirrors the keys Unilitix._buildSessionPayload emits.
       final payload = <String, dynamic>{
-        'anonymousId': 'a', 'userId': 'u', 'deviceType': 'phone',
-        'manufacturer': 'm', 'deviceModel': 'd', 'os': 'Android', 'osVersion': '14',
-        'screenWidth': 1, 'screenHeight': 2, 'screenDensity': 2.0,
-        'appVersion': '1', 'buildNumber': '2', 'packageName': 'p', 'sdkVersion': '2.0.74',
-        'networkType': 'WIFI', 'carrierName': '', 'orientation': 'portrait',
-        'locale': 'en', 'timezone': 'UTC', 'installId': 'i', 'batteryLevel': 0.5,
-        'totalStorageGb': 64.0, 'startedAt': '2026-01-01T00:00:00.000Z',
-        'endedAt': '2026-01-01T00:01:00.000Z', 'durationMs': 60000,
-        'foregroundTimeMs': 1, 'backgroundTimeMs': 0, 'crashed': false,
-        'capturedOffline': false, 'offlineEventCount': 0, 'onlineEventCount': 3,
-        'networkTransitions': 0, 'sessionId': 's', 'sessionData': {'plan': 'pro'},
+        'anonymousId': 'a',
+        'userId': 'u',
+        'deviceType': 'phone',
+        'manufacturer': 'm',
+        'deviceModel': 'd',
+        'os': 'Android',
+        'osVersion': '14',
+        'screenWidth': 1,
+        'screenHeight': 2,
+        'screenDensity': 2.0,
+        'appVersion': '1',
+        'buildNumber': '2',
+        'packageName': 'p',
+        'sdkVersion': '2.0.74',
+        'networkType': 'WIFI',
+        'carrierName': '',
+        'orientation': 'portrait',
+        'locale': 'en',
+        'timezone': 'UTC',
+        'installId': 'i',
+        'batteryLevel': 0.5,
+        'totalStorageGb': 64.0,
+        'startedAt': '2026-01-01T00:00:00.000Z',
+        'endedAt': '2026-01-01T00:01:00.000Z',
+        'durationMs': 60000,
+        'foregroundTimeMs': 1,
+        'backgroundTimeMs': 0,
+        'crashed': false,
+        'capturedOffline': false,
+        'offlineEventCount': 0,
+        'onlineEventCount': 3,
+        'networkTransitions': 0,
+        'sessionId': 's',
+        'sessionData': {'plan': 'pro'},
         'events': <Map<String, dynamic>>[],
       };
       expectKnownKeys(payload, IngestSessionRequest.fields, 'session payload');
@@ -113,23 +142,26 @@ void main() {
             viewportWidth: shot.viewportWidth,
             viewportHeight: shot.viewportHeight,
             bytes: shot.imageBytes.length,
-            capturedAt: DateTime.fromMillisecondsSinceEpoch(shot.capturedAt, isUtc: true)
+            capturedAt: DateTime.fromMillisecondsSinceEpoch(shot.capturedAt,
+                    isUtc: true)
                 .toIso8601String(),
           ),
         ],
       ).toJson();
-      expectKnownKeys(body, ScreenshotConfirmRequest.fields, 'screenshot confirm');
+      expectKnownKeys(
+          body, ScreenshotConfirmRequest.fields, 'screenshot confirm');
       final items = body['screenshots'] as List;
       expect(items, hasLength(1));
-      expectKnownKeys(items.first as Map<String, dynamic>, ScreenshotConfirmItem.fields,
-          'screenshot confirm item');
+      expectKnownKeys(items.first as Map<String, dynamic>,
+          ScreenshotConfirmItem.fields, 'screenshot confirm item');
       expect((items.first as Map)['bytes'], 3);
     });
 
     test('server responses parse', () {
       final r = IngestResponse.fromJson({'sessionId': 'abc', 'received': true});
       expect(r.sessionId, 'abc');
-      final err = ErrorResponse.fromJson({'error': 'nope', 'code': 'BAD_REQUEST'});
+      final err =
+          ErrorResponse.fromJson({'error': 'nope', 'code': 'BAD_REQUEST'});
       expect(err.code, 'BAD_REQUEST');
       expect(err.details, isNull);
       final quota = QuotaExceeded.fromJson(

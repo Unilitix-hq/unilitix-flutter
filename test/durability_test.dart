@@ -7,7 +7,8 @@ import 'package:unilitix/src/util/ids.dart';
 /// client id and a per-session sequence number so the server can deduplicate
 /// retried batches and restore capture order.
 void main() {
-  final uuidV4 = RegExp(r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$');
+  final uuidV4 = RegExp(
+      r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$');
 
   test('generateUuidV4 produces RFC 4122 v4 ids', () {
     final seen = <String>{};
@@ -23,7 +24,8 @@ void main() {
     expect(e.id, matches(uuidV4));
     final j = e.toJson();
     expect(j['eventId'], e.id);
-    expect(j.containsKey('seq'), isFalse, reason: 'seq is absent until attached');
+    expect(j.containsKey('seq'), isFalse,
+        reason: 'seq is absent until attached');
     e.seq = 4;
     expect(e.toJson()['seq'], 4);
   });

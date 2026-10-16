@@ -78,10 +78,15 @@ class IdentifyRequest {
     this.traits,
   });
 
-  factory IdentifyRequest.fromJson(Map<String, dynamic> json) => IdentifyRequest(
+  factory IdentifyRequest.fromJson(Map<String, dynamic> json) =>
+      IdentifyRequest(
         anonymousId: json['anonymousId'] as String,
-        customUserId: json['customUserId'] == null ? null : json['customUserId'] as String,
-        traits: json['traits'] == null ? null : Map<String, dynamic>.from(json['traits'] as Map),
+        customUserId: json['customUserId'] == null
+            ? null
+            : json['customUserId'] as String,
+        traits: json['traits'] == null
+            ? null
+            : Map<String, dynamic>.from(json['traits'] as Map),
       );
 
   Map<String, dynamic> toJson() => <String, dynamic>{
@@ -109,7 +114,8 @@ class IdentifyResponse {
     required this.updated,
   });
 
-  factory IdentifyResponse.fromJson(Map<String, dynamic> json) => IdentifyResponse(
+  factory IdentifyResponse.fromJson(Map<String, dynamic> json) =>
+      IdentifyResponse(
         anonymousId: json['anonymousId'] as String,
         customUserId: json['customUserId'] as String,
         updated: json['updated'] as bool,
@@ -154,6 +160,7 @@ class IngestEvent {
   final String? eventId;
   final String? exceptionMessage;
   final String? exceptionType;
+
   /// true when the process died (native crash); false for a caught error.
   final bool? fatal;
   final int? frameDrops;
@@ -166,6 +173,7 @@ class IngestEvent {
   final int? seq;
   final String? stackTrace;
   final DateTime? timestamp;
+
   /// Short crash title used for issue grouping.
   final String? title;
   final String type;
@@ -198,22 +206,43 @@ class IngestEvent {
 
   factory IngestEvent.fromJson(Map<String, dynamic> json) => IngestEvent(
         breadcrumbs: json['breadcrumbs'],
-        capturedOffline: json['capturedOffline'] == null ? null : json['capturedOffline'] as bool,
-        cpuUsagePct: json['cpuUsagePct'] == null ? null : (json['cpuUsagePct'] as num).toDouble(),
+        capturedOffline: json['capturedOffline'] == null
+            ? null
+            : json['capturedOffline'] as bool,
+        cpuUsagePct: json['cpuUsagePct'] == null
+            ? null
+            : (json['cpuUsagePct'] as num).toDouble(),
         eventId: json['eventId'] == null ? null : json['eventId'] as String,
-        exceptionMessage: json['exceptionMessage'] == null ? null : json['exceptionMessage'] as String,
-        exceptionType: json['exceptionType'] == null ? null : json['exceptionType'] as String,
+        exceptionMessage: json['exceptionMessage'] == null
+            ? null
+            : json['exceptionMessage'] as String,
+        exceptionType: json['exceptionType'] == null
+            ? null
+            : json['exceptionType'] as String,
         fatal: json['fatal'] == null ? null : json['fatal'] as bool,
-        frameDrops: json['frameDrops'] == null ? null : (json['frameDrops'] as num).toInt(),
-        latencyMs: json['latencyMs'] == null ? null : (json['latencyMs'] as num).toInt(),
-        memoryUsageMb: json['memoryUsageMb'] == null ? null : (json['memoryUsageMb'] as num).toDouble(),
+        frameDrops: json['frameDrops'] == null
+            ? null
+            : (json['frameDrops'] as num).toInt(),
+        latencyMs: json['latencyMs'] == null
+            ? null
+            : (json['latencyMs'] as num).toInt(),
+        memoryUsageMb: json['memoryUsageMb'] == null
+            ? null
+            : (json['memoryUsageMb'] as num).toDouble(),
         metadata: json['metadata'],
-        networkAtCapture: json['networkAtCapture'] == null ? null : json['networkAtCapture'] as String,
-        properties: json['properties'] == null ? null : Map<String, dynamic>.from(json['properties'] as Map),
+        networkAtCapture: json['networkAtCapture'] == null
+            ? null
+            : json['networkAtCapture'] as String,
+        properties: json['properties'] == null
+            ? null
+            : Map<String, dynamic>.from(json['properties'] as Map),
         screen: json['screen'] == null ? null : json['screen'] as String,
         seq: json['seq'] == null ? null : (json['seq'] as num).toInt(),
-        stackTrace: json['stackTrace'] == null ? null : json['stackTrace'] as String,
-        timestamp: json['timestamp'] == null ? null : DateTime.parse(json['timestamp'] as String),
+        stackTrace:
+            json['stackTrace'] == null ? null : json['stackTrace'] as String,
+        timestamp: json['timestamp'] == null
+            ? null
+            : DateTime.parse(json['timestamp'] as String),
         title: json['title'] == null ? null : json['title'] as String,
         type: json['type'] as String,
         x: json['x'] == null ? null : (json['x'] as num).toDouble(),
@@ -237,7 +266,8 @@ class IngestEvent {
         if (screen != null) 'screen': screen,
         if (seq != null) 'seq': seq,
         if (stackTrace != null) 'stackTrace': stackTrace,
-        if (timestamp != null) 'timestamp': timestamp?.toUtc().toIso8601String(),
+        if (timestamp != null)
+          'timestamp': timestamp?.toUtc().toIso8601String(),
         if (title != null) 'title': title,
         'type': type,
         if (x != null) 'x': x,
@@ -260,8 +290,14 @@ class IngestEventsRequest {
     required this.sessionId,
   });
 
-  factory IngestEventsRequest.fromJson(Map<String, dynamic> json) => IngestEventsRequest(
-        events: json['events'] == null ? null : (json['events'] as List<dynamic>).map((e) => IngestEvent.fromJson(Map<String, dynamic>.from(e as Map))).toList(),
+  factory IngestEventsRequest.fromJson(Map<String, dynamic> json) =>
+      IngestEventsRequest(
+        events: json['events'] == null
+            ? null
+            : (json['events'] as List<dynamic>)
+                .map((e) =>
+                    IngestEvent.fromJson(Map<String, dynamic>.from(e as Map)))
+                .toList(),
         sessionId: json['sessionId'] as String,
       );
 
@@ -438,50 +474,113 @@ class IngestSessionRequest {
     this.userId,
   });
 
-  factory IngestSessionRequest.fromJson(Map<String, dynamic> json) => IngestSessionRequest(
-        anonymousId: json['anonymousId'] == null ? null : json['anonymousId'] as String,
-        appStartTimeMs: json['appStartTimeMs'] == null ? null : (json['appStartTimeMs'] as num).toInt(),
-        appVersion: json['appVersion'] == null ? null : json['appVersion'] as String,
-        backgroundTimeMs: json['backgroundTimeMs'] == null ? null : (json['backgroundTimeMs'] as num).toInt(),
-        batteryLevel: json['batteryLevel'] == null ? null : (json['batteryLevel'] as num).toDouble(),
-        buildNumber: json['buildNumber'] == null ? null : json['buildNumber'] as String,
-        capturedOffline: json['capturedOffline'] == null ? null : json['capturedOffline'] as bool,
-        carrierName: json['carrierName'] == null ? null : json['carrierName'] as String,
+  factory IngestSessionRequest.fromJson(Map<String, dynamic> json) =>
+      IngestSessionRequest(
+        anonymousId:
+            json['anonymousId'] == null ? null : json['anonymousId'] as String,
+        appStartTimeMs: json['appStartTimeMs'] == null
+            ? null
+            : (json['appStartTimeMs'] as num).toInt(),
+        appVersion:
+            json['appVersion'] == null ? null : json['appVersion'] as String,
+        backgroundTimeMs: json['backgroundTimeMs'] == null
+            ? null
+            : (json['backgroundTimeMs'] as num).toInt(),
+        batteryLevel: json['batteryLevel'] == null
+            ? null
+            : (json['batteryLevel'] as num).toDouble(),
+        buildNumber:
+            json['buildNumber'] == null ? null : json['buildNumber'] as String,
+        capturedOffline: json['capturedOffline'] == null
+            ? null
+            : json['capturedOffline'] as bool,
+        carrierName:
+            json['carrierName'] == null ? null : json['carrierName'] as String,
         city: json['city'] == null ? null : json['city'] as String,
         country: json['country'] == null ? null : json['country'] as String,
         crashed: json['crashed'] == null ? null : json['crashed'] as bool,
-        customUserId: json['customUserId'] == null ? null : json['customUserId'] as String,
-        deviceModel: json['deviceModel'] == null ? null : json['deviceModel'] as String,
-        deviceType: json['deviceType'] == null ? null : json['deviceType'] as String,
-        durationMs: json['durationMs'] == null ? null : (json['durationMs'] as num).toInt(),
-        endedAt: json['endedAt'] == null ? null : DateTime.parse(json['endedAt'] as String),
-        events: json['events'] == null ? null : (json['events'] as List<dynamic>).map((e) => IngestEvent.fromJson(Map<String, dynamic>.from(e as Map))).toList(),
-        foregroundTimeMs: json['foregroundTimeMs'] == null ? null : (json['foregroundTimeMs'] as num).toInt(),
-        installId: json['installId'] == null ? null : json['installId'] as String,
-        latitude: json['latitude'] == null ? null : (json['latitude'] as num).toDouble(),
+        customUserId: json['customUserId'] == null
+            ? null
+            : json['customUserId'] as String,
+        deviceModel:
+            json['deviceModel'] == null ? null : json['deviceModel'] as String,
+        deviceType:
+            json['deviceType'] == null ? null : json['deviceType'] as String,
+        durationMs: json['durationMs'] == null
+            ? null
+            : (json['durationMs'] as num).toInt(),
+        endedAt: json['endedAt'] == null
+            ? null
+            : DateTime.parse(json['endedAt'] as String),
+        events: json['events'] == null
+            ? null
+            : (json['events'] as List<dynamic>)
+                .map((e) =>
+                    IngestEvent.fromJson(Map<String, dynamic>.from(e as Map)))
+                .toList(),
+        foregroundTimeMs: json['foregroundTimeMs'] == null
+            ? null
+            : (json['foregroundTimeMs'] as num).toInt(),
+        installId:
+            json['installId'] == null ? null : json['installId'] as String,
+        latitude: json['latitude'] == null
+            ? null
+            : (json['latitude'] as num).toDouble(),
         locale: json['locale'] == null ? null : json['locale'] as String,
-        longitude: json['longitude'] == null ? null : (json['longitude'] as num).toDouble(),
-        manufacturer: json['manufacturer'] == null ? null : json['manufacturer'] as String,
-        networkTransitions: json['networkTransitions'] == null ? null : (json['networkTransitions'] as num).toInt(),
-        networkType: json['networkType'] == null ? null : json['networkType'] as String,
-        offlineEventCount: json['offlineEventCount'] == null ? null : (json['offlineEventCount'] as num).toInt(),
-        onlineEventCount: json['onlineEventCount'] == null ? null : (json['onlineEventCount'] as num).toInt(),
-        orientation: json['orientation'] == null ? null : json['orientation'] as String,
+        longitude: json['longitude'] == null
+            ? null
+            : (json['longitude'] as num).toDouble(),
+        manufacturer: json['manufacturer'] == null
+            ? null
+            : json['manufacturer'] as String,
+        networkTransitions: json['networkTransitions'] == null
+            ? null
+            : (json['networkTransitions'] as num).toInt(),
+        networkType:
+            json['networkType'] == null ? null : json['networkType'] as String,
+        offlineEventCount: json['offlineEventCount'] == null
+            ? null
+            : (json['offlineEventCount'] as num).toInt(),
+        onlineEventCount: json['onlineEventCount'] == null
+            ? null
+            : (json['onlineEventCount'] as num).toInt(),
+        orientation:
+            json['orientation'] == null ? null : json['orientation'] as String,
         os: json['os'] == null ? null : json['os'] as String,
-        osVersion: json['osVersion'] == null ? null : json['osVersion'] as String,
-        packageName: json['packageName'] == null ? null : json['packageName'] as String,
-        screenDensity: json['screenDensity'] == null ? null : (json['screenDensity'] as num).toDouble(),
-        screenHeight: json['screenHeight'] == null ? null : (json['screenHeight'] as num).toInt(),
-        screenWidth: json['screenWidth'] == null ? null : (json['screenWidth'] as num).toInt(),
-        sdkVersion: json['sdkVersion'] == null ? null : json['sdkVersion'] as String,
+        osVersion:
+            json['osVersion'] == null ? null : json['osVersion'] as String,
+        packageName:
+            json['packageName'] == null ? null : json['packageName'] as String,
+        screenDensity: json['screenDensity'] == null
+            ? null
+            : (json['screenDensity'] as num).toDouble(),
+        screenHeight: json['screenHeight'] == null
+            ? null
+            : (json['screenHeight'] as num).toInt(),
+        screenWidth: json['screenWidth'] == null
+            ? null
+            : (json['screenWidth'] as num).toInt(),
+        sdkVersion:
+            json['sdkVersion'] == null ? null : json['sdkVersion'] as String,
         sessionData: json['sessionData'],
-        sessionId: json['sessionId'] == null ? null : json['sessionId'] as String,
-        startedAt: json['startedAt'] == null ? null : DateTime.parse(json['startedAt'] as String),
-        syncAttempts: json['syncAttempts'] == null ? null : (json['syncAttempts'] as num).toInt(),
-        syncFailedBatches: json['syncFailedBatches'] == null ? null : (json['syncFailedBatches'] as num).toInt(),
-        timeToInteractiveMs: json['timeToInteractiveMs'] == null ? null : (json['timeToInteractiveMs'] as num).toInt(),
+        sessionId:
+            json['sessionId'] == null ? null : json['sessionId'] as String,
+        startedAt: json['startedAt'] == null
+            ? null
+            : DateTime.parse(json['startedAt'] as String),
+        syncAttempts: json['syncAttempts'] == null
+            ? null
+            : (json['syncAttempts'] as num).toInt(),
+        syncFailedBatches: json['syncFailedBatches'] == null
+            ? null
+            : (json['syncFailedBatches'] as num).toInt(),
+        timeToInteractiveMs: json['timeToInteractiveMs'] == null
+            ? null
+            : (json['timeToInteractiveMs'] as num).toInt(),
         timezone: json['timezone'] == null ? null : json['timezone'] as String,
-        totalStorageGb: json['totalStorageGb'] == null ? null : (json['totalStorageGb'] as num).toDouble(),
+        totalStorageGb: json['totalStorageGb'] == null
+            ? null
+            : (json['totalStorageGb'] as num).toDouble(),
         userId: json['userId'] == null ? null : json['userId'] as String,
       );
 
@@ -509,7 +608,8 @@ class IngestSessionRequest {
         if (locale != null) 'locale': locale,
         if (longitude != null) 'longitude': longitude,
         if (manufacturer != null) 'manufacturer': manufacturer,
-        if (networkTransitions != null) 'networkTransitions': networkTransitions,
+        if (networkTransitions != null)
+          'networkTransitions': networkTransitions,
         if (networkType != null) 'networkType': networkType,
         if (offlineEventCount != null) 'offlineEventCount': offlineEventCount,
         if (onlineEventCount != null) 'onlineEventCount': onlineEventCount,
@@ -523,10 +623,12 @@ class IngestSessionRequest {
         if (sdkVersion != null) 'sdkVersion': sdkVersion,
         if (sessionData != null) 'sessionData': sessionData,
         if (sessionId != null) 'sessionId': sessionId,
-        if (startedAt != null) 'startedAt': startedAt?.toUtc().toIso8601String(),
+        if (startedAt != null)
+          'startedAt': startedAt?.toUtc().toIso8601String(),
         if (syncAttempts != null) 'syncAttempts': syncAttempts,
         if (syncFailedBatches != null) 'syncFailedBatches': syncFailedBatches,
-        if (timeToInteractiveMs != null) 'timeToInteractiveMs': timeToInteractiveMs,
+        if (timeToInteractiveMs != null)
+          'timeToInteractiveMs': timeToInteractiveMs,
         if (timezone != null) 'timezone': timezone,
         if (totalStorageGb != null) 'totalStorageGb': totalStorageGb,
         if (userId != null) 'userId': userId,
@@ -548,14 +650,21 @@ class IngestSnapshotsRequest {
     this.snapshots,
   });
 
-  factory IngestSnapshotsRequest.fromJson(Map<String, dynamic> json) => IngestSnapshotsRequest(
+  factory IngestSnapshotsRequest.fromJson(Map<String, dynamic> json) =>
+      IngestSnapshotsRequest(
         sessionId: json['sessionId'] as String,
-        snapshots: json['snapshots'] == null ? null : (json['snapshots'] as List<dynamic>).map((e) => SnapshotPayload.fromJson(Map<String, dynamic>.from(e as Map))).toList(),
+        snapshots: json['snapshots'] == null
+            ? null
+            : (json['snapshots'] as List<dynamic>)
+                .map((e) => SnapshotPayload.fromJson(
+                    Map<String, dynamic>.from(e as Map)))
+                .toList(),
       );
 
   Map<String, dynamic> toJson() => <String, dynamic>{
         'sessionId': sessionId,
-        if (snapshots != null) 'snapshots': snapshots?.map((e) => e.toJson()).toList(),
+        if (snapshots != null)
+          'snapshots': snapshots?.map((e) => e.toJson()).toList(),
       };
 }
 
@@ -587,7 +696,8 @@ class QuotaExceeded {
         error: json['error'] as String,
         limit: (json['limit'] as num).toInt(),
         limitType: json['limitType'] as String,
-        upgradeUrl: json['upgradeUrl'] == null ? null : json['upgradeUrl'] as String,
+        upgradeUrl:
+            json['upgradeUrl'] == null ? null : json['upgradeUrl'] as String,
         used: (json['used'] as num).toInt(),
       );
 
@@ -627,13 +737,20 @@ class ScreenshotConfirmItem {
     this.viewportWidth,
   });
 
-  factory ScreenshotConfirmItem.fromJson(Map<String, dynamic> json) => ScreenshotConfirmItem(
+  factory ScreenshotConfirmItem.fromJson(Map<String, dynamic> json) =>
+      ScreenshotConfirmItem(
         bytes: json['bytes'] == null ? null : (json['bytes'] as num).toInt(),
-        capturedAt: json['capturedAt'] == null ? null : json['capturedAt'] as String,
+        capturedAt:
+            json['capturedAt'] == null ? null : json['capturedAt'] as String,
         ordinal: (json['ordinal'] as num).toInt(),
-        screenName: json['screenName'] == null ? null : json['screenName'] as String,
-        viewportHeight: json['viewportHeight'] == null ? null : (json['viewportHeight'] as num).toInt(),
-        viewportWidth: json['viewportWidth'] == null ? null : (json['viewportWidth'] as num).toInt(),
+        screenName:
+            json['screenName'] == null ? null : json['screenName'] as String,
+        viewportHeight: json['viewportHeight'] == null
+            ? null
+            : (json['viewportHeight'] as num).toInt(),
+        viewportWidth: json['viewportWidth'] == null
+            ? null
+            : (json['viewportWidth'] as num).toInt(),
       );
 
   Map<String, dynamic> toJson() => <String, dynamic>{
@@ -661,13 +778,20 @@ class ScreenshotConfirmRequest {
     required this.sessionId,
   });
 
-  factory ScreenshotConfirmRequest.fromJson(Map<String, dynamic> json) => ScreenshotConfirmRequest(
-        screenshots: json['screenshots'] == null ? null : (json['screenshots'] as List<dynamic>).map((e) => ScreenshotConfirmItem.fromJson(Map<String, dynamic>.from(e as Map))).toList(),
+  factory ScreenshotConfirmRequest.fromJson(Map<String, dynamic> json) =>
+      ScreenshotConfirmRequest(
+        screenshots: json['screenshots'] == null
+            ? null
+            : (json['screenshots'] as List<dynamic>)
+                .map((e) => ScreenshotConfirmItem.fromJson(
+                    Map<String, dynamic>.from(e as Map)))
+                .toList(),
         sessionId: json['sessionId'] as String,
       );
 
   Map<String, dynamic> toJson() => <String, dynamic>{
-        if (screenshots != null) 'screenshots': screenshots?.map((e) => e.toJson()).toList(),
+        if (screenshots != null)
+          'screenshots': screenshots?.map((e) => e.toJson()).toList(),
         'sessionId': sessionId,
       };
 }
@@ -684,7 +808,8 @@ class ScreenshotConfirmResponse {
     required this.confirmed,
   });
 
-  factory ScreenshotConfirmResponse.fromJson(Map<String, dynamic> json) => ScreenshotConfirmResponse(
+  factory ScreenshotConfirmResponse.fromJson(Map<String, dynamic> json) =>
+      ScreenshotConfirmResponse(
         confirmed: (json['confirmed'] as num).toInt(),
       );
 
@@ -711,9 +836,14 @@ class ScreenshotInitRequest {
     required this.sessionId,
   });
 
-  factory ScreenshotInitRequest.fromJson(Map<String, dynamic> json) => ScreenshotInitRequest(
+  factory ScreenshotInitRequest.fromJson(Map<String, dynamic> json) =>
+      ScreenshotInitRequest(
         count: (json['count'] as num).toInt(),
-        ordinals: json['ordinals'] == null ? null : (json['ordinals'] as List<dynamic>).map((e) => (e as num).toInt()).toList(),
+        ordinals: json['ordinals'] == null
+            ? null
+            : (json['ordinals'] as List<dynamic>)
+                .map((e) => (e as num).toInt())
+                .toList(),
         sessionId: json['sessionId'] as String,
       );
 
@@ -736,8 +866,12 @@ class ScreenshotInitResponse {
     required this.slots,
   });
 
-  factory ScreenshotInitResponse.fromJson(Map<String, dynamic> json) => ScreenshotInitResponse(
-        slots: (json['slots'] as List<dynamic>).map((e) => ScreenshotUploadSlot.fromJson(Map<String, dynamic>.from(e as Map))).toList(),
+  factory ScreenshotInitResponse.fromJson(Map<String, dynamic> json) =>
+      ScreenshotInitResponse(
+        slots: (json['slots'] as List<dynamic>)
+            .map((e) => ScreenshotUploadSlot.fromJson(
+                Map<String, dynamic>.from(e as Map)))
+            .toList(),
       );
 
   Map<String, dynamic> toJson() => <String, dynamic>{
@@ -763,7 +897,8 @@ class ScreenshotUploadSlot {
     required this.r2Key,
   });
 
-  factory ScreenshotUploadSlot.fromJson(Map<String, dynamic> json) => ScreenshotUploadSlot(
+  factory ScreenshotUploadSlot.fromJson(Map<String, dynamic> json) =>
+      ScreenshotUploadSlot(
         ordinal: (json['ordinal'] as num).toInt(),
         presignedUrl: json['presignedUrl'] as String,
         r2Key: json['r2Key'] as String,
@@ -803,13 +938,20 @@ class SnapshotPayload {
     this.viewportWidth,
   });
 
-  factory SnapshotPayload.fromJson(Map<String, dynamic> json) => SnapshotPayload(
-        capturedAt: json['capturedAt'] == null ? null : json['capturedAt'] as String,
+  factory SnapshotPayload.fromJson(Map<String, dynamic> json) =>
+      SnapshotPayload(
+        capturedAt:
+            json['capturedAt'] == null ? null : json['capturedAt'] as String,
         hierarchy: json['hierarchy'],
         ordinal: (json['ordinal'] as num).toInt(),
-        screenName: json['screenName'] == null ? null : json['screenName'] as String,
-        viewportHeight: json['viewportHeight'] == null ? null : (json['viewportHeight'] as num).toInt(),
-        viewportWidth: json['viewportWidth'] == null ? null : (json['viewportWidth'] as num).toInt(),
+        screenName:
+            json['screenName'] == null ? null : json['screenName'] as String,
+        viewportHeight: json['viewportHeight'] == null
+            ? null
+            : (json['viewportHeight'] as num).toInt(),
+        viewportWidth: json['viewportWidth'] == null
+            ? null
+            : (json['viewportWidth'] as num).toInt(),
       );
 
   Map<String, dynamic> toJson() => <String, dynamic>{
@@ -821,4 +963,3 @@ class SnapshotPayload {
         if (viewportWidth != null) 'viewportWidth': viewportWidth,
       };
 }
-

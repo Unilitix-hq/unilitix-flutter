@@ -35,7 +35,8 @@ void main() {
   });
 
   group('PrivacyRegistry', () {
-    testWidgets('tracks mounted UnilitixPrivate subtrees and their bounds', (tester) async {
+    testWidgets('tracks mounted UnilitixPrivate subtrees and their bounds',
+        (tester) async {
       await tester.pumpWidget(
         const Directionality(
           textDirection: TextDirection.ltr,
