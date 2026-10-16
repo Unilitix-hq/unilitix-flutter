@@ -47,8 +47,15 @@ public class UnilitixPlugin: NSObject, FlutterPlugin {
       // than a placeholder so the dashboard shows "unknown" instead of "--".
       let info = CTTelephonyNetworkInfo()
       let carriers = info.serviceSubscriberCellularProviders ?? [:]
-      let orderedKeys = info.serviceOrder ?? Array(carriers.keys)
-      let name = orderedKeys.compactMap { carriers[$0] }.first?.carrierName ?? ""
+      // Prefer the SIM currently used for data (iOS 13+); fall back to any SIM.
+      var name = ""
+      if #available(iOS 13.0, *), let dataID = info.dataServiceIdentifier,
+         let carrier = carriers[dataID] {
+        name = carrier.carrierName ?? ""
+      }
+      if name.isEmpty {
+        name = carriers.values.compactMap { $0.carrierName }.first ?? ""
+      }
       result(name == "--" ? "" : name)
 
     case "getBatteryLevel":
@@ -146,7 +153,6 @@ public class UnilitixPlugin: NSObject, FlutterPlugin {
         return "4G"
       case CTRadioAccessTechnologyHSDPA,
            CTRadioAccessTechnologyHSUPA,
-           CTRadioAccessTechnologyHSPA,
            CTRadioAccessTechnologyCDMAEVDORev0,
            CTRadioAccessTechnologyCDMAEVDORevA,
            CTRadioAccessTechnologyCDMAEVDORevB,
