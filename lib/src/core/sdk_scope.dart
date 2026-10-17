@@ -8,6 +8,11 @@ class SdkScope {
   static bool screenEventReceived = false;
   static String? currentScreen;
 
+  /// True while a [UnilitixWidget] is mounted and recording pointer-down
+  /// events itself; [UnilitixGestureDetector] then becomes a passthrough so a
+  /// tap is never counted twice.
+  static bool widgetHandlesTaps = false;
+
   /// The repaint boundary key shared between [ScreenshotCapture] and the
   /// widget wrappers ([UnilitixWidget], [UnilitixMaterialApp]).
   static final GlobalKey repaintKey = GlobalKey();

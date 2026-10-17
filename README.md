@@ -1,6 +1,6 @@
 # Unilitix Flutter SDK
 
-**Version:** 2.0.76 · [pub.dev](https://pub.dev/packages/unilitix) · [GitHub](https://github.com/unilitix/unilitix-flutter)
+**Version:** 2.1.0 · [pub.dev](https://pub.dev/packages/unilitix) · [GitHub](https://github.com/unilitix/unilitix-flutter)
 
 Unilitix is a mobile analytics SDK built for African markets. It captures session replays, screen flows, custom events, and user identity — with offline-first data delivery and Africa-specific context (network type, carrier, power outage correlation).
 
@@ -27,7 +27,7 @@ Or add manually to `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  unilitix: ^2.0.76
+  unilitix: ^2.1.0
 ```
 
 Then run:
@@ -83,7 +83,7 @@ class MyApp extends StatelessWidget {
 Run your app in debug mode. Within 5 seconds you should see:
 
 ```
-[Unilitix] SDK initialized ✅ v2.0.76
+[Unilitix] SDK initialized ✅ v2.1.0
 [Unilitix] Session started ✅ abc123…
 [Unilitix] Screen → /home
 ```
@@ -191,38 +191,83 @@ await Unilitix.init(
 
 ---
 
-## Privacy Masking
+## Privacy and consent
 
-The SDK is private by default:
+### What the SDK collects by default
 
-- **Text is redacted** in wireframe snapshots (`maskAllText`, on by default):
-  every `Text` widget's content is replaced with same-length placeholders, so
-  balances, names, phone numbers and OTPs never leave the device while layout
-  fidelity is kept.
-- **Input fields** are masked in snapshots and screenshots (`maskInputs`).
-- **`UnilitixPrivate`** marks a subtree as sensitive in *both* snapshots and
-  pixel screenshots. In screenshots its on-screen bounds are painted over on
-  the device before the frame is encoded (`maskScreenshots`, on by default):
+| Data | Collected | Switch |
+|---|---|---|
+| Anonymous id (random UUID, rotated by `reset()`), install id | yes | — |
+| Your user id and traits, only after you call `identify()` | yes | call `identify()` or not |
+| Device make/model, OS version, screen size, locale, timezone | yes | — |
+| App version, build number, package name | yes | — |
+| Network type and transitions, carrier name, battery level | yes | — |
+| Screen names, tap and scroll coordinates | yes | `autoTrackTaps` |
+| Crash and handled-exception stack traces, last 50 breadcrumbs | yes | `autoTrackCrashes` |
+| Memory and frame-drop metrics | yes | — |
+| Wireframe snapshots (layout only, text redacted) | yes | `captureSnapshots`, `replaySampleRate` |
+| Pixel screenshots (text and inputs painted over) | yes | `captureScreenshots`, `replaySampleRate` |
+| Precise or coarse location, advertising id, IMEI, contacts, clipboard | **never** | — |
+
+### Masking
+
+The SDK is private by default, in both replay formats:
+
+- **Text is redacted** (`maskAllText`, on by default). In wireframe snapshots
+  every `Text` widget's content becomes same-length bullets; in pixel
+  screenshots the bounds of every text widget are painted over on the device
+  before the frame is encoded. Wrap copy that is safe and useful to see in
+  **`UnilitixUnmasked`**:
 
 ```dart
-UnilitixPrivate(
-  child: CreditCardForm(),
-)
+UnilitixUnmasked(child: Text('Checkout'))
 ```
 
-- **Images** can be blacked out too with `maskImages: true` (off by default).
+- **Input fields** (`TextField`, `TextFormField`, `CupertinoTextField`) are
+  masked in snapshots and painted over in screenshots (`maskInputs`, on by
+  default), even inside an `UnilitixUnmasked` subtree.
+- **`UnilitixPrivate`** paints over any subtree in screenshots and collapses
+  it in snapshots — for charts, QR codes, documents and avatars:
+
+```dart
+UnilitixPrivate(child: BalanceChart())
+```
+
+- **Images** can be blacked out with `maskImages: true` (off by default).
+- If the SDK cannot compute the mask regions for a frame, the frame is dropped
+  rather than sent unmasked.
 
 ```dart
 await Unilitix.init(
   'YOUR_API_KEY',
   config: UnilitixConfig(
-    maskAllText: true,        // redact all text in wireframes (default)
+    maskAllText: true,        // redact all text in snapshots and screenshots (default)
     maskInputs: true,         // mask TextField content (default)
-    maskScreenshots: true,    // paint over UnilitixPrivate in screenshots (default)
+    maskScreenshots: true,    // paint over masked regions in screenshots (default)
     maskImages: false,        // black out images
+    replaySampleRate: 1.0,    // fraction of sessions with replay; 0 disables it
   ),
 );
 ```
+
+### Consent
+
+For apps under NDPR, GDPR or similar, start in `pending`: the SDK captures to
+its on-device queue but uploads nothing until the user decides.
+
+```dart
+await Unilitix.init('YOUR_API_KEY', consent: UnilitixConsent.pending);
+
+// After your consent screen:
+await Unilitix.setConsent(UnilitixConsent.granted); // sends everything held
+// or
+await Unilitix.setConsent(UnilitixConsent.denied);  // deletes everything held
+```
+
+The decision is persisted; on later launches it overrides the `consent:`
+argument. `optOut()` / `optIn()` are shortcuts for `denied` / `granted`.
+`denied` stops capture, clears memory buffers, purges the whole on-device
+queue including crash reports and session stubs, and gates every upload path.
 
 The anonymous id is a random UUID stored on the device — it is never derived
 from the advertising id, IMEI or any hardware identifier — and `Unilitix.reset()`
@@ -240,10 +285,10 @@ await Unilitix.init(
     captureSnapshots: true,              // wireframe replay
     captureScreenshots: true,            // pixel screenshot replay
     maskInputs: true,                    // mask text field input
-    maskAllText: true,                   // redact text in wireframe snapshots
+    maskAllText: true,                   // redact text in snapshots and screenshots
     flushIntervalSeconds: 30,            // how often to upload data
     sessionTimeoutSeconds: 1800,         // session inactivity timeout (30 min)
-    uploadScreenshotsOnWifiOnly: false,  // restrict uploads to WiFi
+    uploadScreenshotsOnWifiOnly: true,   // hold screenshot uploads until Wi-Fi (default)
     maxScreenshotsPerMinute: 20,         // cap for continuously redrawing screens
     screenshotHeartbeatMs: 10000,        // frame at least this often when static
   ),

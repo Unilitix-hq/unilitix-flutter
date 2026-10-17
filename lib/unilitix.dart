@@ -19,6 +19,7 @@ library unilitix;
 
 import 'dart:async' show Timer, unawaited;
 import 'dart:convert' show jsonDecode, jsonEncode;
+import 'dart:math' show Random;
 
 import 'package:flutter/widgets.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -55,6 +56,7 @@ export 'src/tracking/unilitix_app.dart';
 export 'src/tracking/unilitix_widget.dart';
 export 'src/tracking/unilitix_material_app.dart';
 export 'src/privacy/privacy_mask.dart';
+export 'src/privacy/opt_manager.dart' show UnilitixConsent;
 export 'src/events/event.dart';
 
 // Top-level alias so Unilitix.runApp can call Flutter's runApp without
@@ -127,9 +129,23 @@ class Unilitix {
   /// ```dart
   /// await Unilitix.init('your_api_key');
   /// ```
+  ///
+  /// Apps that must ask before collecting (NDPR, GDPR) start in
+  /// [UnilitixConsent.pending]: everything is captured to the on-device queue
+  /// but nothing is uploaded until [setConsent] is called with
+  /// [UnilitixConsent.granted] (which sends what was held) or
+  /// [UnilitixConsent.denied] (which deletes it). A decision persisted from a
+  /// previous launch always wins over [consent].
+  ///
+  /// ```dart
+  /// await Unilitix.init('your_api_key', consent: UnilitixConsent.pending);
+  /// // ...after the user accepts:
+  /// await Unilitix.setConsent(UnilitixConsent.granted);
+  /// ```
   static Future<void> init(
     String apiKey, {
     UnilitixConfig? config,
+    UnilitixConsent consent = UnilitixConsent.granted,
   }) async {
     if (_initialized) {
       UnilitixLogger.w(
@@ -157,7 +173,7 @@ class Unilitix {
     await _identity.initialize();
 
     _optManager = OptManager();
-    await _optManager.load();
+    await _optManager.load(initial: consent);
 
     _database = EventDatabase(
       maxOfflineEvents: effectiveConfig.maxOfflineEvents,
@@ -174,6 +190,7 @@ class Unilitix {
 
     _networkMonitor = NetworkMonitor(
       onNetworkChanged: (type) => _sessionManager.onNetworkTypeChanged(type),
+      apiUrl: effectiveConfig.apiUrl,
     );
     _networkMonitor.start();
 
@@ -208,6 +225,8 @@ class Unilitix {
     _sessionManager = SessionManager(
       sessionTimeoutSeconds: effectiveConfig.sessionTimeoutSeconds,
       onSessionStart: (session) {
+        _applyReplaySampling(session.id);
+        if (_optManager.isOptedOut) return;
         _emitEvent(UnilitixEvent(
           type: EventTypes.sessionStart,
           properties: {'sessionId': session.id},
@@ -231,6 +250,7 @@ class Unilitix {
         }());
       },
       onSessionEnd: (session) {
+        if (_optManager.isOptedOut) return;
         unawaited(() async {
           try {
             final payload = await _buildSessionPayload();
@@ -266,6 +286,7 @@ class Unilitix {
       uploadScreenshotsOnWifiOnly: effectiveConfig.uploadScreenshotsOnWifiOnly,
       snapshotBuffer: _snapshotBuffer,
       isOptedOut: () => _optManager.isOptedOut,
+      canUpload: () => _optManager.canUpload,
     );
 
     _sessionManager.onEventsFlush = () {
@@ -280,6 +301,8 @@ class Unilitix {
       quality: effectiveConfig.screenshotQuality,
       maskScreenshots: effectiveConfig.maskScreenshots,
       maskImages: effectiveConfig.maskImages,
+      maskInputs: effectiveConfig.maskInputs,
+      maskAllText: effectiveConfig.maskAllText,
       maxPerMinute: effectiveConfig.maxScreenshotsPerMinute,
       heartbeatMs: effectiveConfig.screenshotHeartbeatMs,
       onCapture: (bytes, screenName, ordinal, w, h, capturedAt) async {
@@ -311,6 +334,7 @@ class Unilitix {
 
     _crashTracker = CrashTracker(
       onCrashEvent: (event) {
+        if (_optManager.isOptedOut) return;
         _sessionManager.currentSession?.crashed = true;
         _attachAndPersist(event); // durable before anything else happens
         _eventBuffer.emit(event);
@@ -325,7 +349,7 @@ class Unilitix {
       },
       onExceptionEvent: (event) {
         // Non-fatal: recorded, never marks the session crashed, no urgent flush.
-        _emitEvent(event);
+        _emitEvent(event); // gated on consent inside
       },
       breadcrumbs: _breadcrumbs,
       database: _database,
@@ -352,18 +376,19 @@ class Unilitix {
     // process is reported now as a fatal CRASH against the new session.
     unawaited(_crashTracker.reportNativeCrashIfAny());
     _flushScheduler.start();
-    // Events written to the write-ahead log by a previous process that never
-    // flushed them become retry batches first, then session stubs are handled.
-    unawaited(_database.recoverWalToPending().then((n) {
-      if (n > 0) UnilitixLogger.d('Recovered $n unflushed events from WAL');
-    }));
-    unawaited(_recoverPendingSessions());
-    // Replay capture only runs with consent; a user who opted out in a previous
-    // launch stays opted out until optIn() is called.
-    if (!_optManager.isOptedOut) {
-      if (effectiveConfig.captureSnapshots) _snapshotCapture.start();
-      if (effectiveConfig.captureScreenshots) _screenshotCapture.start();
+    if (_optManager.isOptedOut) {
+      // Denied: anything a previous process left behind must not survive.
+      unawaited(_database.purgeAll());
+    } else {
+      // Events written to the write-ahead log by a previous process that never
+      // flushed them become retry batches first, then session stubs are
+      // handled. Both are held, not sent, while consent is pending.
+      unawaited(_database.recoverWalToPending().then((n) {
+        if (n > 0) UnilitixLogger.d('Recovered $n unflushed events from WAL');
+      }));
+      unawaited(_recoverPendingSessions());
     }
+    _startReplayCaptureIfAllowed();
 
     _initialized = true;
 
@@ -428,7 +453,7 @@ class Unilitix {
     String event, [
     Map<String, dynamic>? properties,
   ]) async {
-    _assertInitialized('track');
+    if (!_ready('track')) return;
     if (_optManager.isOptedOut) return;
     _addBreadcrumb(EventTypes.custom, SdkScope.currentScreen);
     _emitEvent(UnilitixEvent(
@@ -449,21 +474,17 @@ class Unilitix {
     String userId, [
     Map<String, dynamic>? traits,
   ]) async {
-    _assertInitialized('identify');
+    if (!_ready('identify')) return;
     if (_optManager.isOptedOut) return;
     await _identity.setUserId(userId, traits: traits);
-    await _apiClient.identify(
-      anonymousId: _identity.anonymousId,
-      customUserId: userId,
-      traits: traits,
-    );
-    UnilitixLogger.d('Identify: $userId');
+    if (!_optManager.canUpload) return; // sent when consent is granted
+    await _sendIdentify();
   }
 
   /// Manually tracks a screen view.
   /// Use when [Unilitix.observer] cannot detect navigation automatically.
   static Future<void> screen(String screenName) async {
-    _assertInitialized('screen');
+    if (!_ready('screen')) return;
     _onScreenChange(screenName);
   }
 
@@ -471,50 +492,71 @@ class Unilitix {
 
   /// Manually starts a new session.
   static Future<void> startSession() async {
-    _assertInitialized('startSession');
+    if (!_ready('startSession')) return;
     _sessionManager.stop();
     _sessionManager.start();
   }
 
   /// Manually ends the current session.
   static Future<void> endSession() async {
-    _assertInitialized('endSession');
+    if (!_ready('endSession')) return;
     _sessionManager.stop();
   }
 
   // ── Privacy ───────────────────────────────────────────────────────
 
-  /// Stops all tracking and analytics collection.
+  /// The current consent state.
+  static UnilitixConsent get consent =>
+      _initialized ? _optManager.consent : UnilitixConsent.granted;
+
+  /// Records the user's consent decision and acts on it immediately.
   ///
-  /// Stops session replay (snapshots and screenshots), discards everything
-  /// buffered in memory, purges the on-device queue, and gates every upload path
-  /// so nothing captured after this call leaves the device.
-  static Future<void> optOut() async {
-    _assertInitialized('optOut');
-    await _optManager.optOut();
-    _snapshotCapture.stop();
-    _screenshotCapture.stop();
-    _snapshotBuffer.clear();
-    _eventBuffer.clear();
-    await _database.purgeAll();
-    UnilitixLogger.d('Opted out — capture stopped and local queue purged');
+  /// * [UnilitixConsent.granted]: uploads resume; everything held while
+  ///   pending (events, sessions, replay, identity) is sent.
+  /// * [UnilitixConsent.pending]: capture continues, uploads stop, nothing is
+  ///   deleted.
+  /// * [UnilitixConsent.denied]: capture stops, memory buffers and the whole
+  ///   on-device queue are purged, and nothing captured afterwards leaves the
+  ///   device. Same as [optOut].
+  static Future<void> setConsent(UnilitixConsent value) async {
+    if (!_ready('setConsent')) return;
+    final before = _optManager.consent;
+    await _optManager.set(value);
+    switch (value) {
+      case UnilitixConsent.denied:
+        _snapshotCapture.stop();
+        _screenshotCapture.stop();
+        _snapshotBuffer.clear();
+        _eventBuffer.clear();
+        await _database.purgeAll();
+        UnilitixLogger.d(
+            'Consent denied — capture stopped, local queue purged');
+      case UnilitixConsent.pending:
+        _startReplayCaptureIfAllowed();
+        UnilitixLogger.d('Consent pending — collecting, not uploading');
+      case UnilitixConsent.granted:
+        _startReplayCaptureIfAllowed();
+        if (before != UnilitixConsent.granted) {
+          // Release everything that was held.
+          if (_identity.userId != null) unawaited(_sendIdentify());
+          unawaited(_recoverPendingSessions());
+          unawaited(_flushScheduler.flush());
+        }
+        UnilitixLogger.d('Consent granted');
+    }
   }
 
-  /// Resumes tracking after [optOut].
-  static Future<void> optIn() async {
-    _assertInitialized('optIn');
-    await _optManager.optIn();
-    final cfg = _config;
-    if (cfg != null) {
-      if (cfg.captureSnapshots) _snapshotCapture.start();
-      if (cfg.captureScreenshots) _screenshotCapture.start();
-    }
-    UnilitixLogger.d('Opted in');
-  }
+  /// Stops all tracking and analytics collection. Same as
+  /// `setConsent(UnilitixConsent.denied)`.
+  static Future<void> optOut() => setConsent(UnilitixConsent.denied);
+
+  /// Resumes tracking after [optOut]. Same as
+  /// `setConsent(UnilitixConsent.granted)`.
+  static Future<void> optIn() => setConsent(UnilitixConsent.granted);
 
   /// Resets user identity and clears stored IDs. Call on logout.
   static Future<void> reset() async {
-    _assertInitialized('reset');
+    if (!_ready('reset')) return;
     await _identity.reset();
     UnilitixLogger.d('Identity reset');
   }
@@ -523,7 +565,7 @@ class Unilitix {
 
   /// Immediately flushes all queued events to the backend.
   static Future<void> flush() async {
-    _assertInitialized('flush');
+    if (!_ready('flush')) return;
     await _flushScheduler.flush();
     UnilitixLogger.d('Flush complete');
   }
@@ -531,6 +573,7 @@ class Unilitix {
   // ── Internal ──────────────────────────────────────────────────────
 
   static Future<void> _recoverPendingSessions() async {
+    if (!_optManager.canUpload) return; // held until consent is granted
     try {
       final sessions = await _database.getPendingSessions();
       if (sessions.isEmpty) return;
@@ -641,6 +684,47 @@ class Unilitix {
     ));
   }
 
+  /// Whether replay (wireframes and screenshots) is captured for the current
+  /// session, decided once per session from `replaySampleRate`.
+  static bool _replaySampled = true;
+  static final _random = Random();
+
+  static void _applyReplaySampling(String sessionId) {
+    final rate = _config?.replaySampleRate ?? 1.0;
+    _replaySampled = rate >= 1.0 || (rate > 0 && _random.nextDouble() < rate);
+    if (_initialized) _startReplayCaptureIfAllowed();
+  }
+
+  /// Starts or stops replay capture according to consent and sampling.
+  static void _startReplayCaptureIfAllowed() {
+    final cfg = _config;
+    if (cfg == null) return;
+    final allowed = !_optManager.isOptedOut && _replaySampled;
+    if (allowed) {
+      if (cfg.captureSnapshots) _snapshotCapture.start();
+      if (cfg.captureScreenshots) _screenshotCapture.start();
+    } else {
+      _snapshotCapture.stop();
+      _screenshotCapture.stop();
+    }
+  }
+
+  static Future<void> _sendIdentify() async {
+    final userId = _identity.userId;
+    if (userId == null) return;
+    try {
+      await _apiClient.identify(
+        anonymousId: _identity.anonymousId,
+        customUserId: userId,
+        traits: _identity.userTraits,
+      );
+      UnilitixLogger.d('Identify: $userId');
+    } catch (e) {
+      // Never let an SDK network error surface in the host app.
+      UnilitixLogger.w('identify failed: $e');
+    }
+  }
+
   static void _addBreadcrumb(String type, String? screen) {
     _breadcrumbs.add({
       'type': type,
@@ -697,13 +781,17 @@ class Unilitix {
       'packageName': _packageInfo.packageName,
       'sdkVersion': kUnilitixSdkVersion,
       'networkType': _networkMonitor.currentType(),
-      'carrierName': _cachedCarrier ?? '',
+      // Null (omitted) rather than sentinels: '' and -1 skew dashboards.
+      if (_cachedCarrier != null && _cachedCarrier!.isNotEmpty)
+        'carrierName': _cachedCarrier,
       'orientation': orientation,
       'locale': WidgetsBinding.instance.platformDispatcher.locale.toString(),
       'timezone': DateTime.now().timeZoneName,
       'installId': _identity.installId,
-      'batteryLevel': _cachedBattery ?? -1.0,
-      'totalStorageGb': _cachedStorage ?? -1.0,
+      if (_cachedBattery != null && _cachedBattery! >= 0)
+        'batteryLevel': _cachedBattery,
+      if (_cachedStorage != null && _cachedStorage! > 0)
+        'totalStorageGb': _cachedStorage,
       'startedAt': JsonUtil.toRfc3339(session.startedAt),
       if (session.endedAt != null) ...{
         'endedAt': JsonUtil.toRfc3339(session.endedAt!),
@@ -717,15 +805,20 @@ class Unilitix {
       'onlineEventCount': session.onlineEventCount,
       'networkTransitions': session.networkTransitions,
       'sessionId': session.id,
-      'sessionData': _identity.userTraits,
+      // User traits travel once, via /identify — not on every session upsert.
     };
   }
 
-  static void _assertInitialized(String method) {
+  /// Runtime guard (not assert-only): a call before [init] in a release build
+  /// is logged and ignored instead of throwing a LateInitializationError.
+  static bool _ready(String method) {
+    if (_initialized) return true;
     assert(
       _initialized,
       'Unilitix.$method() called before Unilitix.init(). '
       'Call Unilitix.init() in main() before runApp().',
     );
+    UnilitixLogger.w('Unilitix.$method() called before init() — ignored');
+    return false;
   }
 }

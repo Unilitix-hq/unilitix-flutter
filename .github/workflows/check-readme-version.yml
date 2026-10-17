@@ -28,6 +28,15 @@ jobs:
 
           echo "✅ README version matches pubspec: ^$SDK_VERSION"
 
+          for f in ios/unilitix.podspec lib/src/core/version.dart; do
+            if ! grep -q "'$SDK_VERSION'" "$f"; then
+              echo "❌ $f does not carry version $SDK_VERSION"
+              grep -n "version" "$f" | head -3
+              exit 1
+            fi
+          done
+          echo "✅ podspec and version.dart match pubspec"
+
       - name: Check kUnilitixSdkVersion matches pubspec version
         run: |
           SDK_VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}')

@@ -34,6 +34,8 @@ class ScreenshotCapture with WidgetsBindingObserver {
   final int quality;
   final bool maskScreenshots;
   final bool maskImages;
+  final bool maskInputs;
+  final bool maskAllText;
   final Future<void> Function(
     Uint8List bytes,
     String screenName,
@@ -63,9 +65,12 @@ class ScreenshotCapture with WidgetsBindingObserver {
     this.heartbeatMs = 10000,
     this.maskScreenshots = true,
     this.maskImages = false,
+    this.maskInputs = true,
+    this.maskAllText = true,
   });
 
   void start() {
+    if (_active) return; // idempotent: consent changes may call this again
     _active = true;
     _lastCaptureMs = 0;
     _dirty = true;
@@ -130,6 +135,7 @@ class ScreenshotCapture with WidgetsBindingObserver {
     try {
       // Occlusion regions are read in the same frame the pixels come from.
       final masks = _collectMasks();
+      if (masks == null) return; // never upload a frame we could not mask
       final view = SchedulerBinding.instance.platformDispatcher.views.first;
       final dpr = view.devicePixelRatio;
 
@@ -149,15 +155,23 @@ class ScreenshotCapture with WidgetsBindingObserver {
     }
   }
 
-  List<ui.Rect> _collectMasks() {
+  /// Regions painted over before the frame is encoded, in logical pixels:
+  /// every [UnilitixPrivate] subtree; every text input when [maskInputs] is
+  /// on; every paragraph of text when [maskAllText] is on (minus
+  /// [UnilitixUnmasked] subtrees); every image when [maskImages] is on.
+  ///
+  /// If collection fails the frame is dropped rather than sent unmasked.
+  List<ui.Rect>? _collectMasks() {
     if (!maskScreenshots) return const [];
     try {
       final rects = <ui.Rect>[...PrivacyRegistry.privateRects()];
+      rects.addAll(
+          PrivacyRegistry.textRects(inputs: maskInputs, allText: maskAllText));
       if (maskImages) rects.addAll(PrivacyRegistry.imageRects());
       return rects;
     } catch (e) {
-      UnilitixLogger.w('Mask collection failed: $e');
-      return const [];
+      UnilitixLogger.w('Mask collection failed — frame skipped: $e');
+      return null;
     }
   }
 

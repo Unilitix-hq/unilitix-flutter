@@ -1,3 +1,47 @@
+## 2.1.0
+
+Privacy release. Upgrade before enabling session replay in any app that shows
+personal or financial data.
+
+### Fixed
+- **Text inputs were not masked in pixel screenshots.** `maskInputs` only
+  affected wireframe snapshots; a `TextField` without `obscureText` was
+  uploaded legibly. Inputs are now painted over in screenshots too.
+- **Opt-out was not honoured everywhere.** A session stub (device fields and
+  user id) was written at session start and uploaded on the next launch even
+  when the user had opted out; crash events bypassed the opt-out gate. Every
+  persistence and upload path is now gated, and a denied consent purges what
+  a previous process left behind.
+- `autoTrackTaps` did nothing unless the app also wrapped its tree in the
+  undocumented `UnilitixGestureDetector`. `UnilitixWidget` now records taps
+  itself through a pointer listener that never competes with app gestures.
+- Calling any API before `init()` in a release build threw a
+  `LateInitializationError`; it is now logged and ignored.
+- The connectivity fallback polled `https://1.1.1.1` every 30 s on mobile when
+  the native channel errored, leaking timers; mobile now reports `UNKNOWN`
+  instead, web/desktop probe the Unilitix API, and timers never stack.
+- Session payloads sent `-1.0` for unknown battery/storage and `''` for an
+  unknown carrier; these fields are now omitted.
+- User traits were re-sent on every session upsert; they travel once, via
+  `/identify`.
+- `ios/unilitix.podspec` was stuck at 2.0.73; it now tracks the package
+  version and CI fails if it drifts.
+- `PrivacyInfo.xcprivacy` was empty; it now declares what the SDK collects.
+
+### Added
+- `maskAllText` now also paints over every text widget in pixel screenshots,
+  and `UnilitixUnmasked` exempts a subtree (never inputs or `UnilitixPrivate`).
+- `UnilitixConsent { pending, granted, denied }`, `init(consent:)`,
+  `Unilitix.setConsent()` and `Unilitix.consent`. `pending` collects to the
+  on-device queue and uploads nothing until granted; `denied` purges.
+- `replaySampleRate` (default 1.0, decided once per session).
+- README section "What the SDK collects by default".
+
+### Changed
+- `optOut()` / `optIn()` are now aliases of `setConsent(denied/granted)`.
+- `UnilitixGestureDetector` becomes a passthrough when `UnilitixWidget` is
+  mounted, so a tap is never counted twice.
+
 ## 2.0.76
 
 ### Fixed

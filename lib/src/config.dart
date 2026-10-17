@@ -37,13 +37,17 @@ class UnilitixConfig {
   /// Enable verbose console logging.
   final bool debug;
 
-  /// Mask text input fields in snapshots and screenshots.
+  /// Occlude text input fields (`TextField`, `TextFormField`,
+  /// `CupertinoTextField`, `EditableText`) in wireframe snapshots and paint
+  /// over them in pixel screenshots. Inputs are masked even inside a
+  /// [UnilitixUnmasked] subtree.
   final bool maskInputs;
 
-  /// Redact the content of every text widget in wireframe snapshots,
-  /// preserving length so layout fidelity is kept. On by default: balances,
-  /// names, phone numbers and OTPs are usually rendered as plain [Text].
-  /// Set to false only for apps that show no personal data on screen.
+  /// Redact every text widget: in wireframe snapshots the characters are
+  /// replaced by bullets (length preserved); in pixel screenshots the text's
+  /// bounds are painted over. On by default: balances, names, phone numbers
+  /// and OTPs are usually rendered as plain [Text]. Wrap copy that is safe and
+  /// useful to see (headings, button labels) in [UnilitixUnmasked].
   final bool maskAllText;
 
   /// Black out image widgets (Image, RawImage, CircleAvatar, FadeInImage) in
@@ -53,6 +57,13 @@ class UnilitixConfig {
   /// Paint an opaque box over every [UnilitixPrivate] subtree (and images when
   /// [maskImages] is on) in pixel screenshots before they leave the device.
   final bool maskScreenshots;
+
+  /// Fraction of sessions (0.0–1.0) for which session replay (wireframe
+  /// snapshots and screenshots) is captured; decided once per session.
+  /// Events, crashes and performance are always collected. 1.0 records every
+  /// session; 0.1 records one in ten; 0 disables replay without touching the
+  /// other `capture*` flags.
+  final double replaySampleRate;
 
   /// Capture widget-tree snapshots.
   final bool captureSnapshots;
@@ -105,6 +116,7 @@ class UnilitixConfig {
     this.maskAllText = true,
     this.maskImages = false,
     this.maskScreenshots = true,
+    this.replaySampleRate = 1.0,
     this.captureSnapshots = true,
     this.snapshotIntervalMs = 1000,
     this.maxSnapshotsPerSession = 1500,
@@ -133,6 +145,7 @@ class UnilitixConfig {
     bool? maskAllText,
     bool? maskImages,
     bool? maskScreenshots,
+    double? replaySampleRate,
     bool? captureSnapshots,
     int? snapshotIntervalMs,
     int? maxSnapshotsPerSession,
@@ -161,6 +174,7 @@ class UnilitixConfig {
       maskAllText: maskAllText ?? this.maskAllText,
       maskImages: maskImages ?? this.maskImages,
       maskScreenshots: maskScreenshots ?? this.maskScreenshots,
+      replaySampleRate: replaySampleRate ?? this.replaySampleRate,
       captureSnapshots: captureSnapshots ?? this.captureSnapshots,
       snapshotIntervalMs: snapshotIntervalMs ?? this.snapshotIntervalMs,
       maxSnapshotsPerSession:

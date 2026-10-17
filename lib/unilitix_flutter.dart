@@ -9,4 +9,7 @@ export 'unilitix.dart'
         // ignore: deprecated_member_use_from_same_package
         UnilitixMaterialApp,
         UnilitixWidget,
-        UnilitixPrivate;
+        UnilitixGestureDetector,
+        UnilitixPrivate,
+        UnilitixUnmasked,
+        UnilitixConsent;

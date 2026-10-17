@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
@@ -10,16 +11,21 @@ class NetworkMonitor {
 
   static const _channel = EventChannel('com.unilitix/network');
 
-  // Polling fallback for web/desktop. Note: this endpoint may be blocked
-  // by some ISPs in African markets. Mobile uses native EventChannel instead.
-  // Cloudflare's 1.1.1.1 has better availability in African markets than
-  // Google's generate_204 endpoint.
-  static const _pollUrl = 'https://1.1.1.1/cdn-cgi/trace';
+  // Reachability probe, used ONLY on web/desktop where no native channel
+  // exists. It goes to the Unilitix API itself (a host the app already talks
+  // to) so the SDK never contacts a third party on the integrator's behalf.
+  // On Android/iOS the native EventChannel is the sole source: an error on
+  // it degrades to UNKNOWN rather than to polling.
+  final String apiUrl;
+  String get _pollUrl => '$apiUrl/health';
   StreamSubscription? _sub;
   String _current = 'UNKNOWN';
   Timer? _pollTimer;
 
-  NetworkMonitor({required this.onNetworkChanged});
+  NetworkMonitor({
+    required this.onNetworkChanged,
+    this.apiUrl = 'https://api.unilitix.com',
+  });
 
   void start() {
     // Try native EventChannel first (Android/iOS)
@@ -32,7 +38,16 @@ class NetworkMonitor {
             onNetworkChanged(_current);
           }
         },
-        onError: (_) => _startPolling(),
+        onError: (_) {
+          // Native channel failed on a mobile platform: report UNKNOWN once
+          // rather than start a polling loop that wakes the radio every 30 s.
+          if (kIsWeb) {
+            _startPolling();
+          } else if (_current != 'UNKNOWN') {
+            _current = 'UNKNOWN';
+            onNetworkChanged(_current);
+          }
+        },
       );
     } on MissingPluginException {
       // Web/desktop — fall back to polling
@@ -49,6 +64,7 @@ class NetworkMonitor {
 
   /// Polling fallback for web/desktop using an http reachability check.
   void _startPolling() {
+    _pollTimer?.cancel(); // never stack timers
     _pollTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
       final type = await _checkConnectivity();
       if (type != _current) {
@@ -58,12 +74,13 @@ class NetworkMonitor {
     });
   }
 
-  static Future<String> _checkConnectivity() async {
+  Future<String> _checkConnectivity() async {
     try {
       final response = await http
           .get(Uri.parse(_pollUrl))
           .timeout(const Duration(seconds: 5));
-      return response.statusCode < 300 ? 'WIFI' : 'OFFLINE';
+      // Reachable, but the link type is unknowable from a browser/desktop.
+      return response.statusCode < 300 ? 'UNKNOWN' : 'OFFLINE';
     } catch (_) {
       return 'OFFLINE';
     }
@@ -84,6 +101,9 @@ class NetworkMonitor {
   }
 
   String currentType() => _current;
-  bool isWifi() => _current == 'WIFI';
+
+  /// True on Wi-Fi, and on web/desktop where links are not metered the way
+  /// mobile data is, so `uploadScreenshotsOnWifiOnly` does not block uploads there.
+  bool isWifi() => _current == 'WIFI' || (kIsWeb && _current != 'OFFLINE');
   bool isOffline() => _current == 'OFFLINE';
 }

@@ -16,6 +16,7 @@ class UnilitixGestureDetector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (SdkScope.widgetHandlesTaps) return child; // UnilitixWidget records taps
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
       onTapDown: (details) {

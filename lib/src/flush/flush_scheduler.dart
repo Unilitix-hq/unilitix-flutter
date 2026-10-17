@@ -67,9 +67,13 @@ class FlushScheduler {
     return completer.future;
   }
 
-  /// Consent gate. When it returns true nothing leaves the device: every
-  /// public flush entry point returns immediately without a network call.
+  /// Consent gates. [isOptedOut] (consent denied) means nothing is collected
+  /// or uploaded and local stubs are deleted. [canUpload] is false while
+  /// consent is denied *or pending*: every upload entry point returns without
+  /// a network call, but what was captured stays in the on-device queue so it
+  /// can be sent once consent is granted.
   final bool Function() isOptedOut;
+  final bool Function() canUpload;
 
   FlushScheduler({
     required this.intervalSeconds,
@@ -83,9 +87,12 @@ class FlushScheduler {
     required this.uploadScreenshotsOnWifiOnly,
     this.snapshotBuffer,
     bool Function()? isOptedOut,
-  }) : isOptedOut = isOptedOut ?? _neverOptedOut;
+    bool Function()? canUpload,
+  })  : isOptedOut = isOptedOut ?? _neverOptedOut,
+        canUpload = canUpload ?? _alwaysUpload;
 
   static bool _neverOptedOut() => false;
+  static bool _alwaysUpload() => true;
 
   void start() {
     _timer = Timer.periodic(
@@ -103,7 +110,7 @@ class FlushScheduler {
   /// Periodic flush — runs all 4 stages every cycle.
   /// Stages 3+4 (snapshots/screenshots) are best-effort and run in background.
   Future<void> flush() async {
-    if (isOptedOut()) return;
+    if (!canUpload()) return;
     if (_authRejected) return;
     if (_flushing) return;
     _flushing = true;
@@ -132,14 +139,14 @@ class FlushScheduler {
   /// Immediate events-only flush called from track() — bypasses re-entrancy
   /// guard. Safe: drain() is atomic in single-isolate Dart.
   Future<void> flushNow() async {
-    if (isOptedOut()) return;
+    if (!canUpload()) return;
     if (_authRejected) return;
     await _flushEvents();
   }
 
   /// Drain pending events on app background — no session POST, no screenshots.
   Future<void> flushEventsOnly() async {
-    if (isOptedOut()) return;
+    if (!canUpload()) return;
     if (_authRejected) return;
     await _flushEvents();
   }
@@ -149,7 +156,7 @@ class FlushScheduler {
   /// if the process dies first, the next launch recovers and uploads it.
   Future<void> flushCrash(
       {Duration timeout = const Duration(seconds: 3)}) async {
-    if (isOptedOut()) return;
+    if (!canUpload()) return;
     if (_authRejected) return;
     try {
       await _flushEvents().timeout(timeout);
@@ -176,6 +183,10 @@ class FlushScheduler {
       // Opted out: nothing is uploaded and the local stub must not survive to be
       // recovered (and uploaded) on the next launch.
       await database.deletePendingSession(session.id);
+      return;
+    }
+    if (!canUpload()) {
+      // Consent pending: keep the stub and the queue for when it is granted.
       return;
     }
     _flushing = true;
@@ -458,7 +469,7 @@ class FlushScheduler {
   // ── Retry ──────────────────────────────────────────────────────────────────
 
   Future<void> _retryPending({bool skipPurge = false, int limit = 20}) async {
-    if (isOptedOut()) return;
+    if (!canUpload()) return;
     if (_authRejected) return;
     final pending = await database.getOldestEvents(limit);
     // Strictly one batch in flight, oldest first: concurrent retries reorder

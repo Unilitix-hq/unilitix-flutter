@@ -102,6 +102,7 @@ class SnapshotCapture with WidgetsBindingObserver {
   });
 
   void start() {
+    if (_active) return; // idempotent: consent changes may call this again
     _active = true;
     WidgetsBinding.instance.addObserver(this);
     final clamped = intervalMs.clamp(1000, 60000);

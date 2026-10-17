@@ -2,8 +2,9 @@ import 'package:flutter/widgets.dart';
 
 import '../core/sdk_scope.dart';
 
-/// Wrap your app content with [UnilitixWidget] to enable session replay.
-/// Place it in [MaterialApp.builder] so screenshots capture fully rendered content.
+/// Wrap your app content with [UnilitixWidget] to enable session replay and
+/// automatic tap tracking. Place it in [MaterialApp.builder] so screenshots
+/// capture fully rendered content.
 ///
 /// ```dart
 /// MaterialApp(
@@ -35,10 +36,34 @@ class _UnilitixWidgetState extends State<UnilitixWidget> {
   }
 
   @override
+  void initState() {
+    super.initState();
+    SdkScope.widgetHandlesTaps = true;
+  }
+
+  @override
+  void dispose() {
+    SdkScope.widgetHandlesTaps = false;
+    super.dispose();
+  }
+
+  void _onPointerDown(PointerDownEvent e) {
+    final pos = e.position;
+    SdkScope.onTap?.call(SdkScope.currentScreen ?? 'unknown', pos.dx, pos.dy);
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return RepaintBoundary(
-      key: SdkScope.repaintKey,
-      child: widget.child,
+    // A raw pointer listener records taps for `autoTrackTaps` without taking
+    // part in gesture arenas, so it never steals a tap, drag or long-press
+    // from the app. Wrapping in UnilitixGestureDetector is no longer needed.
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: _onPointerDown,
+      child: RepaintBoundary(
+        key: SdkScope.repaintKey,
+        child: widget.child,
+      ),
     );
   }
 }
