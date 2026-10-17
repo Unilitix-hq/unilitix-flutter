@@ -286,7 +286,7 @@ enum NativeCrashHandler {
     let size = max(Int(SIGSTKSZ), 64 * 1024)
     if let mem = malloc(size) {
       altStack = mem
-      var ss = stack_t(ss_sp: mem, ss_size: size, ss_flags: 0)
+      var ss = stack_t(ss_sp: mem, ss_size: UInt(size), ss_flags: 0)
       sigaltstack(&ss, nil)
     }
 
