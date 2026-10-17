@@ -38,6 +38,18 @@ class FlushScheduler {
   bool _flushing = false;
   bool _disposed = false;
 
+  /// Set once the API rejects the key (401/403). A revoked or wrong key never
+  /// recovers on its own, so uploads stop for the rest of the process instead
+  /// of retrying every cycle; data stays in the on-device queue and is sent on
+  /// a later launch once the key is fixed.
+  bool _authRejected = false;
+
+  /// True after the API rejected the SDK key; uploads are paused until restart.
+  bool get authRejected => _authRejected;
+
+  /// 401 and 403 mean the key itself is wrong, not that the request was.
+  static bool isAuthFailure(int status) => status == 401 || status == 403;
+
   /// Serialises every event upload: periodic flush, [flushNow] from track(),
   /// background drain and retries all go through this one gate, so at most one
   /// events request is in flight and batches leave in capture order.
@@ -92,6 +104,7 @@ class FlushScheduler {
   /// Stages 3+4 (snapshots/screenshots) are best-effort and run in background.
   Future<void> flush() async {
     if (isOptedOut()) return;
+    if (_authRejected) return;
     if (_flushing) return;
     _flushing = true;
     try {
@@ -120,12 +133,14 @@ class FlushScheduler {
   /// guard. Safe: drain() is atomic in single-isolate Dart.
   Future<void> flushNow() async {
     if (isOptedOut()) return;
+    if (_authRejected) return;
     await _flushEvents();
   }
 
   /// Drain pending events on app background — no session POST, no screenshots.
   Future<void> flushEventsOnly() async {
     if (isOptedOut()) return;
+    if (_authRejected) return;
     await _flushEvents();
   }
 
@@ -135,6 +150,7 @@ class FlushScheduler {
   Future<void> flushCrash(
       {Duration timeout = const Duration(seconds: 3)}) async {
     if (isOptedOut()) return;
+    if (_authRejected) return;
     try {
       await _flushEvents().timeout(timeout);
       await _retryPending(skipPurge: true, limit: 1).timeout(timeout);
@@ -155,7 +171,7 @@ class FlushScheduler {
       waited += 100;
     }
 
-    if (_disposed) return;
+    if (_disposed || _authRejected) return;
     if (isOptedOut()) {
       // Opted out: nothing is uploaded and the local stub must not survive to be
       // recovered (and uploaded) on the next launch.
@@ -213,6 +229,15 @@ class FlushScheduler {
         // Session already exists on server — treat as success, proceed with events
         UnilitixLogger.d('Session already exists ($sessionId) — proceeding');
         return true;
+      }
+      if (isAuthFailure(resp.statusCode)) {
+        _authRejected = true;
+        UnilitixLogger.e(
+          'Unilitix API key rejected (${resp.statusCode}). Uploads are paused '
+          'until the app restarts — check the key passed to Unilitix.init(). '
+          'Captured data stays on-device and is sent once the key is valid.',
+        );
+        return false;
       }
       if (resp.statusCode == 400) {
         // Malformed payload — reset and start fresh next cycle
@@ -434,6 +459,7 @@ class FlushScheduler {
 
   Future<void> _retryPending({bool skipPurge = false, int limit = 20}) async {
     if (isOptedOut()) return;
+    if (_authRejected) return;
     final pending = await database.getOldestEvents(limit);
     // Strictly one batch in flight, oldest first: concurrent retries reorder
     // events on the server and multiply load on a degraded link.

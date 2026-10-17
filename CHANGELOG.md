@@ -1,3 +1,12 @@
+## 2.0.76
+
+### Fixed
+- A rejected API key (HTTP 401/403) no longer retries forever. The SDK used to
+  treat it like a network blip and re-send the session on every flush cycle
+  and every launch; it now logs one clear error, pauses uploads for the rest
+  of the process, and keeps captured data on-device for a later launch with a
+  valid key.
+
 ## 2.0.75
 
 ### Fixed
