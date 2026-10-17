@@ -37,6 +37,7 @@ import 'src/capture/screenshot_capture.dart';
 import 'src/network/api_client.dart';
 import 'src/network/network_monitor.dart';
 import 'src/storage/event_database.dart';
+import 'src/storage/pending_event.dart';
 import 'src/storage/pending_screenshot.dart';
 import 'src/performance/performance_monitor.dart';
 import 'src/crash/crash_tracker.dart';
@@ -223,6 +224,7 @@ class Unilitix {
       sessionTimeoutSeconds: effectiveConfig.sessionTimeoutSeconds,
       onSessionStart: (session) {
         _applyReplaySampling(session.id);
+        _crashTracker.resetSession();
         if (_optManager.isOptedOut) return;
         _emitEvent(UnilitixEvent(
           type: EventTypes.sessionStart,
@@ -372,8 +374,20 @@ class Unilitix {
     if (effectiveConfig.autoTrackCrashes) _crashTracker.install();
     await _crashTracker.logPendingCrashesIfAny();
     // A native crash (JVM exception, NSException, fatal signal) from the last
-    // process is reported now as a fatal CRASH against the new session.
-    unawaited(_crashTracker.reportNativeCrashIfAny());
+    // process is reported now as a fatal CRASH against the session that was
+    // running when it happened (its stub is still in pending_sessions), so
+    // the crash and its replay stay together. Awaited: the queued batch must
+    // exist before session recovery below decides what is worth sending.
+    if (!_optManager.isOptedOut) {
+      try {
+        await _crashTracker.reportNativeCrashIfAny(
+          attribute: _attributeNativeCrash,
+          report: _queueCrashForSession,
+        );
+      } catch (e) {
+        UnilitixLogger.w('Native crash report failed: $e');
+      }
+    }
     _flushScheduler.start();
     if (_optManager.isOptedOut) {
       // Denied: anything a previous process left behind must not survive.
@@ -491,6 +505,52 @@ class Unilitix {
   static Future<void> screen(String screenName) async {
     if (!_ready('screen')) return;
     _onScreenChange(screenName);
+  }
+
+  /// Records an error the app caught itself, as a non-fatal `EXCEPTION`
+  /// (or a `CRASH` when [fatal] is true), with the current breadcrumbs.
+  ///
+  /// ```dart
+  /// try {
+  ///   await payments.charge(card);
+  /// } catch (e, st) {
+  ///   Unilitix.captureException(e, stackTrace: st);
+  ///   showRetry();
+  /// }
+  /// ```
+  static void captureException(
+    Object error, {
+    StackTrace? stackTrace,
+    bool fatal = false,
+  }) {
+    if (!_ready('captureException')) return;
+    if (_optManager.isOptedOut) return;
+    _guard('captureException', () {
+      _crashTracker.capture(error, stackTrace ?? StackTrace.current,
+          fatal: fatal);
+    });
+  }
+
+  /// Adds a breadcrumb to the trail attached to the next crash or exception
+  /// report. The SDK already records taps, navigation and custom events;
+  /// use this for app state that explains a crash — "payment started",
+  /// "token refreshed" — never for personal data. The trail keeps the last 50.
+  ///
+  /// ```dart
+  /// Unilitix.addBreadcrumb('checkout started', category: 'flow',
+  ///     data: {'items': 3});
+  /// ```
+  static void addBreadcrumb(
+    String message, {
+    String? category,
+    Map<String, dynamic>? data,
+  }) {
+    if (!_ready('addBreadcrumb')) return;
+    if (_optManager.isOptedOut) return;
+    _guard('addBreadcrumb', () {
+      _addBreadcrumb(category ?? 'custom', SdkScope.currentScreen,
+          message: message, data: data);
+    });
   }
 
   /// Runs [body] so that a bug inside the SDK is logged, never thrown into
@@ -634,9 +694,13 @@ class Unilitix {
 
           // Recovery rules:
           // 1. Always recover if session has unsent events (offline recovery).
-          // 2. Recover if session is < 30 minutes old (recent crash/kill).
-          // 3. Discard if old AND no unsent events (stale, nothing to save).
-          if (!hasPendingEvents && age.inMinutes >= 30) {
+          // 2. Always recover a session that did not end cleanly (the start
+          //    sentinel still says crashed: true) — a crash found a week
+          //    later is still a crash the dashboard should count.
+          // 3. Recover if session is < 30 minutes old (recent kill).
+          // 4. Discard if old, ended cleanly, and nothing unsent.
+          final crashed = payload['crashed'] == true;
+          if (!hasPendingEvents && !crashed && age.inMinutes >= 30) {
             await _database.deletePendingSession(id);
             UnilitixLogger.d(
                 'Discarding stale session $id (${age.inMinutes}m old, no pending events)');
@@ -780,13 +844,58 @@ class Unilitix {
     }
   }
 
-  static void _addBreadcrumb(String type, String? screen) {
+  static void _addBreadcrumb(String type, String? screen,
+      {String? message, Map<String, dynamic>? data}) {
     _breadcrumbs.add({
       'type': type,
       'screen': screen,
+      if (message != null) 'message': message,
+      if (data != null) 'data': data,
       'timestamp': DateTime.now().millisecondsSinceEpoch,
     });
     if (_breadcrumbs.length > 50) _breadcrumbs.removeAt(0);
+  }
+
+  /// Picks the session a native crash belongs to: the pending stub with the
+  /// latest `startedAt` at or before the marker's timestamp, excluding the
+  /// session that just started. No timestamp → the most recent stub.
+  static Future<CrashAttribution> _attributeNativeCrash(int? tsMs) async {
+    final current = _sessionManager.currentSession?.id;
+    String? best;
+    DateTime? bestStart;
+    for (final s in await _database.getPendingSessions()) {
+      final id = s['id'] as String?;
+      final raw = s['session_json'] as String?;
+      if (id == null || raw == null || id == current) continue;
+      DateTime? started;
+      try {
+        final payload = jsonDecode(raw) as Map<String, dynamic>;
+        started = DateTime.tryParse(payload['startedAt'] as String? ?? '');
+      } catch (_) {
+        continue;
+      }
+      if (started == null) continue;
+      if (tsMs != null && started.millisecondsSinceEpoch > tsMs) continue;
+      if (bestStart == null || started.isAfter(bestStart)) {
+        best = id;
+        bestStart = started;
+      }
+    }
+    return CrashAttribution(best);
+  }
+
+  /// Queues a crash event straight into the retry queue under [sessionId]
+  /// (a session that is no longer live), so it is uploaded with the next
+  /// flush and the stub is recovered because it now has pending events.
+  static Future<void> _queueCrashForSession(
+      String sessionId, UnilitixEvent event) async {
+    await _database.insertEvent(PendingEvent(
+      sessionJson: jsonEncode({'sessionId': sessionId}),
+      eventsJson: jsonEncode([event.toJson()]),
+      eventCount: 1,
+      createdAt: DateTime.now().millisecondsSinceEpoch,
+      networkAtCapture: _networkMonitor.currentType(),
+    ));
   }
 
   static Future<void> _refreshDeviceInfoIfNeeded() async {

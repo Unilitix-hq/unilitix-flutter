@@ -1,3 +1,39 @@
+## 2.1.2
+
+Crash credibility release. No breaking changes.
+
+### Fixed
+- **Native crashes are attributed to the session that crashed**, not to the
+  session that starts on the next launch, so a crash and its replay stay
+  together. The marker written by the plugin carries the time of death; the
+  SDK matches it to the pending session stub.
+- **Sessions that did not end cleanly are recovered regardless of age.** A
+  crash the device only reports a week later (offline, app unused) was
+  discarded as stale.
+- **`PlatformDispatcher.onError` is chained.** A handler the app or another
+  SDK installed first still runs and still decides whether the error is
+  handled; previously the SDK replaced it.
+- **iOS signal handlers use `sigaction` on an alternate stack
+  (`sigaltstack`)** and chain to the previously installed handler
+  (Crashlytics, Sentry, the app's own) instead of replacing it, so two crash
+  reporters can coexist; a stack-overflow `SIGSEGV` is now recorded. The
+  signal record carries the time of death.
+
+### Added
+- **Fingerprints.** Every crash and exception carries a stable grouping key
+  in `metadata.fingerprint` (exception type + the top three frames with line
+  and column numbers removed; `virt` offsets for obfuscated traces), with
+  `metadata.occurrence` counting repeats. The same fingerprint is reported at
+  most 3 times per session and reports are capped at 50 per session, so an
+  error thrown every frame no longer floods the queue.
+- `metadata.buildId` and `metadata.isolateDsoBase` on reports from
+  `--split-debug-info` builds, and `dart run unilitix:unilitix_symbols
+  upload <dir>` to upload the symbol files. Server-side symbolication lands
+  with the API release that adds `POST /v1/symbols`; until then the tool
+  reports the endpoint as unavailable and exits non-zero.
+- `Unilitix.captureException(error, stackTrace:, fatal:)` and
+  `Unilitix.addBreadcrumb(message, category:, data:)`.
+
 ## 2.1.1
 
 Reliability and size release. No API changes; two behaviour changes worth

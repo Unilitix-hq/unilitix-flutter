@@ -234,19 +234,26 @@ extension UnilitixPlugin: FlutterStreamHandler {
 // MARK: - Native crash capture
 //
 // Records uncaught Objective-C exceptions and fatal signals to a marker file
-// that the SDK reports as a fatal CRASH on the next launch. Signal handlers
-// only call async-signal-safe functions (open/write/close) on a pre-built
-// buffer; the richer NSException path may allocate because the runtime is
-// still consistent at that point.
+// that the SDK reports as a fatal CRASH on the next launch, against the
+// session that was running. Signal handlers are installed with `sigaction`
+// on an alternate stack (`sigaltstack`), so a stack overflow can still be
+// recorded, and they only call async-signal-safe functions (open/write/
+// close/time) on pre-built buffers. Whatever handler was installed before
+// (Crashlytics, Sentry, the app's own) is chained: it runs after ours, and
+// if there was none the default action is restored and the signal re-raised
+// so the process still dies the way it would have.
 
 enum NativeCrashHandler {
   private static let fileName = "unilitix_native_crash.json"
   private static var previousHandler: (@convention(c) (NSException) -> Void)?
   private static var installed = false
   private static let signals: [Int32] = [SIGABRT, SIGBUS, SIGFPE, SIGILL, SIGSEGV, SIGTRAP]
+  /// Previous `sigaction` per signal, restored and chained from the handler.
+  private static var previousActions: [Int32: sigaction] = [:]
   /// Path resolved once at install so the signal handler never touches
   /// Foundation (which is not async-signal-safe).
   private static var pathCString: UnsafeMutablePointer<CChar>?
+  private static var altStack: UnsafeMutableRawPointer?
 
   static var filePath: String {
     let dir = NSSearchPathForDirectoriesInDomains(.applicationSupportDirectory, .userDomainMask, true).first ?? NSTemporaryDirectory()
@@ -274,30 +281,80 @@ enum NativeCrashHandler {
       NativeCrashHandler.previousHandler?(exception)
     }
 
+    // Alternate signal stack: a stack-overflow SIGSEGV cannot run a handler
+    // on the stack that overflowed.
+    let size = max(Int(SIGSTKSZ), 64 * 1024)
+    if let mem = malloc(size) {
+      altStack = mem
+      var ss = stack_t(ss_sp: mem, ss_size: size, ss_flags: 0)
+      sigaltstack(&ss, nil)
+    }
+
     for sig in signals {
-      signal(sig, NativeCrashHandler.handleSignal)
+      var action = sigaction()
+      action.__sigaction_u.__sa_sigaction = NativeCrashHandler.handleSignal
+      action.sa_flags = SA_SIGINFO | SA_ONSTACK
+      sigemptyset(&action.sa_mask)
+      var previous = sigaction()
+      if sigaction(sig, &action, &previous) == 0 {
+        previousActions[sig] = previous
+      }
     }
   }
 
   /// Async-signal-safe: writes a fixed JSON record with the signal number
-  /// using only open/write/close and stack memory.
-  private static let handleSignal: @convention(c) (Int32) -> Void = { s in
-    guard let path = NativeCrashHandler.pathCString else {
-      signal(s, SIG_DFL); raise(s); return
-    }
-    let prefix: StaticString = "{\"platform\":\"ios\",\"exceptionType\":\"SIGNAL\",\"signal\":"
-    let suffix: StaticString = "}"
-    let fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0o644)
-    if fd >= 0 {
-      prefix.withUTF8Buffer { _ = write(fd, $0.baseAddress, $0.count) }
-      // Stack-only decimal formatting of the signal number.
-      withUnsafeTemporaryAllocation(of: UInt8.self, capacity: 12) { digits in
-        var n = Int(s), i = 12
-        repeat { i -= 1; digits[i] = UInt8(48 + n % 10); n /= 10 } while n > 0
-        _ = write(fd, digits.baseAddress! + i, 12 - i)
+  /// and the wall-clock second using only open/write/close/time and stack
+  /// memory, then hands the signal to the previous handler (or the default
+  /// action) so the process terminates as it would have without us.
+  private static let handleSignal: @convention(c) (Int32, UnsafeMutablePointer<siginfo_t>?, UnsafeMutableRawPointer?) -> Void = { s, info, context in
+    if let path = NativeCrashHandler.pathCString {
+      let prefix: StaticString = "{\"platform\":\"ios\",\"exceptionType\":\"SIGNAL\",\"signal\":"
+      let middle: StaticString = ",\"timestamp\":"
+      let suffix: StaticString = "000}"
+      let fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0o644)
+      if fd >= 0 {
+        prefix.withUTF8Buffer { _ = write(fd, $0.baseAddress, $0.count) }
+        NativeCrashHandler.writeDecimal(fd, Int(s))
+        middle.withUTF8Buffer { _ = write(fd, $0.baseAddress, $0.count) }
+        NativeCrashHandler.writeDecimal(fd, Int(time(nil)))
+        suffix.withUTF8Buffer { _ = write(fd, $0.baseAddress, $0.count) }
+        close(fd)
       }
-      suffix.withUTF8Buffer { _ = write(fd, $0.baseAddress, $0.count) }
-      close(fd)
+    }
+    NativeCrashHandler.chain(s, info, context)
+  }
+
+  /// Stack-only decimal formatting (no Foundation, no allocation).
+  private static func writeDecimal(_ fd: Int32, _ value: Int) {
+    withUnsafeTemporaryAllocation(of: UInt8.self, capacity: 24) { digits in
+      var n = value < 0 ? 0 : value
+      var i = 24
+      repeat { i -= 1; digits[i] = UInt8(48 + n % 10); n /= 10 } while n > 0
+      _ = write(fd, digits.baseAddress! + i, 24 - i)
+    }
+  }
+
+  /// Runs the handler that was installed before ours, or restores the default
+  /// action and re-raises. Reading a Swift dictionary here is not strictly
+  /// async-signal-safe, but it is never mutated after install().
+  private static func chain(_ s: Int32, _ info: UnsafeMutablePointer<siginfo_t>?, _ context: UnsafeMutableRawPointer?) {
+    if var previous = previousActions[s] {
+      if previous.sa_flags & SA_SIGINFO != 0 {
+        if let handler = previous.__sigaction_u.__sa_sigaction {
+          // Reinstall theirs first so a crash inside it cannot loop back here.
+          sigaction(s, &previous, nil)
+          handler(s, info, context)
+          return
+        }
+      } else if let handler = previous.__sigaction_u.__sa_handler {
+        // nil is SIG_DFL (handled below); bit pattern 1 is SIG_IGN.
+        let raw = unsafeBitCast(handler, to: UnsafeRawPointer.self)
+        if raw != UnsafeRawPointer(bitPattern: 1) {
+          sigaction(s, &previous, nil)
+          handler(s)
+          return
+        }
+      }
     }
     signal(s, SIG_DFL)
     raise(s)

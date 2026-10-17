@@ -37,6 +37,11 @@ class UnilitixEvent {
   String? exceptionMessage;
   List<Map<String, dynamic>>? breadcrumbs;
 
+  /// Grouping and symbolication data for CRASH / EXCEPTION events, sent as
+  /// the event's `metadata`: `fingerprint`, `occurrence`, and for obfuscated
+  /// builds `buildId` / `isolateDsoBase`.
+  Map<String, dynamic>? crashMetadata;
+
   // CUSTOM fields
   String? eventName;
 
@@ -73,6 +78,7 @@ class UnilitixEvent {
       if (exceptionType != null) map['exceptionType'] = exceptionType;
       if (exceptionMessage != null) map['exceptionMessage'] = exceptionMessage;
       if (breadcrumbs != null) map['breadcrumbs'] = breadcrumbs;
+      if (crashMetadata != null) map['metadata'] = crashMetadata;
     }
 
     if (type == EventTypes.custom) {

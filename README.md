@@ -1,6 +1,6 @@
 # Unilitix Flutter SDK
 
-**Version:** 2.1.1 · [pub.dev](https://pub.dev/packages/unilitix) · [GitHub](https://github.com/unilitix/unilitix-flutter)
+**Version:** 2.1.2 · [pub.dev](https://pub.dev/packages/unilitix) · [GitHub](https://github.com/unilitix/unilitix-flutter)
 
 Unilitix is a mobile analytics SDK built for African markets. It captures session replays, screen flows, custom events, and user identity — with offline-first data delivery and Africa-specific context (network type, carrier, power outage correlation).
 
@@ -27,7 +27,7 @@ Or add manually to `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  unilitix: ^2.1.1
+  unilitix: ^2.1.2
 ```
 
 Then run:
@@ -83,7 +83,7 @@ class MyApp extends StatelessWidget {
 Run your app in debug mode. Within 5 seconds you should see:
 
 ```
-[Unilitix] SDK initialized ✅ v2.1.1
+[Unilitix] SDK initialized ✅ v2.1.2
 [Unilitix] Session started ✅ abc123…
 [Unilitix] Screen → /home
 ```
@@ -183,6 +183,46 @@ device now — for example right before the user signs out.
   recorded as crashes.
 
 ---
+
+## Crashes and Errors
+
+Crash reporting is on by default (`autoTrackCrashes`). Three things are
+recorded, the way Crashlytics and Sentry classify them:
+
+| Type | Source | Marks session crashed |
+|---|---|---|
+| `EXCEPTION` (non-fatal) | `FlutterError.onError` — errors the framework caught (overflow, build errors) and `captureException` | No |
+| `CRASH` (fatal: false) | `PlatformDispatcher.onError` — an uncaught Dart error | Yes |
+| `CRASH` (fatal: true) | Native: JVM uncaught exception, `NSException`, fatal signal — recorded by the plugin and reported on the next launch against the session that was running | Yes |
+
+Handlers the app or another SDK installed before `init()` still run. Every
+report carries a stable fingerprint (type + top frames, line numbers
+ignored) so one bug is counted once across devices; the same fingerprint is
+reported at most 3 times per session, and 50 reports per session in total.
+
+```dart
+// Report an error you handled yourself
+try {
+  await payments.charge(card);
+} catch (e, st) {
+  Unilitix.captureException(e, stackTrace: st);
+}
+
+// Leave a trail for the next crash report (last 50 kept)
+Unilitix.addBreadcrumb('checkout started', category: 'flow', data: {'items': 3});
+```
+
+### Obfuscated builds
+
+Release builds with `--obfuscate --split-debug-info` produce stack traces
+the dashboard cannot read until the symbols are uploaded. Reports carry
+`buildId` and `isolateDsoBase`; upload the matching symbols once per build:
+
+```bash
+flutter build apk --release --obfuscate --split-debug-info=build/symbols
+UNILITIX_API_KEY=ul_live_… dart run unilitix:unilitix_symbols upload build/symbols \
+  --app-version 3.4.0 --build-number 120
+```
 
 ## Session Replay
 
