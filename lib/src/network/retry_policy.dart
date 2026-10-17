@@ -1,5 +1,7 @@
 import 'dart:math';
 
+import '../generated/sdk_contract.dart';
+
 /// Backoff policy for the flush scheduler.
 ///
 /// Since 2.1.1 the SDK makes **one** request per flush cycle. When that
@@ -16,7 +18,7 @@ class RetryPolicy {
   /// Backoff exponent is clamped here, so the window never exceeds
   /// `2^maxRetries` seconds (capped again by [maxDelayMs]).
   static const int maxRetries = 5;
-  static const int maxDelayMs = 300000; // 5 minutes
+  static const int maxDelayMs = SdkContract.retryMaxDelayMs; // 5 minutes
 
   static final Random _random = Random();
 
@@ -32,10 +34,13 @@ class RetryPolicy {
   /// int64 overflow.
   static Duration delayFor(int attempt, {int? retryAfterSeconds}) {
     if (retryAfterSeconds != null) {
-      return Duration(seconds: retryAfterSeconds.clamp(1, 60));
+      return Duration(
+          seconds: retryAfterSeconds.clamp(SdkContract.retryAfterMinSeconds,
+              SdkContract.retryAfterMaxSeconds));
     }
     final cappedAttempt = attempt.clamp(0, 20);
-    final base = (1000 * (1 << cappedAttempt)).clamp(0, maxDelayMs);
+    final base = (SdkContract.retryBaseDelayMs * (1 << cappedAttempt))
+        .clamp(0, maxDelayMs);
     final jitterRange = max(1, base ~/ 5); // 20% of base, minimum 1
     final jitter = _random.nextInt(jitterRange);
     final ms = (base + jitter).clamp(0, maxDelayMs);

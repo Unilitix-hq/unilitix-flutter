@@ -49,7 +49,7 @@ void main() {
         ..exceptionType = 'SIGSEGV'
         ..exceptionMessage = 'boom'
         ..breadcrumbs = [
-          {'type': 'NAV', 'screen': '/pay'}
+          {'type': 'NAVIGATE', 'screen': '/pay'}
         ];
       final wire = crash.toJson();
       expectKnownKeys(wire, IngestEvent.fields, 'crash event');

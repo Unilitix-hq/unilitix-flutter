@@ -1,12 +1,14 @@
 import 'dart:math';
 
+import '../generated/sdk_contract.dart';
+
 /// Rage-tap detector — exact port of the Android algorithm.
 ///
 /// Fires [onRageTap] when 3+ taps occur within 100 px and 1 s.
 class RageTapDetector {
-  static const int _windowMs = 1000;
-  static const double _radiusPx = 100.0;
-  static const int _minTaps = 3;
+  static const int _windowMs = SdkContract.rageTapWindowMs;
+  static const double _radiusPx = SdkContract.rageTapRadius + 0.0;
+  static const int _minTaps = SdkContract.rageTapMinTaps;
 
   final void Function(
     String screen,

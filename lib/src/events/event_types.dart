@@ -1,7 +1,11 @@
-/// Event type constants matching the Unilitix backend schema.
+/// Event type constants matching the Unilitix backend schema. Each one must
+/// appear in [SdkContract.eventTypes] (checked by test/sdk_contract_test.dart).
 class EventTypes {
   static const String tap = 'TAP';
-  static const String navigate = 'NAV';
+
+  /// Screen change. 2.1.3 and earlier sent the legacy 'NAV', which the
+  /// server now rewrites to this.
+  static const String navigate = 'NAVIGATE';
   static const String rageTap = 'RAGE_TAP';
   static const String crash = 'CRASH';
 

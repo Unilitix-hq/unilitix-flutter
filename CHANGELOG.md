@@ -1,3 +1,27 @@
+## 2.1.4
+
+Conforms to the shared SDK contract (v1.0.0). No breaking changes.
+
+### Changed
+- **Navigation events are sent as `NAVIGATE`**, the name the Android and
+  React Native SDKs use. Earlier versions sent `NAV`, which the dashboard did
+  not count in screen visits, journeys or the session timeline; the API now
+  rewrites `NAV` on ingest, so older app builds are covered too.
+- Defaults and limits (crash caps, breadcrumb trail, rage-tap thresholds,
+  retry backoff, request timeout) now come from the generated
+  `lib/src/generated/sdk_contract.dart`. Values are unchanged.
+
+### Added
+- `test/sdk_contract_test.dart`: config defaults, event types, consent
+  states, crash and retry limits, and the crash fingerprint test vectors are
+  checked against the contract.
+
+## 2.1.3
+
+- **Fixed:** the iOS plugin failed to compile in 2.1.2 (`ss_size` is
+  `size_t`). 2.1.2 is retracted; use 2.1.3 or later.
+- Publishing now waits for the Android and iOS example builds to pass.
+
 ## 2.1.2
 
 Crash credibility release. No breaking changes.

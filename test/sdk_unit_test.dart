@@ -77,7 +77,7 @@ void main() {
   group('EventTypes constants', () {
     test('all values match backend schema', () {
       expect(EventTypes.tap, 'TAP');
-      expect(EventTypes.navigate, 'NAV');
+      expect(EventTypes.navigate, 'NAVIGATE');
       expect(EventTypes.rageTap, 'RAGE_TAP');
       expect(EventTypes.crash, 'CRASH');
       expect(EventTypes.custom, 'CUSTOM');
@@ -99,10 +99,10 @@ void main() {
       expect(j['timestamp'], isA<String>());
     });
 
-    test('NAV: screen present, x/y absent', () {
+    test('NAVIGATE: screen present, x/y absent', () {
       final e = UnilitixEvent(type: EventTypes.navigate, screen: '/profile');
       final j = e.toJson();
-      expect(j['type'], 'NAV');
+      expect(j['type'], 'NAVIGATE');
       expect(j['screen'], '/profile');
       expect(j.containsKey('x'), false);
       expect(j.containsKey('y'), false);
@@ -475,7 +475,7 @@ void main() {
       final events = buf.drain();
       expect(events.length, 2);
       expect(events[0].type, 'TAP');
-      expect(events[1].type, 'NAV');
+      expect(events[1].type, 'NAVIGATE');
     });
 
     test('drain clears buffer — subsequent drain is empty', () {

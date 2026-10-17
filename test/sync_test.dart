@@ -15,8 +15,8 @@ void main() {
       expect(result, contains('Z'));
     });
 
-    test('screen event type is NAV not NAVIGATE', () {
-      expect(EventTypes.navigate, equals('NAV'));
+    test('screen event type is the canonical NAVIGATE', () {
+      expect(EventTypes.navigate, equals('NAVIGATE'));
     });
 
     test('orientation is lowercase', () {

@@ -48,6 +48,7 @@ import 'src/util/device_info.dart';
 import 'src/core/version.dart';
 import 'src/util/json_util.dart';
 import 'src/logger/logger.dart';
+import 'src/generated/sdk_contract.dart';
 
 export 'src/config.dart';
 export 'src/tracking/observer.dart';
@@ -853,7 +854,9 @@ class Unilitix {
       if (data != null) 'data': data,
       'timestamp': DateTime.now().millisecondsSinceEpoch,
     });
-    if (_breadcrumbs.length > 50) _breadcrumbs.removeAt(0);
+    if (_breadcrumbs.length > SdkContract.maxBreadcrumbs) {
+      _breadcrumbs.removeAt(0);
+    }
   }
 
   /// Picks the session a native crash belongs to: the pending stub with the

@@ -8,6 +8,7 @@ import '../events/event.dart';
 import '../logger/logger.dart';
 import '../core/sdk_scope.dart';
 import '../storage/event_database.dart';
+import '../generated/sdk_contract.dart';
 
 /// Where a native crash from a previous process should be attributed.
 class CrashAttribution {
@@ -62,8 +63,8 @@ class CrashTracker {
     required this.breadcrumbs,
     required this.database,
     this.onExceptionEvent,
-    this.maxPerFingerprint = 3,
-    this.maxPerSession = 50,
+    this.maxPerFingerprint = SdkContract.maxReportsPerFingerprint,
+    this.maxPerSession = SdkContract.maxErrorReportsPerSession,
   });
 
   /// Installs the hooks, chaining to whatever the app (or another SDK) had

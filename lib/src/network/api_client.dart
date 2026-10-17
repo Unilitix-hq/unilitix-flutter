@@ -10,6 +10,7 @@ import 'retry_policy.dart';
 import '../generated/ingest_models.dart';
 import '../logger/logger.dart';
 import '../storage/pending_screenshot.dart';
+import '../generated/sdk_contract.dart';
 
 /// A presigned-URL slot returned by the batch screenshot init endpoint.
 class ScreenshotSlot {
@@ -97,7 +98,8 @@ class ApiClient {
     required this.apiKey,
     required this.apiUrl,
     required this.sdkVersion,
-    this.requestTimeout = const Duration(seconds: 40),
+    this.requestTimeout =
+        const Duration(seconds: SdkContract.requestTimeoutSeconds),
 
     /// Injectable for tests (`MockClient`); production uses a plain client.
     http.Client? client,
