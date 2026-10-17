@@ -22,7 +22,6 @@ import 'dart:convert' show jsonDecode, jsonEncode;
 import 'dart:math' show Random;
 
 import 'package:flutter/widgets.dart';
-import 'package:package_info_plus/package_info_plus.dart';
 
 import 'src/africa/africa_context.dart';
 import 'src/config.dart';
@@ -90,7 +89,6 @@ class Unilitix {
   static late OptManager _optManager;
   static late PerformanceMonitor _performanceMonitor;
   static late DeviceInfoCollector _deviceInfo;
-  static late PackageInfo _packageInfo;
   static late RageTapDetector _rageTapDetector;
   static late AfricaContext _africaContext;
 
@@ -165,7 +163,6 @@ class Unilitix {
           'sessionTimeoutSeconds=${effectiveConfig.sessionTimeoutSeconds} is very low');
     }
 
-    _packageInfo = await PackageInfo.fromPlatform();
     _deviceInfo = DeviceInfoCollector();
     await _deviceInfo.collect();
 
@@ -335,9 +332,11 @@ class Unilitix {
     _crashTracker = CrashTracker(
       onCrashEvent: (event) {
         if (_optManager.isOptedOut) return;
-        _sessionManager.currentSession?.crashed = true;
-        _attachAndPersist(event); // durable before anything else happens
-        _eventBuffer.emit(event);
+        _guard('crash', () {
+          _sessionManager.currentSession?.crashed = true;
+          _attachAndPersist(event); // durable before anything else happens
+          _eventBuffer.emit(event);
+        });
         // The upload is scheduled on a fresh timer tick rather than awaited here:
         // this callback runs inside the zone error handler, and an exception
         // thrown synchronously from flush() would re-enter it. flushCrash()
@@ -359,15 +358,15 @@ class Unilitix {
     SdkScope.onScreenChange = _onScreenChange;
     SdkScope.onTap = _onTap;
     SdkScope.onObserverConnected = _markObserverConnected;
-    SdkScope.onScroll = (screen, dx, dy) {
-      _screenshotCapture.markDirty();
-      _emitEvent(UnilitixEvent(
-        type: EventTypes.scroll,
-        screen: screen,
-        x: dx,
-        y: dy,
-      ));
-    };
+    SdkScope.onScroll = (screen, dx, dy) => _guard('scroll', () {
+          _screenshotCapture.markDirty();
+          _emitEvent(UnilitixEvent(
+            type: EventTypes.scroll,
+            screen: screen,
+            x: dx,
+            y: dy,
+          ));
+        });
     // Start everything
     _sessionManager.start();
     if (effectiveConfig.autoTrackCrashes) _crashTracker.install();
@@ -403,7 +402,7 @@ class Unilitix {
       UnilitixLogger.d(
           'Device           ${_deviceInfo.manufacturer} ${_deviceInfo.model} (${_deviceInfo.os} ${_deviceInfo.osVersion})');
       UnilitixLogger.d(
-          'App              ${_packageInfo.appName} ${_packageInfo.version}+${_packageInfo.buildNumber}');
+          'App              ${_deviceInfo.appName} ${_deviceInfo.appVersion}+${_deviceInfo.buildNumber}');
       UnilitixLogger.d('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -455,14 +454,18 @@ class Unilitix {
   ]) async {
     if (!_ready('track')) return;
     if (_optManager.isOptedOut) return;
-    _addBreadcrumb(EventTypes.custom, SdkScope.currentScreen);
-    _emitEvent(UnilitixEvent(
-      type: EventTypes.custom,
-      screen: SdkScope.currentScreen,
-      properties: properties ?? {},
-    )..eventName = event);
-    // Flush immediately so custom events appear in dashboard without delay
-    unawaited(_flushScheduler.flushNow());
+    _guard('track', () {
+      _addBreadcrumb(EventTypes.custom, SdkScope.currentScreen);
+      _emitEvent(UnilitixEvent(
+        type: EventTypes.custom,
+        screen: SdkScope.currentScreen,
+        properties: properties ?? {},
+      )..eventName = event);
+    });
+    // Until 2.1.0 every track() call also fired an immediate POST, so an app
+    // tracking in a loop made one request per call. Custom events now ride
+    // the normal batch (every `flushIntervalSeconds`, or sooner when
+    // `flushBatchSize` is reached); call [flush] for an immediate send.
   }
 
   /// Identifies the current user with optional traits.
@@ -476,9 +479,11 @@ class Unilitix {
   ]) async {
     if (!_ready('identify')) return;
     if (_optManager.isOptedOut) return;
-    await _identity.setUserId(userId, traits: traits);
-    if (!_optManager.canUpload) return; // sent when consent is granted
-    await _sendIdentify();
+    await _guardAsync('identify', () async {
+      await _identity.setUserId(userId, traits: traits);
+      if (!_optManager.canUpload) return; // sent when consent is granted
+      await _sendIdentify();
+    });
   }
 
   /// Manually tracks a screen view.
@@ -488,19 +493,42 @@ class Unilitix {
     _onScreenChange(screenName);
   }
 
+  /// Runs [body] so that a bug inside the SDK is logged, never thrown into
+  /// the host app — where the SDK's own crash tracker would then record it as
+  /// the app crashing. Every public entry point and every framework callback
+  /// goes through here or [_guardAsync].
+  static void _guard(String what, void Function() body) {
+    try {
+      body();
+    } catch (e, st) {
+      UnilitixLogger.e('Unilitix.$what failed inside the SDK', e, st);
+    }
+  }
+
+  static Future<void> _guardAsync(
+      String what, Future<void> Function() body) async {
+    try {
+      await body();
+    } catch (e, st) {
+      UnilitixLogger.e('Unilitix.$what failed inside the SDK', e, st);
+    }
+  }
+
   // ── Session ───────────────────────────────────────────────────────
 
   /// Manually starts a new session.
   static Future<void> startSession() async {
     if (!_ready('startSession')) return;
-    _sessionManager.stop();
-    _sessionManager.start();
+    _guard('startSession', () {
+      _sessionManager.stop();
+      _sessionManager.start();
+    });
   }
 
   /// Manually ends the current session.
   static Future<void> endSession() async {
     if (!_ready('endSession')) return;
-    _sessionManager.stop();
+    _guard('endSession', _sessionManager.stop);
   }
 
   // ── Privacy ───────────────────────────────────────────────────────
@@ -520,6 +548,10 @@ class Unilitix {
   ///   device. Same as [optOut].
   static Future<void> setConsent(UnilitixConsent value) async {
     if (!_ready('setConsent')) return;
+    await _guardAsync('setConsent', () => _applyConsent(value));
+  }
+
+  static Future<void> _applyConsent(UnilitixConsent value) async {
     final before = _optManager.consent;
     await _optManager.set(value);
     switch (value) {
@@ -557,8 +589,10 @@ class Unilitix {
   /// Resets user identity and clears stored IDs. Call on logout.
   static Future<void> reset() async {
     if (!_ready('reset')) return;
-    await _identity.reset();
-    UnilitixLogger.d('Identity reset');
+    await _guardAsync('reset', () async {
+      await _identity.reset();
+      UnilitixLogger.d('Identity reset');
+    });
   }
 
   // ── Flush ─────────────────────────────────────────────────────────
@@ -566,8 +600,10 @@ class Unilitix {
   /// Immediately flushes all queued events to the backend.
   static Future<void> flush() async {
     if (!_ready('flush')) return;
-    await _flushScheduler.flush();
-    UnilitixLogger.d('Flush complete');
+    await _guardAsync('flush', () async {
+      await _flushScheduler.flush();
+      UnilitixLogger.d('Flush complete');
+    });
   }
 
   // ── Internal ──────────────────────────────────────────────────────
@@ -609,10 +645,17 @@ class Unilitix {
 
           UnilitixLogger.d(
               'Recovering session $id (${age.inMinutes}m old, hasPendingEvents: $hasPendingEvents)');
-          final ok = await _apiClient.ingestSession(payload);
-          if (ok) {
+          final r = await _apiClient.ingestSession(payload);
+          if (r.ok || r.status == 409) {
             await _database.deletePendingSession(id);
             UnilitixLogger.d('Recovered session $id');
+          } else if (r.rejected) {
+            // The server will never take this record; stop re-sending it.
+            await _database.deletePendingSession(id);
+            UnilitixLogger.w(
+                'Discarding session $id rejected with ${r.status}');
+          } else if (r.isAuthFailure || r.retryable) {
+            break; // same outcome for every other stub this launch
           }
         } on FormatException catch (e) {
           // Corrupt session_json — will never succeed, discard immediately.
@@ -634,38 +677,44 @@ class Unilitix {
 
   static void _onScreenChange(String name) {
     if (_optManager.isOptedOut) return;
-    SdkScope.currentScreen = name;
-    _screenshotCapture.markDirty();
-    _addBreadcrumb(EventTypes.navigate, name);
-    _emitEvent(UnilitixEvent(
-      type: EventTypes.navigate,
-      screen: name,
-    ));
+    _guard('screen', () {
+      SdkScope.currentScreen = name;
+      _screenshotCapture.markDirty();
+      _addBreadcrumb(EventTypes.navigate, name);
+      _emitEvent(UnilitixEvent(
+        type: EventTypes.navigate,
+        screen: name,
+      ));
+    });
   }
 
   static void _onTap(String screen, double x, double y) {
     if (_optManager.isOptedOut) return;
-    _screenshotCapture.markDirty();
-    if (_config?.autoTrackTaps != true) return;
-    bool isRage = false;
-    if (_config?.autoTrackRageTaps == true) {
-      isRage = _rageTapDetector.recordTap(screen, x, y);
-    }
-    if (!isRage) {
-      _addBreadcrumb(EventTypes.tap, screen);
-      _emitEvent(UnilitixEvent(
-        type: EventTypes.tap,
-        screen: screen,
-        x: x,
-        y: y,
-      ));
-    }
+    _guard('tap', () {
+      _screenshotCapture.markDirty();
+      if (_config?.autoTrackTaps != true) return;
+      bool isRage = false;
+      if (_config?.autoTrackRageTaps == true) {
+        isRage = _rageTapDetector.recordTap(screen, x, y);
+      }
+      if (!isRage) {
+        _addBreadcrumb(EventTypes.tap, screen);
+        _emitEvent(UnilitixEvent(
+          type: EventTypes.tap,
+          screen: screen,
+          x: x,
+          y: y,
+        ));
+      }
+    });
   }
 
   static void _emitEvent(UnilitixEvent event) {
     if (_optManager.isOptedOut) return;
-    _attachAndPersist(event);
-    _eventBuffer.emit(event);
+    _guard('emit', () {
+      _attachAndPersist(event);
+      _eventBuffer.emit(event);
+    });
   }
 
   /// Assigns the per-session sequence number and writes the event to the
@@ -676,12 +725,12 @@ class Unilitix {
         _sessionManager.currentSession ?? _sessionManager.lastEndedSession;
     if (session == null) return;
     event.seq ??= session.takeSeq();
-    unawaited(_database.walInsert(
+    _database.walInsert(
       session.id,
       event.id,
       event.seq,
       jsonEncode(event.toJson()),
-    ));
+    );
   }
 
   /// Whether replay (wireframes and screenshots) is captured for the current
@@ -713,14 +762,20 @@ class Unilitix {
     final userId = _identity.userId;
     if (userId == null) return;
     try {
-      await _apiClient.identify(
+      final r = await _apiClient.identify(
         anonymousId: _identity.anonymousId,
         customUserId: userId,
         traits: _identity.userTraits,
       );
-      UnilitixLogger.d('Identify: $userId');
+      if (r.ok) {
+        UnilitixLogger.d('Identify: $userId');
+      } else {
+        // Not queued: the next session upsert carries userId, and identify()
+        // is called again on the next login.
+        UnilitixLogger.w('identify failed: ${r.describe()}');
+      }
     } catch (e) {
-      // Never let an SDK network error surface in the host app.
+      // Never let an SDK error surface in the host app.
       UnilitixLogger.w('identify failed: $e');
     }
   }
@@ -760,11 +815,6 @@ class Unilitix {
     final orientation =
         screenSize.width > screenSize.height ? 'landscape' : 'portrait';
 
-    UnilitixLogger.d('BUILD PAYLOAD deviceModel="${_deviceInfo.model}" '
-        'manufacturer="${_deviceInfo.manufacturer}" '
-        'appVersion="${_packageInfo.version}" '
-        'buildNumber="${_packageInfo.buildNumber}"');
-
     return {
       'anonymousId': _identity.anonymousId,
       'userId': _identity.userId,
@@ -776,9 +826,9 @@ class Unilitix {
       'screenWidth': screenSize.width.toInt(),
       'screenHeight': screenSize.height.toInt(),
       'screenDensity': view.devicePixelRatio,
-      'appVersion': _packageInfo.version,
-      'buildNumber': _packageInfo.buildNumber,
-      'packageName': _packageInfo.packageName,
+      'appVersion': _deviceInfo.appVersion,
+      'buildNumber': _deviceInfo.buildNumber,
+      'packageName': _deviceInfo.packageName,
       'sdkVersion': kUnilitixSdkVersion,
       'networkType': _networkMonitor.currentType(),
       // Null (omitted) rather than sentinels: '' and -1 skew dashboards.
@@ -786,7 +836,7 @@ class Unilitix {
         'carrierName': _cachedCarrier,
       'orientation': orientation,
       'locale': WidgetsBinding.instance.platformDispatcher.locale.toString(),
-      'timezone': DateTime.now().timeZoneName,
+      'timezone': _deviceInfo.timezone,
       'installId': _identity.installId,
       if (_cachedBattery != null && _cachedBattery! >= 0)
         'batteryLevel': _cachedBattery,

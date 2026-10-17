@@ -69,6 +69,13 @@ class CrashTracker {
           error.toString().contains('Software caused connection abort')) {
         return;
       }
+      // A bug in this SDK is not the host app crashing. Every entry point is
+      // already guarded; this is the backstop for anything that escapes.
+      if (isSdkInternal(stack)) {
+        UnilitixLogger.e(
+            'Internal SDK error (not recorded as a crash)', error, stack);
+        return;
+      }
       UnilitixLogger.e(
           type == EventTypes.crash ? 'Crash captured' : 'Exception captured',
           error,
@@ -90,6 +97,19 @@ class CrashTracker {
     } finally {
       _isRecording = false;
     }
+  }
+
+  /// True when the top of [stack] is inside this package, i.e. the error was
+  /// thrown by SDK code rather than by the app.
+  @visibleForTesting
+  static bool isSdkInternal(StackTrace? stack) {
+    if (stack == null) return false;
+    final lines = stack.toString().split('\n');
+    for (final line in lines.take(3)) {
+      if (line.contains('package:unilitix/')) return true;
+      if (line.trim().isNotEmpty && line.contains('package:')) return false;
+    }
+    return false;
   }
 
   /// Reads a crash recorded by the native plugin in a previous process and

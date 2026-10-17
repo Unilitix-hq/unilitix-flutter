@@ -6,9 +6,15 @@ import 'pending_screenshot.dart';
 import '../logger/logger.dart';
 
 /// sqflite-backed persistent queue for events and screenshots.
+///
+/// The retry queue (`pending_events`) is bounded three ways so a device that
+/// is offline for weeks, or an app that emits events in a loop, can never
+/// fill the user's storage: by events ([maxOfflineEvents]), by bytes
+/// ([maxQueueBytes]) and by age ([maxQueueAge]). Oldest batches are evicted
+/// first.
 class EventDatabase {
   static const _dbName = 'unilitix_events.db';
-  static const _version = 4;
+  static const _version = 5;
   static const _tWal = 'wal_events';
 
   /// Upper bound on write-ahead rows kept on disk; oldest are evicted beyond it.
@@ -17,19 +23,34 @@ class EventDatabase {
   static const _tScreenshots = 'pending_screenshots';
   static const _tSessions = 'pending_sessions';
 
+  /// Queued batches older than this are purged on every flush cycle.
+  static const Duration maxQueueAge = Duration(days: 7);
+
+  /// Cap on queued events (sum of `event_count` over the retry queue).
   final int maxOfflineEvents;
+
+  /// Cap on queued bytes (sum of `events_json` length over the retry queue).
+  final int maxQueueBytes;
   final int maxScreenshotsPerSession;
+
+  /// Overrides the database location (tests pass `inMemoryDatabasePath`).
+  final String? dbPath;
+
   Database? _db;
   bool _available = true;
 
   EventDatabase({
     required this.maxOfflineEvents,
     required this.maxScreenshotsPerSession,
+    this.maxQueueBytes = 5 * 1024 * 1024,
+    this.dbPath,
   });
+
+  bool get isAvailable => _available && _db != null;
 
   Future<void> open() async {
     try {
-      final path = '${await getDatabasesPath()}/$_dbName';
+      final path = dbPath ?? '${await getDatabasesPath()}/$_dbName';
       _db = await openDatabase(
         path,
         version: _version,
@@ -49,6 +70,7 @@ class EventDatabase {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         session_json TEXT NOT NULL,
         events_json TEXT NOT NULL,
+        event_count INTEGER DEFAULT 0,
         created_at INTEGER NOT NULL,
         retry_count INTEGER DEFAULT 0,
         captured_offline INTEGER DEFAULT 0,
@@ -138,35 +160,79 @@ class EventDatabase {
       ''');
       await _createWal(db);
     }
+    if (oldVersion < 5) {
+      await db.execute(
+          'ALTER TABLE $_tEvents ADD COLUMN event_count INTEGER DEFAULT 0');
+    }
   }
 
   // ── Write-ahead log ────────────────────────────────────────────────────────
 
-  /// Persists an emitted event before it is uploaded. Best-effort: a storage
-  /// failure must never break event emission.
-  Future<void> walInsert(
-      String sessionId, String eventId, int? seq, String eventJson) async {
+  /// Rows waiting to be written to the WAL in one batch.
+  final List<Map<String, Object?>> _walPending = [];
+  Timer? _walTimer;
+  Future<void>? _walInFlight;
+
+  /// How long emitted events are held in memory before the batch is written.
+  /// A tap, the navigation it causes and the first scroll on the new screen
+  /// arrive within this window and become one disk write instead of three.
+  static const walCoalesceWindow = Duration(milliseconds: 100);
+
+  /// Queues an emitted event for the write-ahead log. Rows are written in
+  /// batches ([walCoalesceWindow]); [walFlush] forces the write — the flush
+  /// scheduler calls it before uploading, and the crash path calls it so a
+  /// crash row is on disk before the opportunistic upload. Best-effort: a
+  /// storage failure must never break event emission.
+  void walInsert(String sessionId, String eventId, int? seq, String eventJson) {
     if (!_available) return;
+    _walPending.add({
+      'id': eventId,
+      'session_id': sessionId,
+      'seq': seq,
+      'event_json': eventJson,
+      'created_at': DateTime.now().millisecondsSinceEpoch,
+    });
+    _walTimer ??= Timer(walCoalesceWindow, () => walFlush());
+  }
+
+  /// Writes every queued WAL row. Safe to call at any time; concurrent calls
+  /// share one write.
+  Future<void> walFlush() async {
+    _walTimer?.cancel();
+    _walTimer = null;
+    final inFlight = _walInFlight;
+    if (inFlight != null) await inFlight;
+    if (_walPending.isEmpty || !_available) return;
+    final rows = List<Map<String, Object?>>.from(_walPending);
+    _walPending.clear();
+    final write = _writeWal(rows);
+    _walInFlight = write;
     try {
-      await _db!.insert(
-        _tWal,
-        {
-          'id': eventId,
-          'session_id': sessionId,
-          'seq': seq,
-          'event_json': eventJson,
-          'created_at': DateTime.now().millisecondsSinceEpoch,
-        },
-        conflictAlgorithm: ConflictAlgorithm.ignore,
-      );
+      await write;
+    } finally {
+      if (identical(_walInFlight, write)) _walInFlight = null;
+    }
+  }
+
+  Future<void> _writeWal(List<Map<String, Object?>> rows) async {
+    try {
+      final batch = _db!.batch();
+      for (final r in rows) {
+        batch.insert(_tWal, r, conflictAlgorithm: ConflictAlgorithm.ignore);
+      }
+      await batch.commit(noResult: true);
     } catch (e) {
       UnilitixLogger.w('WAL insert failed: $e');
     }
   }
 
+  /// Number of rows not yet written to the WAL table.
+  int get walPendingCount => _walPending.length;
+
   /// Removes acknowledged (or re-queued) events from the write-ahead log.
   Future<void> walDelete(List<String> eventIds) async {
     if (!_available || eventIds.isEmpty) return;
+    await walFlush(); // never delete ahead of a queued insert
     try {
       final batch = _db!.batch();
       for (final id in eventIds) {
@@ -191,6 +257,7 @@ class EventDatabase {
   Future<int> recoverWalToPending() async {
     if (!_available) return 0;
     try {
+      await walFlush();
       // Evict beyond the cap first so a runaway session can't fill the disk.
       final count = await walCount();
       if (count > _maxWalRows) {
@@ -213,6 +280,7 @@ class EventDatabase {
         await insertEvent(PendingEvent(
           sessionJson: '{"sessionId":"${entry.key}"}',
           eventsJson: '[${entry.value.join(',')}]',
+          eventCount: entry.value.length,
           createdAt: DateTime.now().millisecondsSinceEpoch,
         ));
       }
@@ -224,20 +292,44 @@ class EventDatabase {
     }
   }
 
+  /// Queues a batch for retry, then evicts the oldest batches until the queue
+  /// is within [maxOfflineEvents] events and [maxQueueBytes] bytes. The new
+  /// batch is inserted first so a single oversized batch is itself evicted
+  /// rather than blocking the queue.
   Future<void> insertEvent(PendingEvent event) async {
     if (!_available) return;
     await _db!.transaction((txn) async {
-      final result = await txn.rawQuery('SELECT COUNT(*) as c FROM $_tEvents');
-      final count = (result.first['c'] as int?) ?? 0;
-      if (count >= maxOfflineEvents) {
+      await txn.insert(_tEvents, event.toMap());
+      for (var guard = 0; guard < 1000; guard++) {
+        final r = await txn.rawQuery('SELECT COUNT(*) AS c, '
+            'COALESCE(SUM(event_count), 0) AS n, '
+            'COALESCE(SUM(LENGTH(events_json)), 0) AS b FROM $_tEvents');
+        final rows = (r.first['c'] as int?) ?? 0;
+        final events = (r.first['n'] as int?) ?? 0;
+        final bytes = (r.first['b'] as int?) ?? 0;
+        if (rows <= 1 ||
+            (events <= maxOfflineEvents && bytes <= maxQueueBytes)) {
+          break;
+        }
         await txn.rawDelete(
-          'DELETE FROM $_tEvents WHERE id IN '
-          '(SELECT id FROM $_tEvents ORDER BY created_at ASC LIMIT ?)',
-          [count - maxOfflineEvents + 1],
+          'DELETE FROM $_tEvents WHERE id = '
+          '(SELECT id FROM $_tEvents ORDER BY created_at ASC, id ASC LIMIT 1)',
         );
       }
-      await txn.insert(_tEvents, event.toMap());
     });
+  }
+
+  /// Totals over the retry queue: rows, events and bytes.
+  Future<({int rows, int events, int bytes})> queueStats() async {
+    if (!_available) return (rows: 0, events: 0, bytes: 0);
+    final r = await _db!.rawQuery('SELECT COUNT(*) AS c, '
+        'COALESCE(SUM(event_count), 0) AS n, '
+        'COALESCE(SUM(LENGTH(events_json)), 0) AS b FROM $_tEvents');
+    return (
+      rows: (r.first['c'] as int?) ?? 0,
+      events: (r.first['n'] as int?) ?? 0,
+      bytes: (r.first['b'] as int?) ?? 0,
+    );
   }
 
   Future<List<PendingEvent>> getOldestEvents(int limit) async {
@@ -397,6 +489,9 @@ class EventDatabase {
   /// opt-out so that nothing captured before consent was withdrawn can be
   /// uploaded later by a retry or by crash recovery.
   Future<void> purgeAll() async {
+    _walTimer?.cancel();
+    _walTimer = null;
+    _walPending.clear();
     if (!_available) return;
     final db = _db;
     if (db == null) return;
@@ -409,6 +504,7 @@ class EventDatabase {
   }
 
   Future<void> close() async {
+    await walFlush();
     await _db?.close();
     _db = null;
   }

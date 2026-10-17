@@ -1,6 +1,6 @@
 # Unilitix Flutter SDK
 
-**Version:** 2.1.0 · [pub.dev](https://pub.dev/packages/unilitix) · [GitHub](https://github.com/unilitix/unilitix-flutter)
+**Version:** 2.1.1 · [pub.dev](https://pub.dev/packages/unilitix) · [GitHub](https://github.com/unilitix/unilitix-flutter)
 
 Unilitix is a mobile analytics SDK built for African markets. It captures session replays, screen flows, custom events, and user identity — with offline-first data delivery and Africa-specific context (network type, carrier, power outage correlation).
 
@@ -27,7 +27,7 @@ Or add manually to `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  unilitix: ^2.1.0
+  unilitix: ^2.1.1
 ```
 
 Then run:
@@ -83,7 +83,7 @@ class MyApp extends StatelessWidget {
 Run your app in debug mode. Within 5 seconds you should see:
 
 ```
-[Unilitix] SDK initialized ✅ v2.1.0
+[Unilitix] SDK initialized ✅ v2.1.1
 [Unilitix] Session started ✅ abc123…
 [Unilitix] Screen → /home
 ```
@@ -164,6 +164,23 @@ Unilitix.track("loan_applied", {
 ```
 
 Event names should be `snake_case`. Property values can be `String`, `int`, `double`, or `bool`.
+
+Events are written to the on-device queue immediately and uploaded in batches
+(every `flushIntervalSeconds`, default 30 s, or as soon as `flushBatchSize`
+events are waiting). Call `Unilitix.flush()` when an event must leave the
+device now — for example right before the user signs out.
+
+### Delivery and offline behaviour
+
+- Every request is made once per cycle. If the API is unreachable or returns
+  5xx/429 the SDK backs off (exponentially, or as `Retry-After` says) and keeps
+  everything on-device; one success clears the backoff.
+- The queue is bounded: 1,000 events (`maxOfflineEvents`), 5 MB, 7 days.
+  Oldest batches are dropped first.
+- A payload the API rejects with another 4xx is dropped and logged; a 401/403
+  pauses uploads until the next launch.
+- Errors inside the SDK are logged, never thrown into your app, and never
+  recorded as crashes.
 
 ---
 

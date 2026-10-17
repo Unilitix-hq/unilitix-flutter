@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
-import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
@@ -20,10 +19,10 @@ import '../privacy/privacy_mask.dart';
 /// last one. A quiet screen produces no frames; an idle heartbeat
 /// ([heartbeatMs]) keeps long static screens represented in the replay.
 ///
-/// All image work (downscale, occlusion, JPEG) runs off the UI isolate: on
-/// Android and iOS the native plugin does it on a background thread and
-/// returns JPEG bytes; the Dart [RepaintBoundary] fallback hands raw RGBA to
-/// a `compute()` isolate.
+/// On Android and iOS the native plugin does all image work (downscale,
+/// occlusion, JPEG) on a background thread and returns JPEG bytes. Elsewhere
+/// the [RepaintBoundary] fallback draws the frame through `dart:ui` and
+/// returns PNG.
 class ScreenshotCapture with WidgetsBindingObserver {
   final GlobalKey repaintKey;
   final int intervalMs;
@@ -191,8 +190,9 @@ class ScreenshotCapture with WidgetsBindingObserver {
     }
   }
 
-  /// RepaintBoundary → rawRgba, then everything else in a background isolate.
-  /// An [endOfFrame] barrier lets Impeller drain before pixel readback.
+  /// RepaintBoundary → `ui.Image`, then downscale, occlusion and PNG encoding
+  /// with `dart:ui` alone. An [endOfFrame] barrier lets Impeller drain before
+  /// pixel readback.
   Future<Uint8List?> _tryDartCapture(List<ui.Rect> masks) async {
     final boundary =
         repaintKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
@@ -204,30 +204,18 @@ class ScreenshotCapture with WidgetsBindingObserver {
       final captureRatio = (view.devicePixelRatio * 0.5).clamp(1.0, 2.0);
       uiImage = await boundary.toImage(pixelRatio: captureRatio);
       await SchedulerBinding.instance.endOfFrame;
-      final byteData =
-          await uiImage.toByteData(format: ui.ImageByteFormat.rawRgba);
-      if (byteData == null) return null;
 
       // Masks are in logical px; the image is logical × captureRatio.
       final scaledMasks = masks
-          .map((r) => [
+          .map((r) => ui.Rect.fromLTRB(
                 r.left * captureRatio,
                 r.top * captureRatio,
                 r.right * captureRatio,
-                r.bottom * captureRatio
-              ])
+                r.bottom * captureRatio,
+              ))
           .toList();
-      return await compute(
-        encodeFrame,
-        EncodeRequest(
-          rgba: byteData.buffer.asUint8List(),
-          width: uiImage.width,
-          height: uiImage.height,
-          maxWidth: maxWidth,
-          quality: quality,
-          masks: scaledMasks,
-        ),
-      );
+      return await encodeFrameUi(uiImage,
+          maxWidth: maxWidth, masks: scaledMasks);
     } catch (e) {
       UnilitixLogger.e('Dart screenshot capture failed', e);
       return null;

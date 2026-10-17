@@ -1,3 +1,63 @@
+## 2.1.1
+
+Reliability and size release. No API changes; two behaviour changes worth
+reading before upgrading (marked **Changed**).
+
+### Fixed
+- **Retries no longer pile up.** Every request is now made once per flush
+  cycle. A transient failure (no response, 5xx, 429) opens a backoff window —
+  exponential with jitter, or exactly what `Retry-After` asks for — during
+  which no request is made and data waits in the on-device queue. Previously
+  each call retried up to five times inside the HTTP layer, so a degraded
+  link could hold a flush open for minutes and multiply load on the API.
+- **Permanent rejections are dropped.** A 4xx other than 429/401/403 means
+  the payload can never succeed; the batch is discarded (and logged) instead
+  of being re-sent every cycle for seven days.
+- **A 400 on the session record no longer resets the session.** The record
+  is kept, not re-sent until it changes, and the reason is logged. The reset
+  split one visit into many and detached the events already attributed to it.
+- `HttpException`, `HandshakeException`, "Connection closed before full
+  header" and other `IOException`s thrown by the HTTP stack were not caught
+  by the client and could reach the host app; every transport failure is now
+  a result the scheduler handles.
+- A queued batch with corrupt JSON is deleted on first sight instead of
+  throwing on every retry.
+- **SDK errors are never recorded as crashes.** Every public entry point and
+  framework callback is guarded, and the crash tracker ignores errors whose
+  stack originates inside `package:unilitix`.
+- `foregroundTimeMs` is measured with a monotonic `Stopwatch`; a clock change
+  mid-session used to add or subtract hours.
+- `timezone` is the IANA zone id (`Africa/Lagos`) on Android and iOS rather
+  than an ambiguous abbreviation.
+
+### Changed
+- **`track()` no longer sends an immediate request.** Custom events ride the
+  normal batch (every `flushIntervalSeconds`, or sooner once `flushBatchSize`
+  is reached). An app that tracked in a loop used to make one POST per call.
+  Call `Unilitix.flush()` when an event must leave the device now.
+- **The session record is upserted only when it changes** (or every five
+  minutes so durations stay current), not every 30 s for the life of the
+  session.
+- **Dependencies cut from eight to three.** `device_info_plus`,
+  `package_info_plus`, `flutter_secure_storage`, `crypto` and `image` are
+  gone; device and app fields come from the SDK's own plugin, ids live in
+  `shared_preferences`, and the Dart screenshot fallback (web, desktop,
+  Android < 26) encodes PNG through `dart:ui`. Installs upgrading from
+  ≤ 2.1.0 receive a fresh anonymous id once (the old one was in the
+  Keychain/Keystore); the user id is restored by the app's next `identify()`.
+- The retry queue is bounded by events (`maxOfflineEvents`, now counted in
+  events rather than batches), by bytes (5 MB) and by age (7 days); oldest
+  batches are evicted first.
+- Write-ahead rows are written in batches (100 ms window) instead of one
+  disk write per event.
+
+### Added
+- CI publishes an SDK size report (release arm64 APK of the example app) in
+  the job summary.
+- Storage and scheduler tests run against real SQLite (`sqflite_common_ffi`)
+  and a `MockClient`; 20+ new tests cover backoff, drops, queue caps and WAL
+  coalescing.
+
 ## 2.1.0
 
 Privacy release. Upgrade before enabling session replay in any app that shows

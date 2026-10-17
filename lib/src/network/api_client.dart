@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show SocketException, GZipCodec;
+import 'dart:io' show IOException, GZipCodec;
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -18,21 +18,90 @@ class ScreenshotSlot {
   const ScreenshotSlot({required this.ordinal, required this.presignedUrl});
 }
 
+/// Outcome of the screenshot init call: the HTTP result plus the parsed
+/// slots when the call succeeded.
+class ScreenshotInitResult {
+  final ApiResult result;
+  final List<ScreenshotSlot>? slots;
+  const ScreenshotInitResult(this.result, this.slots);
+}
+
+/// The outcome of one request to the ingest API.
+///
+/// Every call makes exactly one attempt. The caller (the flush scheduler)
+/// decides what to do with a failure: [retryable] outcomes keep the data in
+/// the on-device queue and open a backoff window; [rejected] outcomes drop
+/// the batch because resending the same bytes can never succeed;
+/// [isAuthFailure] pauses uploads until the key is fixed.
+class ApiResult {
+  /// HTTP status, or null when no response arrived (DNS, TCP, TLS, timeout,
+  /// connection reset).
+  final int? status;
+  final String body;
+  final Map<String, String> headers;
+
+  /// The transport error when [status] is null.
+  final Object? error;
+
+  const ApiResult({
+    this.status,
+    this.body = '',
+    this.headers = const {},
+    this.error,
+  });
+
+  const ApiResult.transport(Object error) : this(status: null, error: error);
+
+  bool get ok => status != null && status! >= 200 && status! < 300;
+
+  /// 401/403: the key is wrong, not the request.
+  bool get isAuthFailure => status == 401 || status == 403;
+
+  /// Transient failure: no response, 5xx or 429.
+  bool get retryable => !ok && RetryPolicy.isRetryable(status);
+
+  /// Permanent client-side rejection (4xx other than 401/403/429): the
+  /// payload is malformed for this server and must not be retried.
+  bool get rejected =>
+      status != null &&
+      status! >= 400 &&
+      status! < 500 &&
+      status != 429 &&
+      !isAuthFailure;
+
+  /// Parsed `Retry-After` header (seconds form only), if the server sent one.
+  int? get retryAfterSeconds {
+    final raw = headers['retry-after'];
+    return raw == null ? null : int.tryParse(raw.trim());
+  }
+
+  /// Short description for logs; never includes the body.
+  String describe() =>
+      status != null ? 'HTTP $status' : 'no response (${error.runtimeType})';
+}
+
 /// HTTP client for the Unilitix ingest API.
 class ApiClient {
   final String apiKey;
   final String apiUrl;
   final String sdkVersion;
 
-  late final http.Client _client;
+  /// Per-request budget. Mobile links in the markets this SDK targets can be
+  /// slow, but a request that has not completed in this long is better
+  /// abandoned and the data kept for the next cycle.
+  final Duration requestTimeout;
+
+  final http.Client _client;
 
   ApiClient({
     required this.apiKey,
     required this.apiUrl,
     required this.sdkVersion,
-  }) {
-    _client = http.Client();
-  }
+    this.requestTimeout = const Duration(seconds: 40),
+
+    /// Injectable for tests (`MockClient`); production uses a plain client.
+    http.Client? client,
+  }) : _client = client ?? http.Client();
 
   Map<String, String> get _headers {
     final h = <String, String>{
@@ -53,75 +122,63 @@ class ApiClient {
     return GZipCodec().encode(bytes);
   }
 
-  Future<http.Response?> _postWithRetry(
-    String path,
-    Map<String, dynamic> body,
-  ) async {
+  /// One attempt, never throws. Every failure mode the HTTP stack can
+  /// produce — [TimeoutException], [http.ClientException], and the whole
+  /// [IOException] family (SocketException, HttpException,
+  /// HandshakeException, "Connection closed before full header") — is turned
+  /// into an [ApiResult] with a null status so the scheduler can back off
+  /// instead of the error surfacing in the host app as a crash.
+  Future<ApiResult> _post(String path, Map<String, dynamic> body) async {
     final url = Uri.parse('$apiUrl$path');
-    final bodyBytes = _gzip(utf8.encode(jsonEncode(body)));
-
-    for (var attempt = 1; attempt <= RetryPolicy.maxRetries; attempt++) {
-      try {
-        final resp = await _client
-            .post(url, headers: _headers, body: bodyBytes)
-            .timeout(const Duration(seconds: 40));
-
-        if (resp.statusCode >= 200 && resp.statusCode < 300) {
-          return resp;
-        }
-
-        if (!RetryPolicy.shouldRetry(
-            attempt: attempt, statusCode: resp.statusCode)) {
-          UnilitixLogger.w('API ${resp.statusCode} on $path — dropping batch');
-          return resp;
-        }
-        final retryAfterSecs = resp.headers['retry-after'] != null
-            ? int.tryParse(resp.headers['retry-after']!)
-            : null;
-        await Future.delayed(RetryPolicy.delayFor(attempt - 1,
-            retryAfterSeconds: retryAfterSecs));
-      } on SocketException {
-        if (attempt == RetryPolicy.maxRetries) return null;
-        await Future.delayed(RetryPolicy.delayFor(attempt - 1));
-      } on TimeoutException {
-        if (attempt == RetryPolicy.maxRetries) return null;
-        await Future.delayed(RetryPolicy.delayFor(attempt - 1));
+    try {
+      final bodyBytes = _gzip(utf8.encode(jsonEncode(body)));
+      final resp = await _client
+          .post(url, headers: _headers, body: bodyBytes)
+          .timeout(requestTimeout);
+      final result = ApiResult(
+        status: resp.statusCode,
+        body: resp.body,
+        headers: resp.headers,
+      );
+      if (!result.ok) {
+        UnilitixLogger.w('${result.describe()} on $path');
       }
+      return result;
+    } on TimeoutException catch (e) {
+      return ApiResult.transport(e);
+    } on http.ClientException catch (e) {
+      return ApiResult.transport(e);
+    } on IOException catch (e) {
+      return ApiResult.transport(e);
+    } catch (e) {
+      // Anything else (a JSON encoding error for an unserialisable property,
+      // an unexpected platform error) must not escape the SDK either.
+      UnilitixLogger.w('Request to $path failed: ${e.runtimeType}');
+      return ApiResult.transport(e);
     }
-    return null;
   }
 
-  Future<bool> ingestSession(Map<String, dynamic> payload) async {
-    final resp = await _postWithRetry('/v1/ingest/session', payload);
-    return resp != null && resp.statusCode < 300;
-  }
+  Future<ApiResult> ingestSession(Map<String, dynamic> payload) =>
+      _post('/v1/ingest/session', payload);
 
-  /// Returns the raw response so callers can inspect status codes (e.g. 400/409).
-  Future<http.Response?> ingestSessionRaw(Map<String, dynamic> payload) =>
-      _postWithRetry('/v1/ingest/session', payload);
-
-  Future<bool> ingestEvents({
+  Future<ApiResult> ingestEvents({
     required String sessionId,
     required List<Map<String, dynamic>> events,
-  }) async {
-    final resp = await _postWithRetry('/v1/ingest/events', {
-      'sessionId': sessionId,
-      'events': events,
-    });
-    return resp != null && resp.statusCode < 300;
-  }
+  }) =>
+      _post('/v1/ingest/events', {
+        'sessionId': sessionId,
+        'events': events,
+      });
 
-  Future<bool> ingestSnapshots(Map<String, dynamic> payload) async {
-    final resp = await _postWithRetry('/v1/ingest/snapshots', payload);
-    return resp != null && resp.statusCode < 300;
-  }
+  Future<ApiResult> ingestSnapshots(Map<String, dynamic> payload) =>
+      _post('/v1/ingest/snapshots', payload);
 
-  Future<List<ScreenshotSlot>?> initScreenshotUpload({
+  Future<ScreenshotInitResult> initScreenshotUpload({
     required String sessionId,
     required int count,
     required List<int> ordinals,
   }) async {
-    final resp = await _postWithRetry(
+    final result = await _post(
       '/v1/ingest/screenshots/init',
       ScreenshotInitRequest(
         sessionId: sessionId,
@@ -129,19 +186,22 @@ class ApiClient {
         ordinals: ordinals,
       ).toJson(),
     );
-    if (resp == null || resp.statusCode >= 300) return null;
+    if (!result.ok) return ScreenshotInitResult(result, null);
     try {
       final parsed = ScreenshotInitResponse.fromJson(
-          jsonDecode(resp.body) as Map<String, dynamic>);
-      return parsed.slots
-          .map((s) => ScreenshotSlot(
-                ordinal: s.ordinal,
-                presignedUrl: s.presignedUrl,
-              ))
-          .toList();
-    } catch (e, stack) {
-      UnilitixLogger.e('screenshots/init: unexpected response shape', e, stack);
-      return null;
+          jsonDecode(result.body) as Map<String, dynamic>);
+      return ScreenshotInitResult(
+        result,
+        parsed.slots
+            .map((s) => ScreenshotSlot(
+                  ordinal: s.ordinal,
+                  presignedUrl: s.presignedUrl,
+                ))
+            .toList(),
+      );
+    } catch (e) {
+      UnilitixLogger.w('screenshots/init: unexpected response shape: $e');
+      return ScreenshotInitResult(result, null);
     }
   }
 
@@ -156,15 +216,11 @@ class ApiClient {
           )
           .timeout(const Duration(seconds: 60));
       if (resp.statusCode >= 300) {
-        UnilitixLogger.e(
-          'uploadScreenshotBytes failed: ${resp.statusCode}',
-          null,
-          null,
-        );
+        UnilitixLogger.w('uploadScreenshotBytes failed: ${resp.statusCode}');
       }
       return resp.statusCode < 300;
-    } catch (e, stack) {
-      UnilitixLogger.e('uploadScreenshotBytes failed', e, stack);
+    } catch (e) {
+      UnilitixLogger.w('uploadScreenshotBytes failed: ${e.runtimeType}');
       return false;
     }
   }
@@ -173,8 +229,8 @@ class ApiClient {
   /// viewport, size, capture time). The server stores that metadata only
   /// from this call, so sending just the ordinal (as versions before 2.0.74
   /// did) left replay frames without a screen name or capture time.
-  Future<bool> confirmScreenshotUpload(
-      String sessionId, PendingScreenshot screenshot) async {
+  Future<ApiResult> confirmScreenshotUpload(
+      String sessionId, PendingScreenshot screenshot) {
     final body = ScreenshotConfirmRequest(
       sessionId: sessionId,
       screenshots: [
@@ -191,22 +247,19 @@ class ApiClient {
         ),
       ],
     ).toJson();
-    final resp = await _postWithRetry('/v1/ingest/screenshots/confirm', body);
-    return resp != null && resp.statusCode < 300;
+    return _post('/v1/ingest/screenshots/confirm', body);
   }
 
-  Future<bool> identify({
+  Future<ApiResult> identify({
     required String anonymousId,
     required String customUserId,
     Map<String, dynamic>? traits,
-  }) async {
-    final resp = await _postWithRetry('/v1/ingest/identify', {
-      'anonymousId': anonymousId,
-      'customUserId': customUserId,
-      if (traits != null) 'traits': traits,
-    });
-    return resp != null && resp.statusCode < 300;
-  }
+  }) =>
+      _post('/v1/ingest/identify', {
+        'anonymousId': anonymousId,
+        'customUserId': customUserId,
+        if (traits != null) 'traits': traits,
+      });
 
   void dispose() => _client.close();
 }

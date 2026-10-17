@@ -84,6 +84,38 @@ class UnilitixPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
                     result.success("")
                 }
             }
+            // Device fields the SDK used to get from device_info_plus. Served
+            // from android.os.Build directly: no extra plugin, no extra dex.
+            "getDeviceInfo" -> {
+                result.success(mapOf(
+                    "manufacturer" to (Build.MANUFACTURER ?: ""),
+                    "model" to (Build.MODEL ?: ""),
+                    "brand" to (Build.BRAND ?: ""),
+                    "osVersion" to (Build.VERSION.RELEASE ?: ""),
+                    "sdkInt" to Build.VERSION.SDK_INT,
+                    "timezone" to java.util.TimeZone.getDefault().id,
+                ))
+            }
+            // App fields the SDK used to get from package_info_plus.
+            "getPackageInfo" -> {
+                try {
+                    val pm = context.packageManager
+                    val pi = pm.getPackageInfo(context.packageName, 0)
+                    val buildNumber = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        pi.longVersionCode.toString()
+                    } else {
+                        @Suppress("DEPRECATION") pi.versionCode.toString()
+                    }
+                    result.success(mapOf(
+                        "appName" to context.applicationInfo.loadLabel(pm).toString(),
+                        "packageName" to context.packageName,
+                        "version" to (pi.versionName ?: ""),
+                        "buildNumber" to buildNumber,
+                    ))
+                } catch (e: Exception) {
+                    result.success(null)
+                }
+            }
             // Returns the JSON written by the uncaught-exception handler of a
             // previous process (or null), and clears it.
             "readNativeCrash" -> result.success(NativeCrashHandler.consume(context))

@@ -19,7 +19,11 @@ class SessionManager with WidgetsBindingObserver {
   Session? _currentSession;
   Session? _lastEndedSession;
   DateTime? _backgroundedAt;
-  DateTime? _lastForegroundedAt;
+
+  /// Open foreground window. A monotonic [Stopwatch] rather than wall-clock
+  /// differences: a clock change (NTP sync, timezone, manual) used to add or
+  /// subtract hours from `foregroundTimeMs`.
+  final Stopwatch _foreground = Stopwatch();
   Timer? _backgroundTimer;
   String _networkSentinel = 'INITIAL';
 
@@ -37,12 +41,7 @@ class SessionManager with WidgetsBindingObserver {
   int get currentForegroundTimeMs {
     final s = _currentSession;
     if (s == null) return _lastEndedSession?.foregroundTimeMs ?? 0;
-    if (_backgroundedAt != null) return s.foregroundTimeMs;
-    final fg = _lastForegroundedAt;
-    return s.foregroundTimeMs +
-        (fg != null
-            ? DateTime.now().millisecondsSinceEpoch - fg.millisecondsSinceEpoch
-            : 0);
+    return s.foregroundTimeMs + _foreground.elapsedMilliseconds;
   }
 
   SessionManager({
@@ -77,8 +76,9 @@ class SessionManager with WidgetsBindingObserver {
 
   void _startNewSession() {
     _currentSession = Session();
-    _lastForegroundedAt =
-        DateTime.fromMillisecondsSinceEpoch(_currentSession!.startedAt);
+    _foreground
+      ..reset()
+      ..start();
     _networkSentinel = 'INITIAL';
     resetScreenshotOrdinal();
     UnilitixLogger.d('Session started: ${_currentSession!.id}');
@@ -99,11 +99,12 @@ class SessionManager with WidgetsBindingObserver {
   /// Commits the current open foreground window into [Session.foregroundTimeMs].
   void _commitForegroundWindow() {
     final s = _currentSession;
-    final fg = _lastForegroundedAt;
-    if (s != null && _backgroundedAt == null && fg != null) {
-      s.foregroundTimeMs +=
-          DateTime.now().millisecondsSinceEpoch - fg.millisecondsSinceEpoch;
+    if (s != null && _foreground.isRunning) {
+      s.foregroundTimeMs += _foreground.elapsedMilliseconds;
     }
+    _foreground
+      ..stop()
+      ..reset();
   }
 
   /// Call when the network type changes (from [NetworkMonitor]).
@@ -124,7 +125,6 @@ class SessionManager with WidgetsBindingObserver {
       case AppLifecycleState.paused:
         _commitForegroundWindow();
         _backgroundedAt = DateTime.now();
-        _lastForegroundedAt = null;
         onEventsFlush?.call(); // drain events on background, no session POST
         // End the session after the timeout elapses in the background.
         _backgroundTimer = Timer(
@@ -158,7 +158,9 @@ class SessionManager with WidgetsBindingObserver {
         final expired =
             _currentSession == null || awayMs >= sessionTimeoutSeconds * 1000;
         if (!expired) {
-          _lastForegroundedAt = DateTime.now();
+          _foreground
+            ..reset()
+            ..start();
           _currentSession?.backgroundTimeMs += awayMs;
         } else {
           if (_currentSession != null) _endCurrentSession();

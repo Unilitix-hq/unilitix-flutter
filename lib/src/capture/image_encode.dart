@@ -1,57 +1,57 @@
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
-import 'package:image/image.dart' as img;
+/// Downscales a captured frame, paints occlusion boxes over [masks] (given in
+/// source pixels) and PNG-encodes it, using nothing but `dart:ui`.
+///
+/// This is the fallback for platforms without the native plugin (web,
+/// desktop, Android < 26); Android and iOS encode JPEG natively off the UI
+/// thread. Until 2.1.0 this path used the pure-Dart `image` package, which
+/// added ~1 MB of Dart to every host app's dependency tree for a path most
+/// of them never execute. PNG frames are larger than JPEG, but the only
+/// screens that take this route are not on metered links.
+///
+/// Returns null if the engine cannot rasterise (headless embedder).
+Future<Uint8List?> encodeFrameUi(
+  ui.Image src, {
+  required int maxWidth,
+  required List<ui.Rect> masks,
+}) async {
+  final factor =
+      (maxWidth > 0 && src.width > maxWidth) ? maxWidth / src.width : 1.0;
+  final w = (src.width * factor).round().clamp(1, 1 << 14);
+  final h = (src.height * factor).round().clamp(1, 1 << 14);
 
-/// Arguments for [encodeFrame], which runs in a background isolate via
-/// `compute()`. Everything here must be sendable between isolates.
-class EncodeRequest {
-  final Uint8List rgba;
-  final int width;
-  final int height;
-  final int maxWidth;
-  final int quality;
-
-  /// Occlusion rectangles in image pixels (already scaled by the caller):
-  /// [left, top, right, bottom].
-  final List<List<double>> masks;
-
-  const EncodeRequest({
-    required this.rgba,
-    required this.width,
-    required this.height,
-    required this.maxWidth,
-    required this.quality,
-    required this.masks,
-  });
-}
-
-/// Downscales, paints occlusion boxes and JPEG-encodes a raw RGBA frame.
-/// Pure Dart, CPU-bound: always call through `compute()` so the UI isolate
-/// never pays for it.
-Uint8List encodeFrame(EncodeRequest req) {
-  var image = img.Image.fromBytes(
-    width: req.width,
-    height: req.height,
-    bytes: req.rgba.buffer,
-    numChannels: 4,
-    order: img.ChannelOrder.rgba,
+  final recorder = ui.PictureRecorder();
+  final canvas = ui.Canvas(recorder);
+  canvas.drawImageRect(
+    src,
+    ui.Rect.fromLTWH(0, 0, src.width.toDouble(), src.height.toDouble()),
+    ui.Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()),
+    ui.Paint()..filterQuality = ui.FilterQuality.low,
   );
-  var factor = 1.0;
-  if (req.maxWidth > 0 && image.width > req.maxWidth) {
-    factor = req.maxWidth / image.width;
-    image = img.copyResize(image, width: req.maxWidth);
-  }
-  if (req.masks.isNotEmpty) {
-    final black = img.ColorRgb8(0, 0, 0);
-    for (final m in req.masks) {
-      if (m.length < 4) continue;
-      final x1 = ((m[0] * factor) - 1).floor().clamp(0, image.width - 1);
-      final y1 = ((m[1] * factor) - 1).floor().clamp(0, image.height - 1);
-      final x2 = ((m[2] * factor) + 1).ceil().clamp(0, image.width - 1);
-      final y2 = ((m[3] * factor) + 1).ceil().clamp(0, image.height - 1);
-      if (x2 <= x1 || y2 <= y1) continue;
-      img.fillRect(image, x1: x1, y1: y1, x2: x2, y2: y2, color: black);
+  if (masks.isNotEmpty) {
+    final black = ui.Paint()..color = const ui.Color(0xFF000000);
+    for (final m in masks) {
+      final r = ui.Rect.fromLTRB(
+        m.left * factor - 1,
+        m.top * factor - 1,
+        m.right * factor + 1,
+        m.bottom * factor + 1,
+      );
+      if (r.width > 0 && r.height > 0) canvas.drawRect(r, black);
     }
   }
-  return Uint8List.fromList(img.encodeJpg(image, quality: req.quality));
+  final picture = recorder.endRecording();
+  ui.Image? out;
+  try {
+    out = await picture.toImage(w, h);
+    final data = await out.toByteData(format: ui.ImageByteFormat.png);
+    return data?.buffer.asUint8List();
+  } catch (_) {
+    return null;
+  } finally {
+    out?.dispose();
+    picture.dispose();
+  }
 }

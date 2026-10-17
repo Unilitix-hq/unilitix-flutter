@@ -25,7 +25,10 @@ jobs:
           cache: true
 
       - name: Install dependencies
-        run: flutter pub get
+        run: |
+          # sqflite_common_ffi runs the storage tests against real SQLite.
+          sudo apt-get update -qq && sudo apt-get install -y -qq libsqlite3-dev
+          flutter pub get
 
       - name: Check formatting
         # The generated contract models are exempt; they are copied verbatim
@@ -64,6 +67,30 @@ jobs:
         run: |
           flutter pub get
           flutter build apk --debug
+
+      - name: SDK size report
+        # What the SDK adds to a host app, measured the way integrators feel
+        # it: a release arm64 APK of the example, with the Dart and native
+        # breakdown from --analyze-size. Compare against the previous run in
+        # the job summary before cutting a release.
+        working-directory: example
+        run: |
+          flutter build apk --release --target-platform android-arm64 \
+            --analyze-size --code-size-directory=../build/size 2>&1 | tail -n 60
+          APK=build/app/outputs/flutter-apk/app-release.apk
+          {
+            echo "## SDK size report (example app, release, arm64)"
+            echo
+            echo "| Artifact | Bytes |"
+            echo "|---|---|"
+            printf '| app-release.apk | %s |\n' "$(stat -c %s "$APK")"
+            echo
+            echo "Dependency tree of the SDK (direct):"
+            echo
+            echo '```'
+            (cd .. && dart pub deps --style=compact | grep -E '^(dependencies|- )' | head -n 20)
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   ios-build:
     runs-on: macos-14

@@ -1,16 +1,20 @@
 import 'package:flutter/foundation.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../util/ids.dart';
 
 /// Manages anonymous ID, user ID, install ID, and user traits.
+///
+/// Ids are stored in `shared_preferences`. Until 2.1.0 they lived in
+/// `flutter_secure_storage` (Keychain / Android Keystore), which cost every
+/// host app a native plugin plus its known Keystore failure modes, for values
+/// that are not secrets: a random UUID and the app's own user id. Installs
+/// upgrading from ≤ 2.1.0 therefore receive a fresh anonymous id once; the
+/// user id is restored by the app's next `identify()` call.
 class Identity {
   static const _keyUserId = 'unilitix_user_id';
   static const _keyAnonId = 'unilitix_anon_id';
   static const _keyInstallId = 'unilitix_install_id';
-
-  final FlutterSecureStorage _secure = const FlutterSecureStorage();
 
   String? _anonymousId;
   String? _userId;
@@ -23,39 +27,28 @@ class Identity {
   Map<String, dynamic> get userTraits => Map.unmodifiable(_userTraits);
 
   Future<void> initialize() async {
-    await _loadInstallId();
-    await _loadOrGenerateAnonId();
-    await _loadUserId();
-  }
-
-  Future<void> _loadInstallId() async {
+    SharedPreferences? prefs;
     try {
-      _installId = await _secure.read(key: _keyInstallId);
-      if (_installId == null) {
-        _installId = DateTime.now().millisecondsSinceEpoch.toString();
-        await _secure.write(key: _keyInstallId, value: _installId!);
-      }
-    } catch (e) {
-      _installId = DateTime.now().millisecondsSinceEpoch.toString();
-    }
-  }
-
-  Future<void> _loadOrGenerateAnonId() async {
-    try {
-      _anonymousId = await _secure.read(key: _keyAnonId);
+      prefs = await SharedPreferences.getInstance();
     } catch (_) {
-      // Fallback to shared_preferences if secure storage unavailable
-      final prefs = await SharedPreferences.getInstance();
-      _anonymousId = prefs.getString(_keyAnonId);
+      // Storage unavailable: run with in-memory ids for this process.
+    }
+    _installId = prefs?.getString(_keyInstallId);
+    if (_installId == null) {
+      _installId = DateTime.now().millisecondsSinceEpoch.toString();
+      await _put(prefs, _keyInstallId, _installId!);
     }
 
+    _anonymousId = prefs?.getString(_keyAnonId);
     // SDK < 2.1 derived this id from Android's Build.ID, which is the firmware
     // fingerprint shared by every device on the same ROM, so unrelated users
     // collapsed into one anonymous id. Replace any legacy (non-UUID) value once.
     if (_anonymousId == null || !isValidAnonymousId(_anonymousId!)) {
       _anonymousId = generateAnonymousId();
-      await _persistAnonId(_anonymousId!);
+      await _put(prefs, _keyAnonId, _anonymousId!);
     }
+
+    _userId = prefs?.getString(_keyUserId);
   }
 
   /// Anonymous ids are random UUID v4s: unique per install, never derived
@@ -68,33 +61,33 @@ class Identity {
   @visibleForTesting
   static bool isValidAnonymousId(String id) => _uuidV4.hasMatch(id);
 
-  Future<void> _persistAnonId(String id) async {
+  static Future<void> _put(
+      SharedPreferences? prefs, String key, String value) async {
     try {
-      await _secure.write(key: _keyAnonId, value: id);
+      await prefs?.setString(key, value);
     } catch (_) {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_keyAnonId, id);
+      // Best-effort persistence.
     }
   }
 
-  Future<void> _loadUserId() async {
+  static Future<void> _remove(SharedPreferences? prefs, String key) async {
     try {
-      _userId = await _secure.read(key: _keyUserId);
+      await prefs?.remove(key);
+    } catch (_) {}
+  }
+
+  Future<SharedPreferences?> _prefs() async {
+    try {
+      return await SharedPreferences.getInstance();
     } catch (_) {
-      final prefs = await SharedPreferences.getInstance();
-      _userId = prefs.getString(_keyUserId);
+      return null;
     }
   }
 
   Future<void> setUserId(String userId, {Map<String, dynamic>? traits}) async {
     _userId = userId;
     if (traits != null) setTraits(traits);
-    try {
-      await _secure.write(key: _keyUserId, value: userId);
-    } catch (_) {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_keyUserId, userId);
-    }
+    await _put(await _prefs(), _keyUserId, userId);
   }
 
   void setTraits(Map<String, dynamic> traits) {
@@ -104,16 +97,10 @@ class Identity {
   Future<void> reset() async {
     _userId = null;
     _userTraits = {};
-    try {
-      await _secure.delete(key: _keyUserId);
-      await _secure.delete(key: _keyAnonId);
-    } catch (_) {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.remove(_keyUserId);
-      await prefs.remove(_keyAnonId);
-    }
+    final prefs = await _prefs();
+    await _remove(prefs, _keyUserId);
     // A fresh random id: the pre-logout and post-logout users are unlinkable.
     _anonymousId = generateAnonymousId();
-    await _persistAnonId(_anonymousId!);
+    await _put(prefs, _keyAnonId, _anonymousId!);
   }
 }

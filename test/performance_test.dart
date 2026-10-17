@@ -1,33 +1,46 @@
+import 'dart:async';
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:image/image.dart' as img;
 import 'package:unilitix/src/capture/image_encode.dart';
 import 'package:unilitix/src/events/event.dart';
 
 /// Performance / classification regression tests (October 2026 audit).
 void main() {
-  test('encodeFrame downscales, occludes and returns a JPEG', () {
-    // 40x20 white frame.
-    final rgba = Uint8List(40 * 20 * 4)..fillRange(0, 40 * 20 * 4, 255);
-    final bytes = encodeFrame(EncodeRequest(
-      rgba: rgba,
-      width: 40,
-      height: 20,
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  Future<ui.Image> whiteImage(int w, int h) async {
+    final rgba = Uint8List(w * h * 4)..fillRange(0, w * h * 4, 255);
+    final c = Completer<ui.Image>();
+    ui.decodeImageFromPixels(rgba, w, h, ui.PixelFormat.rgba8888, c.complete);
+    return c.future;
+  }
+
+  Future<Uint8List> rawPixels(Uint8List png) async {
+    final codec = await ui.instantiateImageCodec(png);
+    final frame = await codec.getNextFrame();
+    final data =
+        await frame.image.toByteData(format: ui.ImageByteFormat.rawRgba);
+    expect(frame.image.width, 20);
+    expect(frame.image.height, 10);
+    return data!.buffer.asUint8List();
+  }
+
+  test('encodeFrameUi downscales, occludes and returns a PNG', () async {
+    final src = await whiteImage(40, 20);
+    final bytes = await encodeFrameUi(
+      src,
       maxWidth: 20,
-      quality: 90,
-      masks: const [
-        [0, 0, 20, 20] // left half, in source pixels
-      ],
-    ));
-    final decoded = img.decodeJpg(bytes)!;
-    expect(decoded.width, 20);
-    expect(decoded.height, 10);
-    // Left half masked black, right half still light.
-    final left = decoded.getPixel(2, 5);
-    final right = decoded.getPixel(17, 5);
-    expect(left.r, lessThan(40));
-    expect(right.r, greaterThan(200));
+      masks: const [ui.Rect.fromLTRB(0, 0, 20, 20)], // left half, source px
+    );
+    expect(bytes, isNotNull);
+    // PNG signature.
+    expect(bytes!.sublist(0, 4), [0x89, 0x50, 0x4E, 0x47]);
+    final px = await rawPixels(bytes);
+    int red(int x, int y) => px[(y * 20 + x) * 4];
+    expect(red(2, 5), lessThan(40), reason: 'masked half is black');
+    expect(red(17, 5), greaterThan(200), reason: 'other half untouched');
   });
 
   test('EXCEPTION and CRASH carry the fatal flag', () {

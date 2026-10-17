@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
 import '../capture/snapshot_buffer.dart';
 import '../events/event_buffer.dart';
 import '../session/session.dart';
@@ -9,18 +11,28 @@ import '../storage/event_database.dart';
 import '../storage/pending_event.dart';
 import '../network/api_client.dart';
 import '../network/network_monitor.dart';
+import '../network/retry_policy.dart';
 import '../performance/performance_monitor.dart';
 import '../logger/logger.dart';
 
-/// Schedules periodic event flushing and handles retry logic.
+/// Schedules periodic event flushing and owns the retry/backoff state.
 ///
-/// Periodic flush — runs every 30 seconds.
+/// Periodic flush — runs every [intervalSeconds].
 /// Executes all 4 stages:
-/// 1. Session upsert
+/// 1. Session upsert (skipped when nothing in the record has changed)
 /// 2. Events batch
 /// 3. Snapshots (background, best-effort)
 /// 4. Screenshots upload (background, best-effort)
-/// Also retries any previously failed events.
+/// Also retries previously failed batches, oldest first, one at a time.
+///
+/// **One attempt per cycle.** Every request is made once. A transient
+/// failure (no response, 5xx, 429) opens a backoff window — exponential with
+/// jitter, or exactly what a `Retry-After` header asks for — during which
+/// every cycle returns immediately and data accumulates in the on-device
+/// queue. A permanent rejection (other 4xx) drops that batch: the same bytes
+/// can never succeed and would otherwise be re-sent for a week. A 401/403
+/// pauses uploads until the next launch.
+///
 /// A [_flushing] guard prevents concurrent runs.
 class FlushScheduler {
   final int intervalSeconds;
@@ -33,6 +45,9 @@ class FlushScheduler {
   final Future<Map<String, dynamic>?> Function() buildSessionPayload;
   final bool uploadScreenshotsOnWifiOnly;
   final SnapshotBuffer? snapshotBuffer;
+
+  /// Clock, injectable for tests.
+  final DateTime Function() now;
 
   Timer? _timer;
   bool _flushing = false;
@@ -50,9 +65,69 @@ class FlushScheduler {
   /// 401 and 403 mean the key itself is wrong, not that the request was.
   static bool isAuthFailure(int status) => status == 401 || status == 403;
 
-  /// Serialises every event upload: periodic flush, [flushNow] from track(),
-  /// background drain and retries all go through this one gate, so at most one
-  /// events request is in flight and batches leave in capture order.
+  // ── Backoff ────────────────────────────────────────────────────────────────
+
+  int _consecutiveFailures = 0;
+  DateTime? _backoffUntil;
+
+  /// Number of consecutive transient failures; resets on the first success.
+  @visibleForTesting
+  int get consecutiveFailures => _consecutiveFailures;
+
+  /// End of the current backoff window, or null when uploads may proceed.
+  @visibleForTesting
+  DateTime? get backoffUntil => _backoffUntil;
+
+  /// True while a backoff window is open.
+  bool get inBackoff {
+    final until = _backoffUntil;
+    if (until == null) return false;
+    if (now().isBefore(until)) return true;
+    _backoffUntil = null;
+    return false;
+  }
+
+  /// Records the outcome of a request and updates the backoff/auth state.
+  /// Returns the result for chaining.
+  ApiResult _note(ApiResult r, String what) {
+    if (r.ok) {
+      if (_consecutiveFailures > 0) {
+        UnilitixLogger.d('$what succeeded — backoff cleared');
+      }
+      _consecutiveFailures = 0;
+      _backoffUntil = null;
+      return r;
+    }
+    if (r.isAuthFailure) {
+      if (!_authRejected) {
+        _authRejected = true;
+        UnilitixLogger.e(
+          'Unilitix API key rejected (${r.status}). Uploads are paused '
+          'until the app restarts — check the key passed to Unilitix.init(). '
+          'Captured data stays on-device and is sent once the key is valid.',
+        );
+      }
+      return r;
+    }
+    if (r.retryable) {
+      final delay = RetryPolicy.delayFor(
+        _consecutiveFailures,
+        retryAfterSeconds: r.retryAfterSeconds,
+      );
+      _consecutiveFailures++;
+      _backoffUntil = now().add(delay);
+      UnilitixLogger.w('$what: ${r.describe()} — backing off '
+          '${delay.inSeconds}s (failure #$_consecutiveFailures)');
+      return r;
+    }
+    // Rejected (4xx): no backoff — the server is healthy, this payload is not.
+    UnilitixLogger.e('$what rejected by the API (${r.describe()}) — dropped');
+    return r;
+  }
+
+  /// Serialises every event upload: periodic flush, background drain and
+  /// retries all go through this one gate, so at most one events request is
+  /// in flight and batches leave in capture order.
   Future<void> _uploadGate = Future.value();
 
   Future<T> _serialized<T>(Future<T> Function() work) {
@@ -88,8 +163,10 @@ class FlushScheduler {
     this.snapshotBuffer,
     bool Function()? isOptedOut,
     bool Function()? canUpload,
+    DateTime Function()? now,
   })  : isOptedOut = isOptedOut ?? _neverOptedOut,
-        canUpload = canUpload ?? _alwaysUpload;
+        canUpload = canUpload ?? _alwaysUpload,
+        now = now ?? DateTime.now;
 
   static bool _neverOptedOut() => false;
   static bool _alwaysUpload() => true;
@@ -107,11 +184,13 @@ class FlushScheduler {
     _disposed = true;
   }
 
+  /// True when no upload may happen right now, for any reason.
+  bool get _paused => !canUpload() || _authRejected || inBackoff;
+
   /// Periodic flush — runs all 4 stages every cycle.
   /// Stages 3+4 (snapshots/screenshots) are best-effort and run in background.
   Future<void> flush() async {
-    if (!canUpload()) return;
-    if (_authRejected) return;
+    if (_paused) return;
     if (_flushing) return;
     _flushing = true;
     try {
@@ -131,34 +210,34 @@ class FlushScheduler {
 
       // Retry any previously failed events
       await _retryPending();
+    } catch (e, st) {
+      // A bug in the SDK's own flush path must never reach the host app.
+      UnilitixLogger.e('flush failed', e, st);
     } finally {
       _flushing = false;
     }
   }
 
-  /// Immediate events-only flush called from track() — bypasses re-entrancy
-  /// guard. Safe: drain() is atomic in single-isolate Dart.
-  Future<void> flushNow() async {
-    if (!canUpload()) return;
-    if (_authRejected) return;
-    await _flushEvents();
-  }
-
   /// Drain pending events on app background — no session POST, no screenshots.
   Future<void> flushEventsOnly() async {
-    if (!canUpload()) return;
-    if (_authRejected) return;
-    await _flushEvents();
+    if (_paused) return;
+    try {
+      await _flushEvents();
+    } catch (e, st) {
+      UnilitixLogger.e('flushEventsOnly failed', e, st);
+    }
   }
 
   /// Flush a crash as soon as it is recorded. The event is already in the
   /// write-ahead log, so this is an opportunistic upload bounded by [timeout];
   /// if the process dies first, the next launch recovers and uploads it.
+  /// Runs even inside a backoff window: it is one request, and a crash is the
+  /// one event worth that request.
   Future<void> flushCrash(
       {Duration timeout = const Duration(seconds: 3)}) async {
-    if (!canUpload()) return;
-    if (_authRejected) return;
+    if (!canUpload() || _authRejected) return;
     try {
+      await database.walFlush();
       await _flushEvents().timeout(timeout);
       await _retryPending(skipPurge: true, limit: 1).timeout(timeout);
     } catch (_) {
@@ -169,9 +248,9 @@ class FlushScheduler {
   /// Full 4-stage flush on session end.
   Future<void> flushOnSessionEnd(Session session) async {
     // Wait for any in-progress periodic flush to complete before running session-end flush.
-    // Timeout after 3s — a stalled periodic flush (e.g. severe network degradation with
-    // max retry backoff) may still be running. In that case we proceed anyway and both
-    // flushes run concurrently. Data integrity is preserved since each stage is idempotent.
+    // Timeout after 3s — a stalled periodic flush may still be running. In that
+    // case we proceed anyway and both flushes run concurrently. Data integrity
+    // is preserved since each stage is idempotent.
     int waited = 0;
     while (_flushing && waited < 3000) {
       await Future.delayed(const Duration(milliseconds: 100));
@@ -185,8 +264,8 @@ class FlushScheduler {
       await database.deletePendingSession(session.id);
       return;
     }
-    if (!canUpload()) {
-      // Consent pending: keep the stub and the queue for when it is granted.
+    if (!canUpload() || inBackoff) {
+      // Consent pending or server backing off: keep the stub and the queue.
       return;
     }
     _flushing = true;
@@ -198,6 +277,8 @@ class FlushScheduler {
       if (sessionDelivered) {
         await database.deletePendingSession(session.id);
       }
+    } catch (e, st) {
+      UnilitixLogger.e('flushOnSessionEnd failed', e, st);
     } finally {
       _flushing = false;
     }
@@ -209,7 +290,8 @@ class FlushScheduler {
   // (stage 1 succeeded). Events and media have their own retry paths.
   Future<bool> _flushAll({Session? session}) async {
     // Stage 1 — session record must exist on backend before anything else.
-    final sessionOk = await _flushSession();
+    // The end-of-session record always goes out (endedAt changed).
+    final sessionOk = await _flushSession(force: true);
     if (!sessionOk) return false;
 
     // Stage 2 — upload buffered events; abort media stages on failure.
@@ -226,42 +308,88 @@ class FlushScheduler {
 
   // ── Stage 1: session ───────────────────────────────────────────────────────
 
-  Future<bool> _flushSession() async {
+  /// Session id the server has acknowledged, with the fingerprint of the
+  /// record it holds and when it was sent. The periodic cycle re-sends the
+  /// record only when a non-volatile field changed or [_sessionRefresh] has
+  /// elapsed (so durations still advance on the dashboard), instead of one
+  /// identical upsert every 30 s for the life of the session.
+  String? _ackedSessionId;
+  String? _ackedFingerprint;
+  DateTime? _ackedAt;
+
+  /// A record the server rejected with a 4xx; not re-sent until it changes.
+  String? _rejectedFingerprint;
+
+  static const _sessionRefresh = Duration(minutes: 5);
+
+  /// Fields that change on every build and must not by themselves trigger an
+  /// upsert.
+  static const _volatileKeys = {
+    'foregroundTimeMs',
+    'backgroundTimeMs',
+    'durationMs',
+    'batteryLevel',
+    'offlineEventCount',
+    'onlineEventCount',
+  };
+
+  @visibleForTesting
+  static String sessionFingerprint(Map<String, dynamic> payload) {
+    final keys = payload.keys.where((k) => !_volatileKeys.contains(k)).toList()
+      ..sort();
+    final buf = StringBuffer();
+    for (final k in keys) {
+      buf
+        ..write(k)
+        ..write('=')
+        ..write(jsonEncode(payload[k]))
+        ..write(';');
+    }
+    return buf.toString();
+  }
+
+  Future<bool> _flushSession({bool force = false}) async {
     try {
       final sessionPayload = await buildSessionPayload();
       if (sessionPayload == null) return false;
       final sessionId = sessionPayload['sessionId'] as String? ?? '';
-      final resp = await apiClient.ingestSessionRaw(sessionPayload);
-      if (resp == null) {
-        UnilitixLogger.w('Session flush failed — no response');
-        return false;
+      final fp = sessionFingerprint(sessionPayload);
+
+      if (!force && _ackedSessionId == sessionId && _ackedFingerprint == fp) {
+        final sentAt = _ackedAt;
+        if (sentAt != null && now().difference(sentAt) < _sessionRefresh) {
+          return true; // nothing new to say about this session
+        }
       }
-      if (resp.statusCode == 409) {
-        // Session already exists on server — treat as success, proceed with events
-        UnilitixLogger.d('Session already exists ($sessionId) — proceeding');
-        return true;
+      if (!force && _rejectedFingerprint == fp) {
+        return false; // would be the same 4xx again
       }
-      if (isAuthFailure(resp.statusCode)) {
-        _authRejected = true;
-        UnilitixLogger.e(
-          'Unilitix API key rejected (${resp.statusCode}). Uploads are paused '
-          'until the app restarts — check the key passed to Unilitix.init(). '
-          'Captured data stays on-device and is sent once the key is valid.',
-        );
-        return false;
-      }
-      if (resp.statusCode == 400) {
-        // Malformed payload — reset and start fresh next cycle
-        UnilitixLogger.w('Session rejected (400) — resetting session');
-        sessionManager.resetSession();
-        return false;
-      }
-      if (resp.statusCode >= 200 && resp.statusCode < 300) {
+
+      final raw = await apiClient.ingestSession(sessionPayload);
+      // 409: session already exists on the server — that is an ack too, so
+      // keep it away from _note (which would log a 4xx as a dropped batch).
+      final resp =
+          raw.status == 409 ? raw : _note(raw, 'Session upsert ($sessionId)');
+      if (resp.ok || resp.status == 409) {
+        _consecutiveFailures = 0;
+        _backoffUntil = null;
+        _ackedSessionId = sessionId;
+        _ackedFingerprint = fp;
+        _ackedAt = now();
+        _rejectedFingerprint = null;
         UnilitixLogger.d('Flushed session $sessionId');
         return true;
       }
-      UnilitixLogger.w('Session flush failed (${resp.statusCode})');
-      return false;
+      if (resp.rejected) {
+        // Pre-2.1.1 the SDK reset the session here, which split one visit
+        // into many and lost the events already attributed to it. Keep the
+        // session; stop re-sending the identical record; surface the reason.
+        _rejectedFingerprint = fp;
+        UnilitixLogger.e('Session record rejected (${resp.status}): '
+            '${resp.body.length > 200 ? resp.body.substring(0, 200) : resp.body}');
+        return false;
+      }
+      return false; // transient or auth — _note already handled it
     } catch (e, stack) {
       UnilitixLogger.e('Session flush failed', e, stack);
       return false;
@@ -294,14 +422,19 @@ class FlushScheduler {
       }
     }
 
-    final eventsJson = jsonEncode(events.map((e) => e.toJson()).toList());
+    final eventsJson = events.map((e) => e.toJson()).toList();
+    final eventsEncoded = jsonEncode(eventsJson);
+
+    // Make sure the write-ahead rows for these events are on disk before we
+    // either delete them (success) or fold them into a retry batch.
+    await database.walFlush();
 
     // Once a batch is in the pending-retry table it is durable there, so its
     // write-ahead rows can go. If queuing fails the events return to memory and
     // their WAL rows stay as the only durable copy.
     Future<bool> queueOrRestore({required bool capturedOffline}) async {
-      final queued = await _queueEventsForRetry(id, eventsJson,
-          capturedOffline: capturedOffline);
+      final queued = await _queueEventsForRetry(id, eventsEncoded,
+          eventCount: events.length, capturedOffline: capturedOffline);
       if (queued) {
         await database.walDelete(eventIds);
         return true;
@@ -322,14 +455,20 @@ class FlushScheduler {
     }
 
     try {
-      final ok = await apiClient.ingestEvents(
-        sessionId: id,
-        events: events.map((e) => e.toJson()).toList(),
+      final resp = _note(
+        await apiClient.ingestEvents(sessionId: id, events: eventsJson),
+        'Events batch (${events.length})',
       );
-      if (ok) {
+      if (resp.ok) {
         await database.walDelete(eventIds);
         UnilitixLogger.d('Flushed ${events.length} events');
         return true;
+      }
+      if (resp.rejected) {
+        // The server will never accept these bytes; keeping them would
+        // re-send the same 4xx every cycle for seven days.
+        await database.walDelete(eventIds);
+        return false;
       }
       if (await queueOrRestore(capturedOffline: false)) {
         UnilitixLogger.w('Event flush failed — queued for retry');
@@ -345,6 +484,7 @@ class FlushScheduler {
   Future<bool> _queueEventsForRetry(
     String sessionId,
     String eventsJson, {
+    required int eventCount,
     required bool capturedOffline,
   }) async {
     try {
@@ -352,7 +492,8 @@ class FlushScheduler {
         // Store sessionId only so _retryPending can route to ingestEvents.
         sessionJson: jsonEncode({'sessionId': sessionId}),
         eventsJson: eventsJson,
-        createdAt: DateTime.now().millisecondsSinceEpoch,
+        eventCount: eventCount,
+        createdAt: now().millisecondsSinceEpoch,
         capturedOffline: capturedOffline,
         networkAtCapture: networkMonitor.currentType(),
       ));
@@ -377,19 +518,22 @@ class FlushScheduler {
     if (snapshots.isEmpty) return true;
 
     try {
-      final ok = await apiClient.ingestSnapshots({
-        'sessionId': id,
-        'snapshots': snapshots,
-      });
-      if (ok) {
+      final resp = _note(
+        await apiClient.ingestSnapshots({
+          'sessionId': id,
+          'snapshots': snapshots,
+        }),
+        'Snapshots (${snapshots.length})',
+      );
+      if (resp.ok) {
         UnilitixLogger.d('Flushed ${snapshots.length} snapshots');
         return true;
       }
+      if (resp.rejected) return false; // dropped; replay is best-effort
       for (final s in snapshots) {
         buf.add(s);
       }
-      UnilitixLogger.w(
-          'Snapshot flush rejected — re-queued ${snapshots.length}');
+      UnilitixLogger.w('Snapshot flush failed — re-queued ${snapshots.length}');
       return false;
     } catch (e, stack) {
       for (final s in snapshots) {
@@ -414,17 +558,28 @@ class FlushScheduler {
     if (pending.isEmpty) return true;
 
     // Single batch init with all ordinals.
-    final slots = await apiClient.initScreenshotUpload(
+    final init = await apiClient.initScreenshotUpload(
       sessionId: id,
       count: pending.length,
       ordinals: pending.map((s) => s.ordinal).toList(),
     );
-    if (slots == null) return false;
+    _note(init.result, 'Screenshot init (${pending.length})');
+    final slots = init.slots;
+    if (slots == null) {
+      if (init.result.rejected) {
+        // The server refuses frames for this session; stop storing them.
+        for (final s in pending) {
+          await database.deleteScreenshotById(s.id!);
+        }
+      }
+      return false;
+    }
 
     // Upload screenshots in batches of 3 — avoids saturating the connection
     // on large sessions which causes request timeouts and white frames in replay.
     const batchSize = 3;
     for (int i = 0; i < pending.length; i += batchSize) {
+      if (inBackoff || _authRejected) return false;
       final batch = pending.skip(i).take(batchSize).toList();
       await Future.wait(batch.map((screenshot) async {
         try {
@@ -442,17 +597,20 @@ class FlushScheduler {
           );
 
           if (!uploaded) {
-            UnilitixLogger.e(
+            UnilitixLogger.w(
               'Screenshot upload failed for ordinal ${screenshot.ordinal} '
               '— leaving in DB for retry',
-              null,
-              null,
             );
             return; // skip confirm and delete, leave in DB
           }
 
-          await apiClient.confirmScreenshotUpload(id, screenshot);
-          await database.deleteScreenshotById(screenshot.id!);
+          final confirm = _note(
+            await apiClient.confirmScreenshotUpload(id, screenshot),
+            'Screenshot confirm #${screenshot.ordinal}',
+          );
+          if (confirm.ok || confirm.rejected) {
+            await database.deleteScreenshotById(screenshot.id!);
+          }
         } catch (e, stack) {
           UnilitixLogger.e(
             'Screenshot upload error for ordinal ${screenshot.ordinal}',
@@ -469,62 +627,86 @@ class FlushScheduler {
   // ── Retry ──────────────────────────────────────────────────────────────────
 
   Future<void> _retryPending({bool skipPurge = false, int limit = 20}) async {
-    if (!canUpload()) return;
-    if (_authRejected) return;
+    if (_paused) return;
     final pending = await database.getOldestEvents(limit);
     // Strictly one batch in flight, oldest first: concurrent retries reorder
-    // events on the server and multiply load on a degraded link.
+    // events on the server and multiply load on a degraded link. The first
+    // transient failure ends the pass — the server is struggling, and every
+    // later batch would meet the same fate.
     for (final p in pending) {
-      await _serialized(() => _processBatch(p));
+      if (_paused) break;
+      final keepGoing = await _serialized(() => _processBatch(p));
+      if (!keepGoing) break;
     }
     if (!skipPurge) {
       await database.deleteEventsOlderThan(
-        DateTime.now().subtract(const Duration(days: 7)),
+        now().subtract(EventDatabase.maxQueueAge),
       );
     }
   }
 
-  Future<void> _processBatch(PendingEvent p) async {
-    if (p.id == null) return;
+  /// Sends one queued batch. Returns false when the pass should stop
+  /// (transient failure, auth failure).
+  Future<bool> _processBatch(PendingEvent p) async {
+    final rowId = p.id;
+    if (rowId == null) return true;
 
     // Drop batches that have failed too many times.
     if (p.retryCount >= 10) {
-      await database.deletePendingEvent(p.id!);
-      return;
+      await database.deletePendingEvent(rowId);
+      return true;
     }
 
-    final sessionData = jsonDecode(p.sessionJson) as Map<String, dynamic>;
-    final eventsList =
-        (jsonDecode(p.eventsJson) as List).cast<Map<String, dynamic>>();
-
-    // Events-only records have exactly {sessionId} in session_json.
-    // Full-session records (legacy) have the complete session payload.
-    final isEventsOnly =
-        sessionData.length == 1 && sessionData.containsKey('sessionId');
-
-    final bool ok;
-    if (isEventsOnly) {
-      final sid = sessionData['sessionId'] as String? ?? '';
-      ok = await apiClient.ingestEvents(
-        sessionId: sid,
-        events: eventsList,
-      );
-    } else {
-      sessionData['syncAttempts'] = p.syncAttempts;
-      sessionData['syncFailedBatches'] = p.syncFailedBatches;
-      ok = await apiClient.ingestSession({
-        ...sessionData,
-        'events': eventsList,
-      });
+    final Map<String, dynamic> sessionData;
+    final List<Map<String, dynamic>> eventsList;
+    try {
+      sessionData = jsonDecode(p.sessionJson) as Map<String, dynamic>;
+      eventsList =
+          (jsonDecode(p.eventsJson) as List).cast<Map<String, dynamic>>();
+    } catch (e) {
+      // Corrupt row (truncated write, schema drift): it can never be sent.
+      UnilitixLogger.w(
+          'Dropping corrupt queued batch $rowId: ${e.runtimeType}');
+      await database.deletePendingEvent(rowId);
+      return true;
     }
 
-    if (ok) {
-      await database.incrementSyncAttempts(p.id!);
-      await database.deleteEventById(p.id!);
-      UnilitixLogger.d('Retry succeeded for batch ${p.id}');
-    } else {
-      await database.incrementRetryCount(p.id!);
-      await database.incrementSyncFailedBatches(p.id!);
+    try {
+      // Events-only records have exactly {sessionId} in session_json.
+      // Full-session records (legacy) have the complete session payload.
+      final isEventsOnly =
+          sessionData.length == 1 && sessionData.containsKey('sessionId');
+
+      final ApiResult resp;
+      if (isEventsOnly) {
+        final sid = sessionData['sessionId'] as String? ?? '';
+        resp = await apiClient.ingestEvents(sessionId: sid, events: eventsList);
+      } else {
+        sessionData['syncAttempts'] = p.syncAttempts;
+        sessionData['syncFailedBatches'] = p.syncFailedBatches;
+        resp = await apiClient.ingestSession({
+          ...sessionData,
+          'events': eventsList,
+        });
+      }
+      _note(resp, 'Retry of batch $rowId');
+
+      if (resp.ok) {
+        await database.incrementSyncAttempts(rowId);
+        await database.deleteEventById(rowId);
+        UnilitixLogger.d('Retry succeeded for batch $rowId');
+        return true;
+      }
+      if (resp.rejected) {
+        await database.deleteEventById(rowId);
+        return true;
+      }
+      await database.incrementRetryCount(rowId);
+      await database.incrementSyncFailedBatches(rowId);
+      return false;
+    } catch (e, stack) {
+      UnilitixLogger.e('Retry of batch $rowId failed', e, stack);
+      return false;
     }
   }
 }

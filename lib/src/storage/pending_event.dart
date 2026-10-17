@@ -3,6 +3,10 @@ class PendingEvent {
   final int? id;
   final String sessionJson;
   final String eventsJson;
+
+  /// Number of events in [eventsJson]; lets the queue be capped by events
+  /// without parsing every row.
+  final int eventCount;
   final int createdAt;
   int retryCount;
   final bool capturedOffline;
@@ -15,6 +19,7 @@ class PendingEvent {
     required this.sessionJson,
     required this.eventsJson,
     required this.createdAt,
+    this.eventCount = 0,
     this.retryCount = 0,
     this.capturedOffline = false,
     this.networkAtCapture = 'UNKNOWN',
@@ -26,6 +31,7 @@ class PendingEvent {
         if (id != null) 'id': id,
         'session_json': sessionJson,
         'events_json': eventsJson,
+        'event_count': eventCount,
         'created_at': createdAt,
         'retry_count': retryCount,
         'captured_offline': capturedOffline ? 1 : 0,
@@ -38,6 +44,7 @@ class PendingEvent {
         id: map['id'] as int?,
         sessionJson: map['session_json'] as String,
         eventsJson: map['events_json'] as String,
+        eventCount: map['event_count'] as int? ?? 0,
         createdAt: map['created_at'] as int,
         retryCount: map['retry_count'] as int? ?? 0,
         capturedOffline: (map['captured_offline'] as int? ?? 0) == 1,

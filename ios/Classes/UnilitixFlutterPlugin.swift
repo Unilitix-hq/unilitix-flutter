@@ -65,6 +65,33 @@ public class UnilitixPlugin: NSObject, FlutterPlugin {
       if !wasMonitoring { UIDevice.current.isBatteryMonitoringEnabled = false }
       result(level < 0 ? -1.0 : Double(level))
 
+    // Device fields the SDK used to get from device_info_plus.
+    case "getDeviceInfo":
+      var sys = utsname()
+      uname(&sys)
+      let machine = withUnsafePointer(to: &sys.machine) {
+        $0.withMemoryRebound(to: CChar.self, capacity: 1) { String(validatingUTF8: $0) }
+      } ?? ""
+      result([
+        "manufacturer": "Apple",
+        "model": machine,
+        "brand": "Apple",
+        "osVersion": UIDevice.current.systemVersion,
+        "timezone": TimeZone.current.identifier,
+      ])
+
+    // App fields the SDK used to get from package_info_plus.
+    case "getPackageInfo":
+      let b = Bundle.main
+      func info(_ key: String) -> String { (b.object(forInfoDictionaryKey: key) as? String) ?? "" }
+      let name = info("CFBundleDisplayName").isEmpty ? info("CFBundleName") : info("CFBundleDisplayName")
+      result([
+        "appName": name,
+        "packageName": b.bundleIdentifier ?? "",
+        "version": info("CFBundleShortVersionString"),
+        "buildNumber": info("CFBundleVersion"),
+      ])
+
     case "readNativeCrash":
       result(NativeCrashHandler.consume())
 
