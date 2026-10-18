@@ -101,6 +101,21 @@ class UnilitixConfig {
   /// idle screens still appear in replay.
   final int screenshotHeartbeatMs;
 
+  /// Contribute to the crowd-sourced power-outage map. Off by default.
+  ///
+  /// Double opt-in: this flag alone collects nothing. The app must also
+  /// declare and itself request coarse location (`ACCESS_COARSE_LOCATION` on
+  /// Android, `NSLocationWhenInUseUsageDescription` on iOS) — the SDK never
+  /// asks for permission, it only reads a location the app already may — and
+  /// consent must be [UnilitixConsent.granted] (nothing is collected or held
+  /// while pending or denied).
+  ///
+  /// When on, the SDK records when the device is plugged in or unplugged and
+  /// sends those events with an H3 resolution-7 cell (~5 km²) computed on the
+  /// device and a daily-rotating salted device hash; coordinates and the
+  /// install id never leave the device. See the README.
+  final bool powerOutageContribution;
+
   const UnilitixConfig({
     required this.apiKey,
     this.apiUrl = 'https://api.unilitix.com',
@@ -128,6 +143,7 @@ class UnilitixConfig {
     this.maxScreenshotsPerSession = 1500,
     this.maxScreenshotsPerMinute = 20,
     this.screenshotHeartbeatMs = 10000,
+    this.powerOutageContribution = false,
   });
 
   UnilitixConfig copyWith({
@@ -157,6 +173,7 @@ class UnilitixConfig {
     int? maxScreenshotsPerSession,
     int? maxScreenshotsPerMinute,
     int? screenshotHeartbeatMs,
+    bool? powerOutageContribution,
   }) {
     return UnilitixConfig(
       apiKey: apiKey ?? this.apiKey,
@@ -191,6 +208,8 @@ class UnilitixConfig {
           maxScreenshotsPerMinute ?? this.maxScreenshotsPerMinute,
       screenshotHeartbeatMs:
           screenshotHeartbeatMs ?? this.screenshotHeartbeatMs,
+      powerOutageContribution:
+          powerOutageContribution ?? this.powerOutageContribution,
     );
   }
 }

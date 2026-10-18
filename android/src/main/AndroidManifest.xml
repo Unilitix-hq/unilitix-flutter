@@ -2,4 +2,24 @@
   package="com.unilitix.unilitix_flutter">
   <!-- Required for ConnectivityManager.activeNetwork on API 23+ -->
   <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+  <!-- No location permission is declared here on purpose: power-outage
+       contribution only reads a coarse location when the APP declares
+       ACCESS_COARSE_LOCATION and has obtained it from the user itself. -->
+  <application>
+    <!-- Power-outage contribution (UnilitixConfig.powerOutageContribution).
+         Disabled by default and enabled at runtime only when the app opts in
+         and consent is granted, so apps that don't opt in never receive these
+         broadcasts. Not exported: only the system (and this app) can deliver
+         to it, so other apps cannot inject fake power events. -->
+    <receiver
+      android:name="com.unilitix.unilitix_flutter.PowerConnectionReceiver"
+      android:enabled="false"
+      android:exported="false">
+      <intent-filter>
+        <action android:name="android.intent.action.ACTION_POWER_CONNECTED" />
+        <action android:name="android.intent.action.ACTION_POWER_DISCONNECTED" />
+      </intent-filter>
+    </receiver>
+  </application>
 </manifest>

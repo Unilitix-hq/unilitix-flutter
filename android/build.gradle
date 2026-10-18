@@ -33,3 +33,12 @@ android {
     }
     kotlinOptions { jvmTarget = '17' }
 }
+
+dependencies {
+    // Periodic upload of the power-outage log (only scheduled when the app
+    // opts in). Plain work-runtime rather than -ktx: the worker is a plain
+    // Worker, so the coroutine extensions would be dead weight.
+    implementation 'androidx.work:work-runtime:2.9.1'
+
+    testImplementation 'junit:junit:4.13.2'
+}

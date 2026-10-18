@@ -49,6 +49,7 @@ import 'src/core/version.dart';
 import 'src/util/json_util.dart';
 import 'src/logger/logger.dart';
 import 'src/generated/sdk_contract.dart';
+import 'src/power/power_contribution.dart';
 
 export 'src/config.dart';
 export 'src/tracking/observer.dart';
@@ -93,6 +94,7 @@ class Unilitix {
   static late DeviceInfoCollector _deviceInfo;
   static late RageTapDetector _rageTapDetector;
   static late AfricaContext _africaContext;
+  static PowerContribution? _power;
 
   // Device info cache — refreshed at most once every 5 minutes to avoid
   // redundant platform channel round-trips on every periodic flush.
@@ -207,6 +209,18 @@ class Unilitix {
       apiKey: effectiveConfig.apiKey,
       apiUrl: effectiveConfig.apiUrl,
       sdkVersion: kUnilitixSdkVersion,
+    );
+
+    // Power-outage contribution: does nothing (no platform call) unless the
+    // app opted in, and collects only while consent is granted.
+    _power = PowerContribution(
+      optedIn: effectiveConfig.powerOutageContribution,
+      consent: () => _optManager.consent,
+      installId: _identity.installId,
+      apiKey: effectiveConfig.apiKey,
+      apiUrl: effectiveConfig.apiUrl,
+      sdkVersion: kUnilitixSdkVersion,
+      post: _apiClient.postPowerSignals,
     );
 
     _rageTapDetector = RageTapDetector(
@@ -403,6 +417,7 @@ class Unilitix {
       unawaited(_recoverPendingSessions());
     }
     _startReplayCaptureIfAllowed();
+    unawaited(_power?.start());
 
     _initialized = true;
 
@@ -615,6 +630,8 @@ class Unilitix {
   static Future<void> _applyConsent(UnilitixConsent value) async {
     final before = _optManager.consent;
     await _optManager.set(value);
+    // Power contribution starts, or stops and deletes what it held.
+    unawaited(_power?.onConsentChanged());
     switch (value) {
       case UnilitixConsent.denied:
         _snapshotCapture.stop();

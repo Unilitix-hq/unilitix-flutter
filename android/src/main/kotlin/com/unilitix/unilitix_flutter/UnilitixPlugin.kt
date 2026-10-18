@@ -1,6 +1,7 @@
 package com.unilitix.unilitix_flutter
 
 import android.app.Activity
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -44,6 +45,11 @@ class UnilitixPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
     /** Single background thread for image work so captures never contend with the UI thread. */
     private val imageExecutor = Executors.newSingleThreadExecutor { r -> Thread(r, "unilitix-image") }
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    /** Power-outage contribution: file, preferences, WorkManager and network work, off the main thread. */
+    private val powerExecutor = Executors.newSingleThreadExecutor { r -> Thread(r, "unilitix-power") }
+    /** Runtime power receiver, registered only while the feature is enabled. */
+    private var powerReceiver: BroadcastReceiver? = null
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         context = binding.applicationContext
@@ -119,6 +125,34 @@ class UnilitixPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
             // Returns the JSON written by the uncaught-exception handler of a
             // previous process (or null), and clears it.
             "readNativeCrash" -> result.success(NativeCrashHandler.consume(context))
+            // Power-outage contribution (opt-in). The Dart SDK sends
+            // enabled=true only when the app set the config flag and consent
+            // is granted; anything else disables and deletes everything.
+            "powerConfigure" -> {
+                val args = call.arguments as? Map<*, *> ?: emptyMap<String, Any?>()
+                powerExecutor.execute {
+                    try {
+                        PowerContribution.configure(context, args)
+                    } catch (_: Throwable) {
+                    }
+                    mainHandler.post {
+                        updatePowerReceiver()
+                        result.success(null)
+                    }
+                }
+            }
+            // Foreground trigger: record a charging sample, then upload.
+            "powerUploadNow" -> {
+                powerExecutor.execute {
+                    val outcome = try {
+                        PowerContribution.appendSample(context)
+                        PowerContribution.upload(context)
+                    } catch (_: Throwable) {
+                        null
+                    }
+                    mainHandler.post { result.success(outcome) }
+                }
+            }
             else -> result.notImplemented()
         }
     }
@@ -317,6 +351,26 @@ class UnilitixPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
         eventChannel.setStreamHandler(null)
         screenshotChannel.setMethodCallHandler(null)
         imageExecutor.shutdown()
+        unregisterPowerReceiver()
+        powerExecutor.shutdown()
+    }
+
+    /** Main thread. Registers the runtime receiver when enabled, removes it otherwise. */
+    private fun updatePowerReceiver() {
+        if (PowerContribution.isEnabled(context)) {
+            if (powerReceiver == null) powerReceiver = PowerContribution.registerRuntimeReceiver(context)
+        } else {
+            unregisterPowerReceiver()
+        }
+    }
+
+    private fun unregisterPowerReceiver() {
+        val r = powerReceiver ?: return
+        powerReceiver = null
+        try {
+            context.unregisterReceiver(r)
+        } catch (_: Throwable) {
+        }
     }
 }
 

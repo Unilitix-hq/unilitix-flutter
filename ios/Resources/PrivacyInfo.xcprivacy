@@ -8,8 +8,11 @@
 	<key>NSPrivacyTrackingDomains</key>
 	<array/>
 	<!-- Data the SDK collects, for the host app's App Privacy nutrition label.
-	     Linked-to-user is true because apps may call identify(). Location is
-	     never collected by this SDK. -->
+	     Linked-to-user is true because apps may call identify(). Coarse
+	     location is collected ONLY when the app enables
+	     powerOutageContribution and already holds location authorization,
+	     and only as an H3 cell (~5 km2) with a daily-rotating device hash,
+	     not linked to the user. -->
 	<key>NSPrivacyCollectedDataTypes</key>
 	<array>
 		<dict>
@@ -66,6 +69,18 @@
 			<string>NSPrivacyCollectedDataTypePerformanceData</string>
 			<key>NSPrivacyCollectedDataTypeLinked</key>
 			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeCoarseLocation</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<false/>
 			<key>NSPrivacyCollectedDataTypeTracking</key>
 			<false/>
 			<key>NSPrivacyCollectedDataTypePurposes</key>

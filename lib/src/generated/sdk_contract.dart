@@ -3,8 +3,17 @@
 
 /// The Unilitix SDK contract (see sdk-contract.md in the api repo).
 abstract final class SdkContract {
-  static const String version = '1.0.0';
-  static const List<String> eventTypes = ['SESSION_START', 'TAP', 'RAGE_TAP', 'SCROLL', 'NAVIGATE', 'CUSTOM', 'EXCEPTION', 'CRASH'];
+  static const String version = '1.2.0';
+  static const List<String> eventTypes = [
+    'SESSION_START',
+    'TAP',
+    'RAGE_TAP',
+    'SCROLL',
+    'NAVIGATE',
+    'CUSTOM',
+    'EXCEPTION',
+    'CRASH'
+  ];
   static const Map<String, String> eventTypeAliases = {'NAV': 'NAVIGATE'};
   static const List<String> networkTypes = ['WIFI', '4G', '3G', '2G'];
   static const List<String> consentStates = ['granted', 'pending', 'denied'];
@@ -55,6 +64,7 @@ abstract final class SdkContract {
     'maxScreenshotsPerSession': 1500,
     'maxScreenshotsPerMinute': 20,
     'screenshotHeartbeatMs': 10000,
+    'powerOutageContribution': false,
   };
 
   static const List<String> divergences = [];
@@ -62,10 +72,35 @@ abstract final class SdkContract {
   /// (name, exceptionType, stack or null, expected fingerprint).
   static const List<(String, String, String?, String)> fingerprintVectors = [
     ('no stack', 'StateError', null, '784c89e082adf0f1'),
-    ('dart symbolized', 'StateError', '#0      CartService.checkout (package:shop/cart_service.dart:42:7)\n#1      _CheckoutPageState._onPay (package:shop/checkout_page.dart:118:20)\n<asynchronous suspension>\n#2      _CheckoutPageState.build.<anonymous closure> (package:shop/checkout_page.dart:77:31)\n#3      main (package:shop/main.dart:9:3)', '69e658c0ec8f1bd7'),
-    ('dart symbolized, lines moved', 'StateError', '#0      CartService.checkout (package:shop/cart_service.dart:58:9)\n#1      _CheckoutPageState._onPay (package:shop/checkout_page.dart:131:20)\n#2      _CheckoutPageState.build.<anonymous closure> (package:shop/checkout_page.dart:80:31)', '69e658c0ec8f1bd7'),
-    ('dart frame without line', 'FormatException', '#0      int.parse (dart:core-patch/integers_patch.dart)\n#1      Foo.bar (package:a/b.dart:3)', 'c2003c8049732da9'),
-    ('dart obfuscated', 'SIGNAL:11', '*** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***\npid: 1234, tid: 1250, name 1.ui\nbuild_id: \'4f3e2d1c\'\nisolate_dso_base: 7a1b000000, vm_dso_base: 7a1a000000\n#00 abs 0000007a1b2c3d4e virt 00000000002c3d4e _kDartIsolateSnapshotInstructions+0x1a2b\n#01 abs 0000007a1b2c3e10 virt 00000000002c3e10 _kDartIsolateSnapshotInstructions+0x1aed\n#02 abs 0000007a1b2c4000 virt 00000000002c4000 _kDartIsolateSnapshotInstructions+0x1cdd', 'a24e504a022a22f1'),
-    ('non-ascii', 'Ошибка', '#0      Café.naïve (package:é/ü.dart:1:2)', '64b3189790c14476'),
+    (
+      'dart symbolized',
+      'StateError',
+      '#0      CartService.checkout (package:shop/cart_service.dart:42:7)\n#1      _CheckoutPageState._onPay (package:shop/checkout_page.dart:118:20)\n<asynchronous suspension>\n#2      _CheckoutPageState.build.<anonymous closure> (package:shop/checkout_page.dart:77:31)\n#3      main (package:shop/main.dart:9:3)',
+      '69e658c0ec8f1bd7'
+    ),
+    (
+      'dart symbolized, lines moved',
+      'StateError',
+      '#0      CartService.checkout (package:shop/cart_service.dart:58:9)\n#1      _CheckoutPageState._onPay (package:shop/checkout_page.dart:131:20)\n#2      _CheckoutPageState.build.<anonymous closure> (package:shop/checkout_page.dart:80:31)',
+      '69e658c0ec8f1bd7'
+    ),
+    (
+      'dart frame without line',
+      'FormatException',
+      '#0      int.parse (dart:core-patch/integers_patch.dart)\n#1      Foo.bar (package:a/b.dart:3)',
+      'c2003c8049732da9'
+    ),
+    (
+      'dart obfuscated',
+      'SIGNAL:11',
+      '*** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***\npid: 1234, tid: 1250, name 1.ui\nbuild_id: \'4f3e2d1c\'\nisolate_dso_base: 7a1b000000, vm_dso_base: 7a1a000000\n#00 abs 0000007a1b2c3d4e virt 00000000002c3d4e _kDartIsolateSnapshotInstructions+0x1a2b\n#01 abs 0000007a1b2c3e10 virt 00000000002c3e10 _kDartIsolateSnapshotInstructions+0x1aed\n#02 abs 0000007a1b2c4000 virt 00000000002c4000 _kDartIsolateSnapshotInstructions+0x1cdd',
+      'a24e504a022a22f1'
+    ),
+    (
+      'non-ascii',
+      'Ошибка',
+      '#0      Café.naïve (package:é/ü.dart:1:2)',
+      '64b3189790c14476'
+    ),
   ];
 }

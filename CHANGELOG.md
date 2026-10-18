@@ -1,3 +1,44 @@
+## 2.2.0
+
+Power outage contribution (opt-in). No breaking changes; apps that do not
+opt in collect nothing new.
+
+### Added
+- **`UnilitixConfig.powerOutageContribution`** (default `false`). Reports
+  plug/unplug transitions and charging samples to `POST /v1/signals/power`
+  for the crowd-sourced outage map. Double opt-in: the flag, plus coarse
+  location permission that the app declares and requests itself (the SDK
+  never prompts), and consent `granted` (nothing is collected or held while
+  `pending`/`denied`; leaving `granted` deletes the queue).
+- Each request carries an **H3 resolution-7 cell** computed on the device
+  (pure-Dart and pure-Java ports of H3's `latLngToCell`; coordinates never
+  leave the device) and a **daily-rotating salted device hash** (the raw
+  install id is never sent with these events). At most 200 events per
+  request; events older than 48 h are dropped; at most 500 kept on device.
+- **Android:** a manifest receiver for `ACTION_POWER_CONNECTED` /
+  `ACTION_POWER_DISCONNECTED`, disabled by default and enabled only on opt-in,
+  appends to a file in the no-backup directory; a runtime-registered receiver
+  covers the same events while the app process is alive. A WorkManager job
+  (15 min, network required) records a sample and uploads; the SDK also
+  uploads on every foreground. Location comes from
+  `LocationManager.getLastKnownLocation` (no Play services).
+- **iOS:** samples at foreground and background, plug changes while in the
+  foreground (`UIDevice.batteryStateDidChangeNotification`), uploaded on
+  foreground. Location from `CLLocationManager().location`, only with
+  existing when-in-use/always authorization.
+- `ApiClient.postPowerSignals`.
+- Tests: `test/power_outage_test.dart` (H3 vectors from the reference
+  library, SHA-256 and device-hash vectors, queue cap/dedupe/48 h/200-batch
+  rules, wire format, consent gating) and JVM unit tests for the Android
+  implementation (`android/src/test/java/.../PowerH3Test.java`,
+  `PowerSignalsTest.java`).
+
+### Changed
+- Android: the plugin now depends on `androidx.work:work-runtime:2.9.1`.
+- iOS: the pod links `CoreLocation`. `PrivacyInfo.xcprivacy` declares coarse
+  location (not linked, not tracking, app functionality), collected only when
+  the feature is enabled.
+
 ## 2.1.4
 
 Conforms to the shared SDK contract (v1.0.0). No breaking changes.

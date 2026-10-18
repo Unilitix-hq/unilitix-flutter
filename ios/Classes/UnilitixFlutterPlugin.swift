@@ -1,6 +1,7 @@
 import Flutter
 import UIKit
 import CoreTelephony
+import CoreLocation
 import Network
 
 public class UnilitixPlugin: NSObject, FlutterPlugin {
@@ -10,6 +11,17 @@ public class UnilitixPlugin: NSObject, FlutterPlugin {
   /// Serial queue for downscale / occlusion / JPEG work, off the main thread.
   private let imageQueue = DispatchQueue(label: "com.unilitix.image", qos: .utility)
 
+  // MARK: Power-outage contribution state (opt-in; all on the main thread)
+  private var sdkChannel: FlutterMethodChannel?
+  private var batteryObserver: NSObjectProtocol?
+  /// True when this plugin turned battery monitoring on (so it only turns
+  /// off what it turned on, never the host app's own monitoring).
+  private var enabledBatteryMonitoring = false
+  private var lastPluggedIn: Bool?
+  /// Never used to request authorization or start updates; only its cached
+  /// `location` is read, and only when the app already has authorization.
+  private lazy var locationManager = CLLocationManager()
+
   public static func register(with registrar: FlutterPluginRegistrar) {
     let instance = UnilitixPlugin()
 
@@ -18,6 +30,7 @@ public class UnilitixPlugin: NSObject, FlutterPlugin {
       binaryMessenger: registrar.messenger()
     )
     registrar.addMethodCallDelegate(instance, channel: methodChannel)
+    instance.sdkChannel = methodChannel
 
     let eventChannel = FlutterEventChannel(
       name: "com.unilitix/network",
@@ -95,9 +108,94 @@ public class UnilitixPlugin: NSObject, FlutterPlugin {
     case "readNativeCrash":
       result(NativeCrashHandler.consume())
 
+    // Power-outage contribution. Dart calls these only when the app opted in
+    // and consent is granted.
+    case "powerSetMonitoring":
+      let enabled = ((call.arguments as? [String: Any])?["enabled"] as? Bool) ?? false
+      setPowerMonitoring(enabled)
+      result(nil)
+
+    case "powerIsCharging":
+      result(pluggedIn())
+
+    case "powerCoarseLocation":
+      result(coarseLocation())
+
     default:
       result(FlutterMethodNotImplemented)
     }
+  }
+
+  // MARK: - Power-outage contribution
+
+  /// Plugged in (charging or full), unplugged, or nil when unknown.
+  private func pluggedIn() -> Bool? {
+    let device = UIDevice.current
+    let wasMonitoring = device.isBatteryMonitoringEnabled
+    if !wasMonitoring { device.isBatteryMonitoringEnabled = true }
+    let state = device.batteryState
+    if !wasMonitoring { device.isBatteryMonitoringEnabled = false }
+    switch state {
+    case .charging, .full: return true
+    case .unplugged: return false
+    default: return nil
+    }
+  }
+
+  /// Observes battery-state changes while the app is in the foreground (iOS
+  /// delivers none in the background) and forwards plug changes to Dart.
+  private func setPowerMonitoring(_ enabled: Bool) {
+    let device = UIDevice.current
+    if enabled {
+      guard batteryObserver == nil else { return }
+      if !device.isBatteryMonitoringEnabled {
+        device.isBatteryMonitoringEnabled = true
+        enabledBatteryMonitoring = true
+      }
+      lastPluggedIn = pluggedIn()
+      batteryObserver = NotificationCenter.default.addObserver(
+        forName: UIDevice.batteryStateDidChangeNotification,
+        object: nil,
+        queue: .main
+      ) { [weak self] _ in
+        guard let self = self, let plugged = self.pluggedIn() else { return }
+        // charging <-> full also notifies; only a plug change is forwarded.
+        if plugged != self.lastPluggedIn {
+          self.lastPluggedIn = plugged
+          self.sdkChannel?.invokeMethod("powerChargingChanged", arguments: plugged)
+        }
+      }
+    } else {
+      if let observer = batteryObserver {
+        NotificationCenter.default.removeObserver(observer)
+        batteryObserver = nil
+      }
+      if enabledBatteryMonitoring {
+        device.isBatteryMonitoringEnabled = false
+        enabledBatteryMonitoring = false
+      }
+      lastPluggedIn = nil
+    }
+  }
+
+  /// The system's cached location, only if the app already holds
+  /// when-in-use or always authorization. Never requests authorization and
+  /// never starts location updates. The coordinates stay on the device: Dart
+  /// turns them into an H3 cell and drops them.
+  private func coarseLocation() -> [String: Any]? {
+    let status: CLAuthorizationStatus
+    if #available(iOS 14.0, *) {
+      status = locationManager.authorizationStatus
+    } else {
+      status = CLLocationManager.authorizationStatus()
+    }
+    guard status == .authorizedWhenInUse || status == .authorizedAlways,
+          let location = locationManager.location else { return nil }
+    return [
+      "lat": location.coordinate.latitude,
+      "lng": location.coordinate.longitude,
+      "timeMs": Int64(location.timestamp.timeIntervalSince1970 * 1000),
+    ]
   }
 
   // MARK: - Screenshot

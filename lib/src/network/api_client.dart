@@ -263,5 +263,13 @@ class ApiClient {
         if (traits != null) 'traits': traits,
       });
 
+  /// Power-outage contribution: `{cell, device, events}` (see
+  /// `lib/src/power/power_signals.dart`). One attempt, gzip, the same headers
+  /// and outcome semantics as every other call: the caller keeps the events
+  /// on [ApiResult.retryable] or [ApiResult.isAuthFailure] and drops them on
+  /// [ApiResult.ok] or [ApiResult.rejected].
+  Future<ApiResult> postPowerSignals(Map<String, dynamic> body) =>
+      _post('/v1/signals/power', body);
+
   void dispose() => _client.close();
 }

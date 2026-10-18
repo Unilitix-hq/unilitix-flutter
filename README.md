@@ -1,6 +1,6 @@
 # Unilitix Flutter SDK
 
-**Version:** 2.1.4 · [pub.dev](https://pub.dev/packages/unilitix) · [GitHub](https://github.com/unilitix/unilitix-flutter)
+**Version:** 2.2.0 · [pub.dev](https://pub.dev/packages/unilitix) · [GitHub](https://github.com/unilitix/unilitix-flutter)
 
 Unilitix is a mobile analytics SDK built for African markets. It captures session replays, screen flows, custom events, and user identity — with offline-first data delivery and Africa-specific context (network type, carrier, power outage correlation).
 
@@ -27,7 +27,7 @@ Or add manually to `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  unilitix: ^2.1.4
+  unilitix: ^2.2.0
 ```
 
 Then run:
@@ -83,7 +83,7 @@ class MyApp extends StatelessWidget {
 Run your app in debug mode. Within 5 seconds you should see:
 
 ```
-[Unilitix] SDK initialized ✅ v2.1.4
+[Unilitix] SDK initialized ✅ v2.2.0
 [Unilitix] Session started ✅ abc123…
 [Unilitix] Screen → /home
 ```
@@ -264,7 +264,8 @@ await Unilitix.init(
 | Memory and frame-drop metrics | yes | — |
 | Wireframe snapshots (layout only, text redacted) | yes | `captureSnapshots`, `replaySampleRate` |
 | Pixel screenshots (text and inputs painted over) | yes | `captureScreenshots`, `replaySampleRate` |
-| Precise or coarse location, advertising id, IMEI, contacts, clipboard | **never** | — |
+| Plug/unplug events with an H3 cell (~5 km²) and a daily device hash | only if you opt in | `powerOutageContribution` (see below) |
+| Precise location or coordinates, advertising id, IMEI, contacts, clipboard | **never** | — |
 
 ### Masking
 
@@ -332,6 +333,116 @@ rotates it.
 
 ---
 
+## Power outage contribution
+
+*New in 2.2.0. Off by default.*
+
+When the grid drops in a neighbourhood, every phone that was plugged in stops
+charging within the same minute. With this feature on, the SDK reports
+charging transitions against a coarse map cell, and the Unilitix server turns
+synchronised drops into a crowd-sourced power-outage map.
+
+### Double opt-in
+
+Nothing is collected unless **all** of these hold:
+
+1. **You enable it:** `UnilitixConfig(powerOutageContribution: true)`.
+2. **Your app has coarse location permission** — declared in your manifest /
+   Info.plist *and requested by your app*. The SDK never asks for permission
+   and never starts location updates; it only reads the location the system
+   already has, and only if your app was granted it. Without it, nothing is
+   sent for the map.
+3. **Consent is `UnilitixConsent.granted`.** While consent is `pending` or
+   `denied` this feature collects nothing and holds nothing; moving to
+   `pending` or `denied` deletes anything it had queued.
+
+```dart
+await Unilitix.init(
+  'YOUR_API_KEY',
+  config: const UnilitixConfig(
+    apiKey: 'YOUR_API_KEY',
+    powerOutageContribution: true,
+  ),
+);
+```
+
+### What is sent
+
+`POST /v1/signals/power`:
+
+```json
+{
+  "cell": "87589c984ffffff",
+  "device": "27042224245e18fcd6d8999c93dbef66",
+  "events": [
+    {"type": "disconnect", "ts": "2025-10-09T08:53:20.000Z"},
+    {"type": "sample", "charging": true, "ts": "2025-10-09T09:10:02.000Z"}
+  ]
+}
+```
+
+- **`cell`** — the [H3](https://h3geo.org) resolution-7 cell (~5 km²)
+  containing the device, computed **on the device**. Latitude and longitude
+  never leave the device. A location fix older than 24 h is not used.
+- **`device`** — a hash that changes every UTC day: the first 128 bits of
+  SHA-256 over the install id, a random salt that never leaves the device, and
+  the date. The server can count distinct devices in a cell on one day, but
+  cannot link a device across days or to its analytics sessions. The raw
+  install id is never sent with these events.
+- **`events`** — `connect` / `disconnect` (plugged in / unplugged) and
+  `sample` (whether the device was plugged in at that moment), at most 200 per
+  request. Events older than 48 h are dropped, never sent; at most 500 are
+  kept on the device.
+
+No user id, anonymous id, session id, device model or app data is attached.
+
+### k-anonymity on the server
+
+The server only uses a cell when enough distinct devices report from it, and
+only publishes outage areas, never individual devices or their events. Cells
+with too few contributors are not shown.
+
+### How it works per platform
+
+- **Android:** a broadcast receiver for `ACTION_POWER_CONNECTED` /
+  `ACTION_POWER_DISCONNECTED` appends one line to a small file in the app's
+  no-backup directory (no Flutter engine, no network) — it is disabled in the
+  manifest and only enabled at runtime when you opt in. A WorkManager job
+  (every 15 min, when a network is available) records a charging sample and
+  uploads; the SDK also uploads on every app foreground. The cell comes from
+  `LocationManager.getLastKnownLocation` (network / passive provider; no Google
+  Play services).
+- **iOS:** iOS gives apps no background charging signal, so the SDK records
+  samples when the app comes to the foreground and goes to the background, and
+  plug changes while it is in the foreground, and uploads on foreground. The
+  location is `CLLocationManager().location`, only with when-in-use or always
+  authorization.
+
+### What your app must add
+
+**Android** — `android/app/src/main/AndroidManifest.xml`:
+
+```xml
+<uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+```
+
+and request it at runtime yourself (e.g. with `permission_handler`). The SDK
+adds the receiver and WorkManager to the merged manifest; it declares no
+location permission.
+
+**iOS** — `ios/Runner/Info.plist`:
+
+```xml
+<key>NSLocationWhenInUseUsageDescription</key>
+<string>Your approximate area helps map power outages near you.</string>
+```
+
+and request when-in-use authorization yourself (e.g. with `geolocator` or
+`permission_handler`). Reduced ("approximate") accuracy is enough. Mention
+coarse location in your App Store privacy label and Play data-safety form.
+
+---
+
 ## Advanced Configuration
 
 ```dart
@@ -387,7 +498,9 @@ Unilitix.reset();
 
 ## Android Setup
 
-No additional setup required. Ensure your `android/app/build.gradle` has:
+No additional setup required (see [Power outage contribution](#power-outage-contribution)
+for the one opt-in feature that needs a permission). Ensure your
+`android/app/build.gradle` has:
 
 ```groovy
 compileSdk 35
@@ -419,7 +532,8 @@ Then run:
 cd ios && pod install
 ```
 
-No additional `Info.plist` entries are required.
+No additional `Info.plist` entries are required, unless you enable
+[power outage contribution](#power-outage-contribution).
 
 ---
 

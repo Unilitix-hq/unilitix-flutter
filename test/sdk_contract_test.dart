@@ -45,6 +45,7 @@ void main() {
         'maxScreenshotsPerSession': c.maxScreenshotsPerSession,
         'maxScreenshotsPerMinute': c.maxScreenshotsPerMinute,
         'screenshotHeartbeatMs': c.screenshotHeartbeatMs,
+        'powerOutageContribution': c.powerOutageContribution,
         // init(consent:) defaults to granted.
         'consent': UnilitixConsent.granted.name,
       };

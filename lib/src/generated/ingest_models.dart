@@ -668,6 +668,115 @@ class IngestSnapshotsRequest {
       };
 }
 
+class PowerSignalEvent {
+  /// Every JSON key the server knows for this object.
+  static const Set<String> fields = <String>{
+    'charging',
+    'ts',
+    'type',
+  };
+
+  /// Required for sample, ignored otherwise.
+  final bool? charging;
+
+  /// RFC 3339 time of the observation. Events more than 48 h from server time are dropped.
+  final DateTime ts;
+
+  /// disconnect | connect | sample
+  final String type;
+
+  const PowerSignalEvent({
+    this.charging,
+    required this.ts,
+    required this.type,
+  });
+
+  factory PowerSignalEvent.fromJson(Map<String, dynamic> json) =>
+      PowerSignalEvent(
+        charging: json['charging'] == null ? null : json['charging'] as bool,
+        ts: DateTime.parse(json['ts'] as String),
+        type: json['type'] as String,
+      );
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        if (charging != null) 'charging': charging,
+        'ts': ts.toUtc().toIso8601String(),
+        'type': type,
+      };
+}
+
+class PowerSignalsAck {
+  /// Every JSON key the server knows for this object.
+  static const Set<String> fields = <String>{
+    'count',
+    'dropped',
+    'received',
+  };
+
+  final int count;
+  final int dropped;
+  final bool received;
+
+  const PowerSignalsAck({
+    required this.count,
+    required this.dropped,
+    required this.received,
+  });
+
+  factory PowerSignalsAck.fromJson(Map<String, dynamic> json) =>
+      PowerSignalsAck(
+        count: (json['count'] as num).toInt(),
+        dropped: (json['dropped'] as num).toInt(),
+        received: json['received'] as bool,
+      );
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'count': count,
+        'dropped': dropped,
+        'received': received,
+      };
+}
+
+class PowerSignalsRequest {
+  /// Every JSON key the server knows for this object.
+  static const Set<String> fields = <String>{
+    'cell',
+    'device',
+    'events',
+  };
+
+  /// H3 cell index at resolution 7, lower-case hex (e.g. 87589c984ffffff). Omit when the device has no location permission; such a request is accepted but never reaches the map.
+  final String? cell;
+
+  /// Daily-rotating device hash (8–128 chars of [A-Za-z0-9._:+/=-]). Never a stable device or user id.
+  final String device;
+
+  /// Charging transitions and samples, at most 200.
+  final List<PowerSignalEvent> events;
+
+  const PowerSignalsRequest({
+    this.cell,
+    required this.device,
+    required this.events,
+  });
+
+  factory PowerSignalsRequest.fromJson(Map<String, dynamic> json) =>
+      PowerSignalsRequest(
+        cell: json['cell'] == null ? null : json['cell'] as String,
+        device: json['device'] as String,
+        events: (json['events'] as List<dynamic>)
+            .map((e) =>
+                PowerSignalEvent.fromJson(Map<String, dynamic>.from(e as Map)))
+            .toList(),
+      );
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        if (cell != null) 'cell': cell,
+        'device': device,
+        'events': events.map((e) => e.toJson()).toList(),
+      };
+}
+
 class QuotaExceeded {
   /// Every JSON key the server knows for this object.
   static const Set<String> fields = <String>{
