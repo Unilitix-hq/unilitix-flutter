@@ -32,6 +32,19 @@ flutter pub publish --dry-run        # publish sanity check
 
 4. All four commands must exit 0.
 
+## iOS native code (UnilitixCore)
+
+`ios/Classes/UnilitixCore/` is vendored from
+[UnilitixCore](https://github.com/Unilitix-hq/unilitix-ios), the Swift core
+the native iOS and React Native SDKs share (crash capture, screenshot
+drawing and encoding, device info). Do not edit it here: change UnilitixCore,
+then re-sync from a checkout next to this repo and commit the result:
+
+```bash
+scripts/sync-ios-core.sh            # default source: ../unilitix-ios/UnilitixCore
+scripts/sync-ios-core.sh path/to/UnilitixCore
+```
+
 ## Dart style
 
 - Follow `package:flutter_lints` rules (enforced by `flutter analyze`).

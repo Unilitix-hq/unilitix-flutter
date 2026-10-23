@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:unilitix/src/crash/crash_tracker.dart';
@@ -208,6 +210,49 @@ isolate_instructions: 7a1c3c0000, vm_instructions: 7a1c3b0000
       )!;
       expect(e.title, startsWith('java.lang.IllegalStateException: nope'));
       expect(e.stackTrace, 'at a.b(c.kt:1)');
+    });
+
+    test('an iOS record carries its UnilitixCore fingerprint, used as is', () {
+      // What UnilitixCore's CrashFile.consume returns: the on-disk record
+      // (sorted keys) plus the contract fingerprint over the Apple frames.
+      const stack = '2   Shop  0x1043a81c4 -[Cart pay:] + 52';
+      final raw = jsonEncode({
+        'exceptionMessage': 'index 3',
+        'exceptionType': 'NSRangeException',
+        'fingerprint': '0123456789abcdef',
+        'platform': 'ios',
+        'stackTrace': stack,
+        'timestamp': 1760700000123,
+      });
+      int? ts;
+      final e = CrashTracker.eventFromNativeMarker(
+        raw,
+        onTimestamp: (t) => ts = t,
+      )!;
+      expect(ts, 1760700000123);
+      expect(e.crashMetadata!['fingerprint'], '0123456789abcdef');
+      expect(e.exceptionType, 'NSRangeException');
+      expect(e.exceptionMessage, '[ios] index 3');
+      expect(e.title, 'NSRangeException: index 3');
+      expect(e.stackTrace, stack);
+    });
+
+    test('without one, a signal is keyed as UnilitixCore keys it', () {
+      // UnilitixCore's CrashFileTests pins Fingerprint.of("SIGNAL:11") to
+      // the same value, so records from 2.2.x plugins group with new ones.
+      final e = CrashTracker.eventFromNativeMarker(
+        '{"platform":"ios","exceptionType":"SIGNAL","signal":11,"timestamp":1}',
+        onTimestamp: (_) {},
+      )!;
+      expect(e.crashMetadata!['fingerprint'], '8f1fc15bfa06be00');
+    });
+
+    test('an empty native fingerprint falls back to the Dart one', () {
+      final e = CrashTracker.eventFromNativeMarker(
+        '{"platform":"ios","exceptionType":"SIGNAL","signal":11,"timestamp":1,"fingerprint":""}',
+        onTimestamp: (_) {},
+      )!;
+      expect(e.crashMetadata!['fingerprint'], '8f1fc15bfa06be00');
     });
 
     test('garbage is ignored', () {

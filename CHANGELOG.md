@@ -1,3 +1,46 @@
+## 2.3.0
+
+iOS native code moves onto UnilitixCore 0.4.1, the Swift core of the native
+iOS and React Native SDKs, so the three SDKs share one crash-capture
+implementation and crash-file format and one screenshot path on iOS. No API
+changes; Android is unchanged.
+
+### Changed
+- **iOS crash capture is UnilitixCore's `CrashFile`.** Uncaught
+  `NSException`s and fatal signals are recorded as before (same file,
+  `Application Support/unilitix_native_crash.json`, same JSON record, which
+  is also the Android plugin's format) and reported on the next launch.
+  `readNativeCrash` now adds the record's `fingerprint`, computed with the
+  SDK contract's frame rules, so an Objective-C exception groups by its
+  Apple stack frames, as the native iOS SDK groups it (2.2.x grouped iOS
+  exceptions by type only). Signal crashes keep their grouping. Android
+  records are fingerprinted in Dart as before.
+- **iOS screenshots are drawn and encoded by UnilitixCore**
+  (`ScreenshotCapture.render` / `encode`). The masks from Dart are painted
+  while the frame is drawn, so no unmasked image is kept in memory (2.2.x
+  drew the window unmasked and painted the masks afterwards), each mask is
+  grown by one point on every side (was one output pixel), and frames are
+  drawn at up to `screenshotMaxWidth` pixels wide, as on Android and native
+  iOS (2.2.x drew them at one pixel per point, e.g. 390 px on a 390-point
+  phone). Frames are taken from the key window of the foreground-active
+  scene and are skipped while that is a system window. Still JPEG, and the
+  `captureScreenshot` channel contract is unchanged.
+- Device and app fields (`getDeviceInfo`, `getPackageInfo`) come from
+  UnilitixCore's `DeviceInfo`; the values are unchanged.
+- The privacy manifest declares `NSPrivacyAccessedAPICategorySystemBootTime`
+  (`35F9.1`), which the vendored UnilitixCore sources use to time captures.
+
+### Fixed
+- **iOS:** an uncaught `NSException` is reported with its name, reason and
+  stack. In 2.2.x the `SIGABRT` that follows it could overwrite the record,
+  and the crash was reported as `SIGNAL` 6.
+
+### Internal
+- UnilitixCore's Swift sources are vendored into `ios/Classes/UnilitixCore`
+  by `scripts/sync-ios-core.sh` (as in the React Native SDK); the
+  `Unilitix.swift` facade is left out. Minimum iOS stays 13.0
+  (UnilitixCore's minimum too).
+
 ## 2.2.1
 
 ### Fixed

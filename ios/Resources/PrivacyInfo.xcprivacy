@@ -102,7 +102,9 @@
 		</dict>
 	</array>
 	<!-- Required-reason APIs used: UserDefaults (shared_preferences) for the
-	     consent flag and ids; file timestamps via sqflite's database files. -->
+	     consent flag and ids; file timestamps via sqflite's database files;
+	     system uptime (ProcessInfo.systemUptime) in the vendored UnilitixCore
+	     sources, to time intervals between captures within the app. -->
 	<key>NSPrivacyAccessedAPITypes</key>
 	<array>
 		<dict>
@@ -119,6 +121,14 @@
 			<key>NSPrivacyAccessedAPITypeReasons</key>
 			<array>
 				<string>C617.1</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>35F9.1</string>
 			</array>
 		</dict>
 	</array>

@@ -19,8 +19,9 @@ import '../privacy/privacy_mask.dart';
 /// last one. A quiet screen produces no frames; an idle heartbeat
 /// ([heartbeatMs]) keeps long static screens represented in the replay.
 ///
-/// On Android and iOS the native plugin does all image work (downscale,
-/// occlusion, JPEG) on a background thread and returns JPEG bytes. Elsewhere
+/// On Android and iOS the native plugin does the image work (downscale,
+/// occlusion, JPEG, with JPEG encoding off the main thread) and returns JPEG
+/// bytes. Elsewhere
 /// the [RepaintBoundary] fallback draws the frame through `dart:ui` and
 /// returns PNG.
 class ScreenshotCapture with WidgetsBindingObserver {
@@ -174,8 +175,9 @@ class ScreenshotCapture with WidgetsBindingObserver {
     }
   }
 
-  /// Native capture: PixelCopy on Android, drawHierarchy on iOS. The plugin
-  /// downscales, occludes and encodes on its own thread and returns JPEG.
+  /// Native capture: PixelCopy on Android, drawHierarchy on iOS (through
+  /// UnilitixCore, which paints the masks while drawing the downscaled
+  /// frame). Either way the plugin returns JPEG.
   Future<Uint8List?> _tryNativeCapture(List<ui.Rect> masks, double dpr) async {
     try {
       return await _nativeChannel.invokeMethod<Uint8List>('captureScreenshot', {
