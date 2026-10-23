@@ -31,3 +31,4 @@ android/src/test/
 
 # CI / contributor-only files
 .github/
+scripts/

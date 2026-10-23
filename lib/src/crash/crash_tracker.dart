@@ -270,6 +270,11 @@ class CrashTracker {
   /// Builds the fatal CRASH event for a native marker written by the plugin,
   /// or null when the marker cannot be parsed. [timestampMs] is the moment
   /// the process died, as the marker recorded it.
+  ///
+  /// The iOS plugin (UnilitixCore's crash file) adds `fingerprint`, computed
+  /// with the SDK contract's frame rules, which group Apple stack frames the
+  /// way the native iOS SDK does; it is used as is. Otherwise (Android) the
+  /// fingerprint is computed here.
   @visibleForTesting
   static UnilitixEvent? eventFromNativeMarker(String raw,
       {required void Function(int? timestampMs) onTimestamp}) {
@@ -283,8 +288,11 @@ class CrashTracker {
       final stack = m['stackTrace'] as String?;
       final ts = m['timestamp'];
       onTimestamp(ts is num ? ts.toInt() : null);
+      final nativeFp = m['fingerprint'];
       final key = signal != null ? '$exType:$signal' : exType;
-      final fp = fingerprint(key, stack);
+      final fp = nativeFp is String && nativeFp.isNotEmpty
+          ? nativeFp
+          : fingerprint(key, stack);
       final title = '$exType: $msg';
       return UnilitixEvent(type: EventTypes.crash, screen: null)
         ..fatal = true
