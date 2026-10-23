@@ -175,10 +175,14 @@ class ApiClient {
   Future<ApiResult> ingestSnapshots(Map<String, dynamic> payload) =>
       _post('/v1/ingest/snapshots', payload);
 
+  /// Reserves upload slots for one batch. [format] is the encoding of every
+  /// frame in the batch (see [screenshotFormatOf]); the API stores the frames
+  /// under that extension.
   Future<ScreenshotInitResult> initScreenshotUpload({
     required String sessionId,
     required int count,
     required List<int> ordinals,
+    String format = 'jpeg',
   }) async {
     final result = await _post(
       '/v1/ingest/screenshots/init',
@@ -186,6 +190,7 @@ class ApiClient {
         sessionId: sessionId,
         count: count,
         ordinals: ordinals,
+        format: format,
       ).toJson(),
     );
     if (!result.ok) return ScreenshotInitResult(result, null);
@@ -213,7 +218,7 @@ class ApiClient {
       final resp = await _client
           .put(
             Uri.parse(presignedUrl),
-            headers: {'Content-Type': 'image/webp'},
+            headers: {'Content-Type': screenshotContentType(bytes)},
             body: bytes,
           )
           .timeout(const Duration(seconds: 60));
@@ -273,3 +278,33 @@ class ApiClient {
 
   void dispose() => _client.close();
 }
+
+/// The encoding of a captured frame, from its leading bytes: `jpeg` (native
+/// capture on Android and iOS), `png` (the Dart fallback on web, desktop and
+/// Android < 26) or `webp`. Unknown bytes count as jpeg, the common case.
+/// Versions before 2.2.1 labelled every frame `image/webp`.
+String screenshotFormatOf(Uint8List b) {
+  if (b.length >= 8 &&
+      b[0] == 0x89 &&
+      b[1] == 0x50 &&
+      b[2] == 0x4E &&
+      b[3] == 0x47) {
+    return 'png';
+  }
+  if (b.length >= 12 &&
+      b[0] == 0x52 &&
+      b[1] == 0x49 &&
+      b[2] == 0x46 &&
+      b[3] == 0x46 &&
+      b[8] == 0x57 &&
+      b[9] == 0x45 &&
+      b[10] == 0x42 &&
+      b[11] == 0x50) {
+    return 'webp';
+  }
+  return 'jpeg';
+}
+
+/// The Content-Type matching [screenshotFormatOf].
+String screenshotContentType(Uint8List bytes) =>
+    'image/${screenshotFormatOf(bytes)}';

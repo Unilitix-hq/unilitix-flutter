@@ -1,3 +1,14 @@
+## 2.2.1
+
+### Fixed
+- **Replay frames carry their real image type.** Native capture produces
+  JPEG and the Dart fallback (web, desktop, Android < 26) produces PNG, but
+  every frame was uploaded labelled `image/webp` and stored as `.webp`. Each
+  upload now sends the type detected from the frame's bytes, and frames are
+  reserved in one `/v1/ingest/screenshots/init` call per format with the new
+  `format` field, so the API stores them as `.jpg` / `.png`. Older APIs
+  ignore the field. No app changes needed.
+
 ## 2.2.0
 
 Power outage contribution (opt-in). No breaking changes; apps that do not

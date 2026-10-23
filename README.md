@@ -1,6 +1,6 @@
 # Unilitix Flutter SDK
 
-**Version:** 2.2.0 · [pub.dev](https://pub.dev/packages/unilitix) · [GitHub](https://github.com/unilitix/unilitix-flutter)
+**Version:** 2.2.1 · [pub.dev](https://pub.dev/packages/unilitix) · [GitHub](https://github.com/unilitix/unilitix-flutter)
 
 Unilitix is a mobile analytics SDK built for African markets. It captures session replays, screen flows, custom events, and user identity — with offline-first data delivery and Africa-specific context (network type, carrier, power outage correlation).
 
@@ -27,7 +27,7 @@ Or add manually to `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  unilitix: ^2.2.0
+  unilitix: ^2.2.1
 ```
 
 Then run:
@@ -83,7 +83,7 @@ class MyApp extends StatelessWidget {
 Run your app in debug mode. Within 5 seconds you should see:
 
 ```
-[Unilitix] SDK initialized ✅ v2.2.0
+[Unilitix] SDK initialized ✅ v2.2.1
 [Unilitix] Session started ✅ abc123…
 [Unilitix] Screen → /home
 ```

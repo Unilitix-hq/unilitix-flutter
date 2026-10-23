@@ -9,6 +9,7 @@ import '../session/session.dart';
 import '../session/session_manager.dart';
 import '../storage/event_database.dart';
 import '../storage/pending_event.dart';
+import '../storage/pending_screenshot.dart';
 import '../network/api_client.dart';
 import '../network/network_monitor.dart';
 import '../network/retry_policy.dart';
@@ -554,14 +555,30 @@ class FlushScheduler {
         sessionManager.lastEndedSession?.id;
     if (id == null) return false;
 
-    final pending = await database.getPendingScreenshots(id);
-    if (pending.isEmpty) return true;
+    final all = await database.getPendingScreenshots(id);
+    if (all.isEmpty) return true;
 
-    // Single batch init with all ordinals.
+    // One init per encoding: the API stores a batch under one format, and
+    // the Dart fallback (PNG) can sit next to native frames (JPEG).
+    final byFormat = <String, List<PendingScreenshot>>{};
+    for (final s in all) {
+      byFormat.putIfAbsent(screenshotFormatOf(s.imageBytes), () => []).add(s);
+    }
+    var ok = true;
+    for (final entry in byFormat.entries) {
+      if (inBackoff || _authRejected) return false;
+      ok = await _uploadScreenshotBatch(id, entry.key, entry.value) && ok;
+    }
+    return ok;
+  }
+
+  Future<bool> _uploadScreenshotBatch(
+      String id, String format, List<PendingScreenshot> pending) async {
     final init = await apiClient.initScreenshotUpload(
       sessionId: id,
       count: pending.length,
       ordinals: pending.map((s) => s.ordinal).toList(),
+      format: format,
     );
     _note(init.result, 'Screenshot init (${pending.length})');
     final slots = init.slots;

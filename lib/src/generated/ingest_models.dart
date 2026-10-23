@@ -931,16 +931,21 @@ class ScreenshotInitRequest {
   /// Every JSON key the server knows for this object.
   static const Set<String> fields = <String>{
     'count',
+    'format',
     'ordinals',
     'sessionId',
   };
 
   final int count;
+
+  /// webp (default) | jpeg | png. Encoding of every frame in this batch; send the matching Content-Type on the presigned PUT.
+  final String? format;
   final List<int>? ordinals;
   final String sessionId;
 
   const ScreenshotInitRequest({
     required this.count,
+    this.format,
     this.ordinals,
     required this.sessionId,
   });
@@ -948,6 +953,7 @@ class ScreenshotInitRequest {
   factory ScreenshotInitRequest.fromJson(Map<String, dynamic> json) =>
       ScreenshotInitRequest(
         count: (json['count'] as num).toInt(),
+        format: json['format'] == null ? null : json['format'] as String,
         ordinals: json['ordinals'] == null
             ? null
             : (json['ordinals'] as List<dynamic>)
@@ -958,6 +964,7 @@ class ScreenshotInitRequest {
 
   Map<String, dynamic> toJson() => <String, dynamic>{
         'count': count,
+        if (format != null) 'format': format,
         if (ordinals != null) 'ordinals': ordinals,
         'sessionId': sessionId,
       };
