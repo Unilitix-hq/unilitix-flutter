@@ -1,4 +1,4 @@
-// VENDORED from unilitix-android 1.9.0 (unilitix-sdk/src/main/java/io/unilitix/sdk/capture/AnrTrace.kt) by scripts/sync-android-native.sh.
+// VENDORED from unilitix-android 1.10.0 (unilitix-sdk/src/main/java/io/unilitix/sdk/capture/AnrTrace.kt) by scripts/sync-android-native.sh.
 // Do not edit here; change the Android SDK and re-run the script.
 
 package io.unilitix.flutter.nativecrash

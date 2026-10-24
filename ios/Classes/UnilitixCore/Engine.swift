@@ -1,4 +1,4 @@
-// VENDORED from UnilitixCore 0.6.0 (Engine.swift) by scripts/sync-ios-core.sh.
+// VENDORED from UnilitixCore 0.7.0 (Engine.swift) by scripts/sync-ios-core.sh.
 // Do not edit here; change UnilitixCore and re-run the script.
 
 import Foundation
@@ -248,9 +248,13 @@ final class Engine {
     }
 
     /// A handled error (EXCEPTION) or, with `fatal`, a crash (CRASH).
-    func recordError(type: String, message: String, stack: String?, fatal: Bool, platform: String = "ios") {
+    /// `debugImages` are the images of the stack's frames
+    /// (`metadata.debugImages`, for exact symbolication); nil looks them up
+    /// from the stack's text in this process (`BinaryImages.debugImages(stack:)`).
+    func recordError(type: String, message: String, stack: String?, fatal: Bool, platform: String = "ios",
+                     debugImages: [DebugImage]? = nil) {
         guard let e = errorEvent(type: type, message: message, stack: stack, fatal: fatal, checkCaps: true,
-                                 platform: platform) else {
+                                 platform: platform, debugImages: debugImages) else {
             return
         }
         if fatal, var s = session {
@@ -269,14 +273,17 @@ final class Engine {
     /// only when the store could not take the report in time (or has no
     /// record of the session); a report dropped on purpose (consent denied,
     /// no session yet) returns true.
+    /// `debugImages` as for `recordError`: `CrashReporter` passes the images
+    /// of the exception's return addresses.
     @discardableResult
-    func recordFatalSynchronously(type: String, message: String, stack: String?) -> Bool {
+    func recordFatalSynchronously(type: String, message: String, stack: String?,
+                                  debugImages: [DebugImage]? = nil) -> Bool {
         sessionLock.lock()
         let sid = crashSessionId
         sessionLock.unlock()
         guard let sessionId = sid, consent != .denied else { return true }
         guard let e = errorEvent(type: type, message: message, stack: stack, fatal: true, checkCaps: false,
-                                 platform: "ios") else {
+                                 platform: "ios", debugImages: debugImages) else {
             return true
         }
         let budget = TimeInterval(SdkContract.fatalFlushBudgetMs) / 1000
@@ -330,7 +337,9 @@ final class Engine {
     /// recorded (`SIGNAL` for a signal), `fatal`, the record's stack, and
     /// `metadata.fingerprint` from `CrashFile.fingerprint(of:)` (`SIGNAL:<n>`
     /// for a signal). A signal's message is `Fatal signal 11 (SIGSEGV)`;
-    /// `metadata.signal` carries the number.
+    /// `metadata.signal` carries the number. `metadata.debugImages` is the
+    /// record's (0.7.0: an exception's images, or a signal's once
+    /// `CrashFile.consume` expanded its backtrace into `stackTrace`).
     static func nativeCrashEvent(_ record: [String: Any], now: Date) -> (event: IngestEvent, crashedAt: Date?)? {
         guard let type = record["exceptionType"] as? String, !type.isEmpty else { return nil }
         let signal = CrashFile.intValue(record["signal"])
@@ -358,12 +367,14 @@ final class Engine {
             "platform": .string(record["platform"] as? String ?? "ios"),
         ]
         if let n = signal { metadata["signal"] = .int(Int64(n)) }
+        let images = CrashFile.debugImages(in: record)
+        if !images.isEmpty { metadata["debugImages"] = .array(images.map { $0.json }) }
         e.metadata = metadata
         return (e, crashedAt)
     }
 
     private func errorEvent(type: String, message: String, stack: String?, fatal: Bool,
-                            checkCaps: Bool, platform: String) -> IngestEvent? {
+                            checkCaps: Bool, platform: String, debugImages: [DebugImage]?) -> IngestEvent? {
         let fp = Fingerprint.of(type, stack: stack)
         if checkCaps, !passesErrorCaps(fp) { return nil }
         var e = IngestEvent(type: fatal ? "CRASH" : "EXCEPTION", screen: breadcrumbs.lastScreen, at: now())
@@ -373,8 +384,23 @@ final class Engine {
         e.exceptionMessage = message
         if let stack = stack { e.stackTrace = String(stack.prefix(16 * 1024)) }
         e.breadcrumbs = breadcrumbs.toWire()
-        e.metadata = ["fingerprint": .string(fp), "platform": .string(platform)]
+        var metadata: [String: JSONValue] = ["fingerprint": .string(fp), "platform": .string(platform)]
+        // Metadata only: the fingerprint above is computed without it.
+        let images = debugImages ?? Engine.debugImages(stack: stack)
+        if !images.isEmpty { metadata["debugImages"] = .array(images.map { $0.json }) }
+        e.metadata = metadata
         return e
+    }
+
+    /// The images of an Apple stack's frames in this process; empty for
+    /// other stacks (JS, Dart, JVM) and off Darwin.
+    static func debugImages(stack: String?) -> [DebugImage] {
+        #if canImport(Darwin)
+        guard let s = stack, !s.isEmpty else { return [] }
+        return BinaryImages.debugImages(stack: s)
+        #else
+        return []
+        #endif
     }
 
     /// Counts a report of `fp` against the per-session limits

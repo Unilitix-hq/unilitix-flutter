@@ -474,13 +474,20 @@ class CrashTracker {
           ? nativeFp
           : fingerprint(key, stack);
       final title = '$exType: $msg';
+      final metadata = crashMetadata(fp, 1, stack);
+      // iOS records (UnilitixCore 0.7.0+) carry the binary images of the
+      // crashed stack, which the API needs to symbolicate the frames.
+      final images = m['debugImages'];
+      if (images is List && images.isNotEmpty) {
+        metadata['debugImages'] = images;
+      }
       return UnilitixEvent(type: EventTypes.crash, screen: null)
         ..fatal = true
         ..title = title.length > 200 ? title.substring(0, 200) : title
         ..exceptionType = exType
         ..exceptionMessage = '[$platform] $msg'
         ..stackTrace = stack
-        ..crashMetadata = crashMetadata(fp, 1, stack);
+        ..crashMetadata = metadata;
     } catch (e) {
       UnilitixLogger.w('Could not parse native crash record: $e');
       return null;

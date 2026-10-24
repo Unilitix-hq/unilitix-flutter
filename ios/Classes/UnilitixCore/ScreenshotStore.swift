@@ -1,4 +1,4 @@
-// VENDORED from UnilitixCore 0.6.0 (ScreenshotStore.swift) by scripts/sync-ios-core.sh.
+// VENDORED from UnilitixCore 0.7.0 (ScreenshotStore.swift) by scripts/sync-ios-core.sh.
 // Do not edit here; change UnilitixCore and re-run the script.
 
 import Foundation

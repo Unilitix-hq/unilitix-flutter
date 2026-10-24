@@ -1,3 +1,23 @@
+## 2.7.1
+
+Exact symbolication for native crashes, from UnilitixCore 0.7.0 and
+unilitix-android 1.10.0. No API changes.
+
+### Changed
+- **iOS crashes carry `debugImages`.** UnilitixCore 0.7.0 is vendored
+  (`scripts/sync-ios-core.sh`). Uncaught Objective-C exceptions record the
+  binary images of their stack, and signal crashes (SIGSEGV, SIGABRT, …)
+  now record a real backtrace of the crashed thread (frame-pointer walk,
+  64 frames) with its images, where before they had no stack. Dart passes
+  the record's `debugImages` through as `metadata.debugImages`, so the API
+  symbolicates the frames with your uploaded dSYMs.
+- **Android NDK frames carry build IDs.** unilitix-android 1.10.0's native
+  capture is vendored (`scripts/sync-android-native.sh`): on Android 5-10
+  the signal handler unwinds the crashed thread and writes each frame's
+  library, relative pc and GNU build ID; on Android 11+ the tombstone's
+  frames are read with their build IDs. Upload the unstripped `.so` files
+  with `unilitix-cli` to get function, file and line.
+
 ## 2.7.0
 
 App-hang (ANR) reporting on iOS, with UnilitixCore 0.6.0's watchdog and

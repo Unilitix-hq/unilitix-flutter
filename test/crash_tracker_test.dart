@@ -250,6 +250,40 @@ isolate_instructions: 7a1c3c0000, vm_instructions: 7a1c3b0000
       expect(e.stackTrace, stack);
     });
 
+    test('an iOS record\'s debugImages go to metadata for symbolication',
+        () {
+      // UnilitixCore 0.7.0: CrashFile.consume adds the images of the
+      // crashed stack, which the API needs to symbolicate the frames.
+      final images = [
+        {
+          'name': 'Shop',
+          'uuid': '6F1E2D3C-4B5A-6978-8796-A5B4C3D2E1F0',
+          'loadAddress': '0x104300000',
+          'arch': 'arm64',
+        },
+      ];
+      final raw = jsonEncode({
+        'exceptionType': 'SIGNAL',
+        'signal': 11,
+        'platform': 'ios',
+        'stackTrace': '0   Shop  0x1043a81c4 Shop + 688580',
+        'timestamp': 1,
+        'debugImages': images,
+      });
+      final e =
+          CrashTracker.eventFromNativeMarker(raw, onTimestamp: (_) {})!;
+      expect(e.crashMetadata!['debugImages'], images);
+      expect(e.toJson()['metadata']['debugImages'], images);
+    });
+
+    test('no debugImages key without images', () {
+      final e = CrashTracker.eventFromNativeMarker(
+        '{"platform":"ios","exceptionType":"SIGNAL","signal":11,"timestamp":1,"debugImages":[]}',
+        onTimestamp: (_) {},
+      )!;
+      expect(e.crashMetadata!.containsKey('debugImages'), isFalse);
+    });
+
     test('without one, a signal is keyed as UnilitixCore keys it', () {
       // UnilitixCore's CrashFileTests pins Fingerprint.of("SIGNAL:11") to
       // the same value, so records from 2.2.x plugins group with new ones.

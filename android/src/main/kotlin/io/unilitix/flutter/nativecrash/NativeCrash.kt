@@ -1,4 +1,4 @@
-// VENDORED from unilitix-android 1.9.0 (unilitix-sdk/src/main/java/io/unilitix/sdk/capture/NativeCrash.kt) by scripts/sync-android-native.sh.
+// VENDORED from unilitix-android 1.10.0 (unilitix-sdk/src/main/java/io/unilitix/sdk/capture/NativeCrash.kt) by scripts/sync-android-native.sh.
 // Do not edit here; change the Android SDK and re-run the script.
 
 package io.unilitix.flutter.nativecrash
@@ -51,9 +51,16 @@ internal object NativeCrashRecord {
      * group: `SIGNAL:11` is `8f1fc15bfa06be00` on every SDK), the bare type
      * when the signal is unknown (as UnilitixCore does for a record without
      * one), else the exception type and stack.
+     *
+     * A `SIGNAL` crash never includes its stack, even when it has one (the
+     * native backtrace, 1.10.0): grouping stays as it was, and the
+     * tombstone-format frames are not fingerprint frames on every SDK.
      */
-    fun fingerprint(exceptionType: String, signal: Int?, stackTrace: String?): String =
-        Fingerprint.of(if (signal != null) "$exceptionType:$signal" else exceptionType, stackTrace)
+    fun fingerprint(exceptionType: String, signal: Int?, stackTrace: String?): String = when {
+        exceptionType == SIGNAL_TYPE -> Fingerprint.of(if (signal != null) "$exceptionType:$signal" else exceptionType, null)
+        signal != null -> Fingerprint.of("$exceptionType:$signal", stackTrace)
+        else -> Fingerprint.of(exceptionType, stackTrace)
+    }
 
     /** The message UnilitixCore gives a signal: `Fatal signal 11 (SIGSEGV)`. */
     fun signalMessage(signal: Int?): String {
@@ -61,12 +68,15 @@ internal object NativeCrashRecord {
         return signalName(signal)?.let { "Fatal signal $signal ($it)" } ?: "Fatal signal $signal"
     }
 
-    /** A signal crash (from the exit-info path): [signal] null when it could not be read. */
-    fun fromSignal(signal: Int?, timestampMs: Long?): NativeCrash = NativeCrash(
+    /**
+     * A signal crash (from the exit-info path): [signal] null when it could
+     * not be read; [stackTrace] the tombstone backtrace (1.10.0) or null.
+     */
+    fun fromSignal(signal: Int?, timestampMs: Long?, stackTrace: String? = null): NativeCrash = NativeCrash(
         exceptionType = SIGNAL_TYPE,
         signal = signal,
         exceptionMessage = signalMessage(signal),
-        stackTrace = null,
+        stackTrace = stackTrace?.takeIf { it.isNotEmpty() }?.take(MAX_STACK),
         timestampMs = timestampMs?.takeIf { it > 0 },
         platform = PLATFORM,
         fingerprint = fingerprint(SIGNAL_TYPE, signal, null)
@@ -74,7 +84,8 @@ internal object NativeCrashRecord {
 
     /**
      * Reads a record such as
-     * `{"platform":"android","exceptionType":"SIGNAL","signal":11,"timestamp":1760700000000}`.
+     * `{"platform":"android","exceptionType":"SIGNAL","signal":11,"timestamp":1760700000000}`,
+     * from 1.10.0 with `"stackTrace"`: the native backtrace in tombstone format.
      * Null when it is not a JSON object with an `exceptionType`.
      */
     fun parse(text: String): NativeCrash? {
@@ -141,11 +152,17 @@ internal object NativeCrashFile {
 
     fun locate(filesDir: File): File = File(File(filesDir, DIRECTORY), NAME)
 
+    /** Where the handler writes a record with a backtrace before renaming it over [locate]'s file. */
+    fun pending(file: File): File = File(file.path + ".tmp")
+
     /**
      * Reads and deletes the record left by an earlier process, so it is
-     * reported exactly once. Null when there is none.
+     * reported exactly once. Null when there is none. A half-written
+     * backtrace record (the process died while the handler wrote it) is
+     * deleted too: the signal-only record it would have replaced is kept.
      */
     fun consume(file: File): String? {
+        pending(file).delete()
         if (!file.isFile) return null
         val text = try {
             file.readText(Charsets.UTF_8)

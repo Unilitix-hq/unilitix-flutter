@@ -1,4 +1,4 @@
-// VENDORED from UnilitixCore 0.6.0 (ThreadSampler.swift) by scripts/sync-ios-core.sh.
+// VENDORED from UnilitixCore 0.7.0 (ThreadSampler.swift) by scripts/sync-ios-core.sh.
 // Do not edit here; change UnilitixCore and re-run the script.
 
 #if canImport(Darwin)
@@ -225,31 +225,12 @@ enum ThreadSampler {
 
     /// The image whose 64-bit Mach-O header is at `header`, with its LC_UUID;
     /// nil when it is not one or has no UUID.
+    /// (Mach-O parsing shared with `BinaryImages`.)
     static func debugImage(header: UnsafeRawPointer, name: String) -> DebugImage? {
-        // mach_header_64: magic, cputype, cpusubtype, filetype, ncmds,
-        // sizeofcmds, flags, reserved (32 bytes), then the load commands.
-        guard header.load(as: UInt32.self) == 0xFEED_FACF else { return nil }  // MH_MAGIC_64
-        let cpuType = header.load(fromByteOffset: 4, as: Int32.self)
-        let cpuSubtype = header.load(fromByteOffset: 8, as: Int32.self)
-        let ncmds = header.load(fromByteOffset: 16, as: UInt32.self)
-        let sizeofcmds = header.load(fromByteOffset: 20, as: UInt32.self)
-        var command = header + 32
-        let end = command + Int(sizeofcmds)
-        var i: UInt32 = 0
-        while i < ncmds, command + 8 <= end {
-            let cmd = command.load(as: UInt32.self)
-            let size = Int(command.load(fromByteOffset: 4, as: UInt32.self))
-            if cmd == 0x1B, size >= 24 {  // LC_UUID: cmd, cmdsize, uuid[16]
-                let bytes = (0..<16).map { command.load(fromByteOffset: 8 + $0, as: UInt8.self) }
-                guard let uuid = DebugImage.formatUUID(bytes) else { return nil }
-                return DebugImage(name: name, uuid: uuid, loadAddress: DebugImage.formatAddress(UInt(bitPattern: header)),
-                                  arch: DebugImage.archName(cpuType: cpuType, cpuSubtype: cpuSubtype))
-            }
-            guard size >= 8 else { return nil }
-            command += size
-            i += 1
-        }
-        return nil
+        guard let h = BinaryImages.parse(header: header), let bytes = h.uuid,
+              let uuid = DebugImage.formatUUID(bytes) else { return nil }
+        return DebugImage(name: name, uuid: uuid, loadAddress: DebugImage.formatAddress(UInt(bitPattern: header)),
+                          arch: DebugImage.archName(cpuType: h.cpuType, cpuSubtype: h.cpuSubtype))
     }
 
     // MARK: Debugger
