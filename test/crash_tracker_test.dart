@@ -250,8 +250,7 @@ isolate_instructions: 7a1c3c0000, vm_instructions: 7a1c3b0000
       expect(e.stackTrace, stack);
     });
 
-    test('an iOS record\'s debugImages go to metadata for symbolication',
-        () {
+    test('an iOS record\'s debugImages go to metadata for symbolication', () {
       // UnilitixCore 0.7.0: CrashFile.consume adds the images of the
       // crashed stack, which the API needs to symbolicate the frames.
       final images = [
@@ -270,8 +269,7 @@ isolate_instructions: 7a1c3c0000, vm_instructions: 7a1c3b0000
         'timestamp': 1,
         'debugImages': images,
       });
-      final e =
-          CrashTracker.eventFromNativeMarker(raw, onTimestamp: (_) {})!;
+      final e = CrashTracker.eventFromNativeMarker(raw, onTimestamp: (_) {})!;
       expect(e.crashMetadata!['debugImages'], images);
       expect(e.toJson()['metadata']['debugImages'], images);
     });
