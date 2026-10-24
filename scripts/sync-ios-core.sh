@@ -5,8 +5,10 @@
 #   scripts/sync-ios-core.sh [path/to/UnilitixCore]   (default ../unilitix-ios/UnilitixCore)
 #
 # The plugin uses CrashFile (native crash capture), ScreenshotCapture.render /
-# encode (frame drawing and JPEG encoding) and DeviceInfo; the rest compiles
-# but is unused. The public facade (Unilitix.swift) is left out, as in the
+# encode (frame drawing and JPEG encoding), DeviceInfo, and for app hangs
+# AppHangTracker, AppHangRecord, ThreadSampler and Engine.appHangEvent
+# (ios/Classes/UnilitixAppHangMonitor.swift); the rest compiles but is
+# unused. The public facade (Unilitix.swift) is left out, as in the
 # React Native SDK: UnilitixFlutterPlugin.swift plays that role here.
 set -euo pipefail
 cd "$(dirname "$0")/.."

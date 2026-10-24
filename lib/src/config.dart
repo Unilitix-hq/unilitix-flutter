@@ -16,8 +16,16 @@ class UnilitixConfig {
   /// Automatically track user taps via [UnilitixGestureDetector].
   final bool autoTrackTaps;
 
-  /// Automatically capture crash reports.
+  /// Automatically capture crash reports. On iOS also turns on app-hang
+  /// (`ANR`) detection; see [appHangTimeoutMs].
   final bool autoTrackCrashes;
+
+  /// iOS, with [autoTrackCrashes]: report an app hang (`ANR`) when the main
+  /// (platform) thread does not respond for this long, in milliseconds,
+  /// while the app is in the foreground. 0 turns hang detection off. Not
+  /// used on Android, where the system's ANRs are reported. Not an SDK
+  /// contract option (the native iOS SDK has the same default).
+  final int appHangTimeoutMs;
 
   /// Automatically detect rage taps (3+ taps within 100 px / 1 s).
   final bool autoTrackRageTaps;
@@ -121,6 +129,7 @@ class UnilitixConfig {
     this.apiUrl = 'https://api.unilitix.com',
     this.autoTrackTaps = true,
     this.autoTrackCrashes = true,
+    this.appHangTimeoutMs = 2000,
     this.autoTrackRageTaps = true,
     this.flushIntervalSeconds = 30,
     this.flushBatchSize = 100,
@@ -151,6 +160,7 @@ class UnilitixConfig {
     String? apiUrl,
     bool? autoTrackTaps,
     bool? autoTrackCrashes,
+    int? appHangTimeoutMs,
     bool? autoTrackRageTaps,
     int? flushIntervalSeconds,
     int? flushBatchSize,
@@ -180,6 +190,7 @@ class UnilitixConfig {
       apiUrl: apiUrl ?? this.apiUrl,
       autoTrackTaps: autoTrackTaps ?? this.autoTrackTaps,
       autoTrackCrashes: autoTrackCrashes ?? this.autoTrackCrashes,
+      appHangTimeoutMs: appHangTimeoutMs ?? this.appHangTimeoutMs,
       autoTrackRageTaps: autoTrackRageTaps ?? this.autoTrackRageTaps,
       flushIntervalSeconds: flushIntervalSeconds ?? this.flushIntervalSeconds,
       flushBatchSize: flushBatchSize ?? this.flushBatchSize,

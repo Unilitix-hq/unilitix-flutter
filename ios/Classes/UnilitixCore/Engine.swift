@@ -1,4 +1,4 @@
-// VENDORED from UnilitixCore 0.4.1 (Engine.swift) by scripts/sync-ios-core.sh.
+// VENDORED from UnilitixCore 0.6.0 (Engine.swift) by scripts/sync-ios-core.sh.
 // Do not edit here; change UnilitixCore and re-run the script.
 
 import Foundation
@@ -74,6 +74,18 @@ final class Engine {
     private let sessionLock = NSLock()
     private var crashSessionId: String?
 
+    /// The record `CrashFile`'s signal handlers left in the previous process,
+    /// read (and deleted) at init, before this process installs its own
+    /// handlers, and reported by `start`.
+    private var nativeCrash: String?
+
+    /// Where the app-hang watchdog keeps the hang in progress
+    /// (`AppHangFile`), nil when hangs are not persisted.
+    let appHangFilePath: String?
+    /// The hang the previous process did not survive, read (and deleted) at
+    /// init and reported by `start`.
+    private var pendingAppHang: AppHangRecord?
+
     init(config: UnilitixConfig, transport: Transport, store: EventStore,
          prefs: Preferences, device: DeviceInfo, consent: UnilitixConsent,
          screenshots: ScreenshotStore = ScreenshotStore(directory: nil),
@@ -81,6 +93,8 @@ final class Engine {
          reachability: Reachability = PathReachability(),
          random: @escaping () -> Double = { Double.random(in: 0..<1) },
          now: @escaping () -> Date = Date.init,
+         crashFilePath: String? = nil,
+         appHangFilePath: String? = nil,
          log: @escaping (String) -> Void = { _ in }) {
         self.config = config
         self.transport = transport
@@ -95,13 +109,25 @@ final class Engine {
         self.log = log
         // A decision persisted from a previous launch wins over the argument.
         self.consent = prefs.consent ?? consent
+        if let path = crashFilePath { nativeCrash = CrashFile.consume(path: path) }
+        self.appHangFilePath = appHangFilePath
+        if let path = appHangFilePath { pendingAppHang = AppHangFile.consume(path: path) }
     }
 
     // MARK: Lifecycle
 
     /// Starts the first session and the flush timer. Call on `queue`.
     func start() {
+        // Before the new session: the crash (or hang) belongs to the one that died.
+        let unattributed = reportNativeCrash()
+        let unattributedHang = reportPendingAppHang()
         if consent != .denied { startSession() }
+        if let e = unattributed, var s = session {
+            s.crashed = true
+            session = s
+            emit(e)
+        }
+        if let e = unattributedHang, session != nil { emit(e) }
         let t = DispatchSource.makeTimerSource(queue: queue)
         let interval = DispatchTimeInterval.seconds(max(1, config.flushIntervalSeconds))
         t.schedule(deadline: .now() + interval, repeating: interval)
@@ -239,34 +265,107 @@ final class Engine {
     }
 
     /// Crash path: runs on the crashing thread, never touches `queue`, and
-    /// waits at most the contract's fatal budget for the store.
-    func recordFatalSynchronously(type: String, message: String, stack: String?) {
+    /// waits at most the contract's fatal budget for the store. Returns false
+    /// only when the store could not take the report in time (or has no
+    /// record of the session); a report dropped on purpose (consent denied,
+    /// no session yet) returns true.
+    @discardableResult
+    func recordFatalSynchronously(type: String, message: String, stack: String?) -> Bool {
         sessionLock.lock()
         let sid = crashSessionId
         sessionLock.unlock()
-        guard let sessionId = sid, consent != .denied,
-              let e = errorEvent(type: type, message: message, stack: stack, fatal: true, checkCaps: false,
+        guard let sessionId = sid, consent != .denied else { return true }
+        guard let e = errorEvent(type: type, message: message, stack: stack, fatal: true, checkCaps: false,
                                  platform: "ios") else {
-            return
+            return true
         }
         let budget = TimeInterval(SdkContract.fatalFlushBudgetMs) / 1000
-        if store.append(e, sessionId: sessionId, waitUpTo: budget) {
-            store.saveNow()
+        guard store.append(e, sessionId: sessionId, waitUpTo: budget) else { return false }
+        store.saveNow()
+        return true
+    }
+
+    // MARK: Native crash from the previous process
+
+    /// Reports the record read at init as a fatal CRASH. Like the Flutter
+    /// SDK (2.1.2+), it goes to the session that was running when the
+    /// process died: the stored session with the latest `startedAt` at or
+    /// before the record's timestamp (no timestamp: the latest), which is
+    /// marked crashed. Returns the event when no stored session matches, for
+    /// `start` to emit in the new session. Consent denied drops it; pending
+    /// keeps it on the device like any other event. Call on `queue`, before
+    /// the new session starts.
+    private func reportNativeCrash() -> IngestEvent? {
+        guard let text = nativeCrash else { return nil }
+        nativeCrash = nil
+        guard consent != .denied else {
+            log("native crash from the previous launch dropped (consent denied)")
+            return nil
         }
+        guard let data = text.data(using: .utf8),
+              let record = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let crash = Engine.nativeCrashEvent(record, now: now()) else {
+            log("native crash record could not be read; dropped")
+            return nil
+        }
+        // A signal's timestamp is in whole seconds: allow a session that
+        // started within the second it died.
+        let latestStart = crash.crashedAt.map { $0.addingTimeInterval(1) }
+        guard var target = store.latestSession(startedAtOrBefore: latestStart) else {
+            log("native crash from the previous launch: no stored session matches; reported in the new one")
+            return crash.event
+        }
+        guard store.append(crash.event, sessionId: target.id) else { return crash.event }
+        target.crashed = true
+        if let at = crash.crashedAt, at > target.lastActivityAt { target.lastActivityAt = at }
+        store.upsertSession(target)
+        store.saveNow()
+        log("native crash from the previous launch reported against session \(target.id)")
+        return nil
+    }
+
+    /// The CRASH event for a `CrashFile` record, and when the process died
+    /// (nil when the record has no usable timestamp). The same fields as
+    /// the Flutter SDK reports for a native record: `exceptionType` as
+    /// recorded (`SIGNAL` for a signal), `fatal`, the record's stack, and
+    /// `metadata.fingerprint` from `CrashFile.fingerprint(of:)` (`SIGNAL:<n>`
+    /// for a signal). A signal's message is `Fatal signal 11 (SIGSEGV)`;
+    /// `metadata.signal` carries the number.
+    static func nativeCrashEvent(_ record: [String: Any], now: Date) -> (event: IngestEvent, crashedAt: Date?)? {
+        guard let type = record["exceptionType"] as? String, !type.isEmpty else { return nil }
+        let signal = CrashFile.intValue(record["signal"])
+        var message = record["exceptionMessage"] as? String ?? ""
+        if message.isEmpty, let n = signal {
+            message = CrashFile.signalName(n).map { "Fatal signal \(n) (\($0))" } ?? "Fatal signal \(n)"
+        }
+        var crashedAt: Date?
+        if let ms = (record["timestamp"] as? NSNumber)?.doubleValue, ms > 0 {
+            crashedAt = Date(timeIntervalSince1970: ms / 1000)
+        }
+        let stack = (record["stackTrace"] as? String).flatMap { $0.isEmpty ? nil : String($0.prefix(16 * 1024)) }
+        let fp = (record["fingerprint"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            ?? CrashFile.fingerprint(of: record)
+
+        var e = IngestEvent(type: "CRASH", screen: "", at: crashedAt ?? now)
+        e.fatal = true
+        let title = message.isEmpty ? type : "\(type): \(message)"
+        e.title = String(title.prefix(200))
+        e.exceptionType = type
+        e.exceptionMessage = message
+        e.stackTrace = stack
+        var metadata: [String: JSONValue] = [
+            "fingerprint": .string(fp),
+            "platform": .string(record["platform"] as? String ?? "ios"),
+        ]
+        if let n = signal { metadata["signal"] = .int(Int64(n)) }
+        e.metadata = metadata
+        return (e, crashedAt)
     }
 
     private func errorEvent(type: String, message: String, stack: String?, fatal: Bool,
                             checkCaps: Bool, platform: String) -> IngestEvent? {
         let fp = Fingerprint.of(type, stack: stack)
-        if checkCaps {
-            let n = (seenFingerprints[fp] ?? 0) + 1
-            seenFingerprints[fp] = n
-            if n > SdkContract.maxReportsPerFingerprint || errorReports >= SdkContract.maxErrorReportsPerSession {
-                log("error \(fp) not sent (per-session cap)")
-                return nil
-            }
-            errorReports += 1
-        }
+        if checkCaps, !passesErrorCaps(fp) { return nil }
         var e = IngestEvent(type: fatal ? "CRASH" : "EXCEPTION", screen: breadcrumbs.lastScreen, at: now())
         e.fatal = fatal
         e.title = message.isEmpty ? type : "\(type): \(message)"
@@ -275,6 +374,109 @@ final class Engine {
         if let stack = stack { e.stackTrace = String(stack.prefix(16 * 1024)) }
         e.breadcrumbs = breadcrumbs.toWire()
         e.metadata = ["fingerprint": .string(fp), "platform": .string(platform)]
+        return e
+    }
+
+    /// Counts a report of `fp` against the per-session limits
+    /// (`maxReportsPerFingerprint`, `maxErrorReportsPerSession`); false when
+    /// it must not be sent.
+    private func passesErrorCaps(_ fp: String) -> Bool {
+        let n = (seenFingerprints[fp] ?? 0) + 1
+        seenFingerprints[fp] = n
+        if n > SdkContract.maxReportsPerFingerprint || errorReports >= SdkContract.maxErrorReportsPerSession {
+            log("error \(fp) not sent (per-session cap)")
+            return false
+        }
+        errorReports += 1
+        return true
+    }
+
+    // MARK: App hangs (ANR)
+
+    /// The session a hang detected now belongs to, or nil when it must not
+    /// be captured (consent denied, or no session started yet). Any thread.
+    func hangCaptureSessionId() -> String? {
+        sessionLock.lock(); defer { sessionLock.unlock() }
+        return crashSessionId
+    }
+
+    /// A hang that ended in this process (`AppHangWatchdog`): an `ANR` in the
+    /// current session, under the per-session error caps. The pending file
+    /// is deleted once the event is stored. Call on `queue`.
+    func recordAppHang(_ hang: AppHangRecord) {
+        defer { if let path = appHangFilePath { AppHangFile.remove(path: path, id: hang.id) } }
+        guard consent != .denied else { return }
+        let e = Engine.appHangEvent(hang, terminated: false)
+        guard case .string(let fp)? = e.metadata?["fingerprint"], passesErrorCaps(fp) else { return }
+        emit(e)
+        store.saveNow()
+        log("app hang of \(hang.durationMs) ms reported")
+    }
+
+    /// Reports the hang read at init: the process ended (killed by the
+    /// system watchdog or the user) before the main thread recovered. Like
+    /// a native crash it goes to the session that was running, but that
+    /// session is not marked crashed (an ANR is not a crash); its duration
+    /// is extended to the end of the hang as far as it was measured. Returns
+    /// the event when that session is no longer stored, for `start` to emit
+    /// in the new session. Consent denied drops it. Call on `queue`, before
+    /// the new session starts.
+    private func reportPendingAppHang() -> IngestEvent? {
+        guard let hang = pendingAppHang else { return nil }
+        pendingAppHang = nil
+        guard consent != .denied else {
+            log("app hang from the previous launch dropped (consent denied)")
+            return nil
+        }
+        let e = Engine.appHangEvent(hang, terminated: true)
+        let startedAt = Date(timeIntervalSince1970: Double(hang.startedAtMs) / 1000)
+        let target: SessionInfo?
+        if let id = hang.sessionId {
+            target = store.session(id)
+        } else {
+            target = store.latestSession(startedAtOrBefore: startedAt)
+        }
+        guard var s = target, store.append(e, sessionId: s.id) else {
+            log("app hang from the previous launch: its session is gone; reported in the new one")
+            return e
+        }
+        let endedAt = startedAt.addingTimeInterval(Double(hang.durationMs) / 1000)
+        if endedAt > s.lastActivityAt { s.lastActivityAt = endedAt }
+        store.upsertSession(s)
+        store.saveNow()
+        log("app hang from the previous launch reported against session \(s.id)")
+        return nil
+    }
+
+    /// The `ANR` event for a hang (contract 1.3.0): `exceptionType` `ANR`,
+    /// not fatal, the main thread's stack, and `metadata.fingerprint` over
+    /// it with type `ANR` (so hangs group by where the main thread was
+    /// stuck). `metadata.hangDurationMs` is how long the main thread was
+    /// blocked (a lower bound with `appTerminated`), `appHangTimeoutMs` the
+    /// threshold, `debugImages` the stack's images. Timestamped when the
+    /// hang began.
+    static func appHangEvent(_ hang: AppHangRecord, terminated: Bool) -> IngestEvent {
+        let stack = hang.stackTrace.flatMap { $0.isEmpty ? nil : String($0.prefix(CrashFile.maxStackLength)) }
+        let message = terminated
+            ? "The main thread was blocked for at least \(hang.durationMs) ms; the app was terminated before it recovered"
+            : "The main thread was blocked for \(hang.durationMs) ms"
+        let at = Date(timeIntervalSince1970: Double(hang.startedAtMs) / 1000)
+        var e = IngestEvent(type: "ANR", screen: hang.screen, at: at)
+        e.fatal = false
+        e.title = "ANR: \(message)"
+        e.exceptionType = "ANR"
+        e.exceptionMessage = message
+        e.stackTrace = stack
+        if let crumbs = hang.breadcrumbs, !crumbs.isEmpty { e.breadcrumbs = crumbs }
+        var metadata: [String: JSONValue] = [
+            "fingerprint": .string(Fingerprint.of("ANR", stack: stack)),
+            "platform": .string(hang.platform),
+            "hangDurationMs": .int(hang.durationMs),
+            "appHangTimeoutMs": .int(Int64(hang.timeoutMs)),
+        ]
+        if terminated { metadata["appTerminated"] = .bool(true) }
+        if !hang.debugImages.isEmpty { metadata["debugImages"] = .array(hang.debugImages.map { $0.json }) }
+        e.metadata = metadata
         return e
     }
 
@@ -393,6 +595,7 @@ final class Engine {
             snapshots.purge()
             session = nil
             sessionLock.lock(); crashSessionId = nil; sessionLock.unlock()
+            if let path = appHangFilePath { AppHangFile.remove(path: path) }
         case .granted:
             if session == nil { startSession() }
             flush()

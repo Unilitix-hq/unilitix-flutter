@@ -1,4 +1,4 @@
-// VENDORED from UnilitixCore 0.4.1 (Models.swift) by scripts/sync-ios-core.sh.
+// VENDORED from UnilitixCore 0.6.0 (Models.swift) by scripts/sync-ios-core.sh.
 // Do not edit here; change UnilitixCore and re-run the script.
 
 import Foundation

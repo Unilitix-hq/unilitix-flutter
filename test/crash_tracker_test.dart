@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:unilitix/src/config.dart';
+import 'package:unilitix/src/core/sdk_scope.dart';
 import 'package:unilitix/src/crash/crash_tracker.dart';
 import 'package:unilitix/src/events/event.dart';
 import 'package:unilitix/src/generated/ingest_models.dart';
@@ -553,6 +555,321 @@ isolate_instructions: 7a1c3c0000, vm_instructions: 7a1c3b0000
       expect(await tracker.discardNativeCrashes(), 2);
       expect(crashes, isEmpty);
       expect(await tracker.reportNativeCrashIfAny(), isFalse);
+    });
+  });
+  group('iOS app hangs', () {
+    const sdk = MethodChannel('com.unilitix/sdk');
+    const hangChannel = 'com.unilitix/app_hang';
+    const codec = StandardMethodCodec();
+    const hangId = '6294f32f-bebe-4859-abe0-b1b03efa32f3';
+    // Apple frames as UnilitixCore's ThreadSampler prints them.
+    const appleStack =
+        '0   libsystem_kernel.dylib              0x00000001e5a2b1c4 read + 8\n'
+        '1   Runner                              0x0000000104a1c2d0 -[SlowPlugin handleMethodCall:result:] + 120\n'
+        '2   Flutter                             0x0000000105b0e2a8 Flutter + 3211944\n'
+        '3   UIKitCore                           0x0000000184c1e2a0 -[UIApplication sendEvent:] + 96';
+    // Fingerprint.of("ANR", stack:) of the vendored UnilitixCore 0.6.0 for
+    // appleStack (computed with Swift), which the plugin sends.
+    const nativeFp = 'af5e4d72dd8272ad';
+    const image = {
+      'arch': 'arm64',
+      'loadAddress': '0x104a18000',
+      'name': 'Runner',
+      'uuid': '6F1E2D3C-4B5A-6978-8796-A5B4C3D2E1F0',
+    };
+
+    // What PluginAppHangFile.record returns (UnilitixAppHangMonitor.swift).
+    String iosRecord({
+      bool terminated = false,
+      int durationMs = 3200,
+      String? fingerprint = nativeFp,
+      String id = hangId,
+    }) =>
+        jsonEncode({
+          'type': 'ANR',
+          'exceptionType': 'ANR',
+          'platform': 'ios',
+          'id': id,
+          'timestamp': 1760700008000,
+          'exceptionMessage': terminated
+              ? 'The main thread was blocked for at least $durationMs ms; '
+                  'the app was terminated before it recovered'
+              : 'The main thread was blocked for $durationMs ms',
+          'stackTrace': appleStack,
+          if (fingerprint != null) 'fingerprint': fingerprint,
+          'metadata': {
+            'appHangTimeoutMs': 2000,
+            'debugImages': [image],
+            if (fingerprint != null) 'fingerprint': fingerprint,
+            'hangDurationMs': durationMs,
+            'platform': 'ios',
+            if (terminated) 'appTerminated': true,
+          },
+        });
+
+    late List<UnilitixEvent> crashes;
+    late List<UnilitixEvent> anrs;
+    late CrashTracker tracker;
+    late List<MethodCall> sdkCalls;
+
+    setUp(() {
+      crashes = [];
+      anrs = [];
+      sdkCalls = [];
+      tracker = CrashTracker(
+        onCrashEvent: crashes.add,
+        onAnrEvent: anrs.add,
+        breadcrumbs: [
+          {'type': 'NAVIGATE', 'screen': 'Checkout'},
+        ],
+        database:
+            EventDatabase(maxOfflineEvents: 1, maxScreenshotsPerSession: 1),
+      );
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(sdk, (call) async {
+        sdkCalls.add(call);
+        return null;
+      });
+    });
+
+    tearDown(() {
+      tracker.uninstall();
+      SdkScope.currentScreen = null;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(sdk, null);
+    });
+
+    /// Sends `onAppHang` as the plugin does; returns Dart's answer.
+    Future<Object?> pushHang(String record) async {
+      Object? answer;
+      await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .handlePlatformMessage(
+        hangChannel,
+        codec.encodeMethodCall(MethodCall('onAppHang', record)),
+        (data) => answer = data == null ? null : codec.decodeEnvelope(data),
+      );
+      return answer;
+    }
+
+    test('appHangTimeoutMs defaults to 2000 and copies', () {
+      const c = UnilitixConfig(apiKey: 'k');
+      expect(c.appHangTimeoutMs, 2000);
+      expect(c.copyWith(appHangTimeoutMs: 0).appHangTimeoutMs, 0);
+      expect(c.copyWith(debug: true).appHangTimeoutMs, 2000);
+    });
+
+    test('the plugin fingerprint is the contract fingerprint of type ANR', () {
+      expect(CrashTracker.contractFingerprint('ANR', appleStack), nativeFp);
+    });
+
+    test('a hang the app did not survive (readNativeCrash) is an ANR event',
+        () {
+      int? ts;
+      final e = CrashTracker.eventFromNativeMarker(
+        iosRecord(terminated: true, durationMs: 2000),
+        onTimestamp: (t) => ts = t,
+      )!;
+      expect(ts, 1760700008000, reason: 'attributed by when the hang began');
+      expect(e.type, EventTypes.anr);
+      expect(e.fatal, isFalse);
+      expect(e.title, isNull);
+      expect(e.exceptionType, 'ANR');
+      expect(
+          e.exceptionMessage,
+          'The main thread was blocked for at least 2000 ms; the app was '
+          'terminated before it recovered');
+      expect(e.stackTrace, appleStack);
+      expect(e.id, hangId);
+      expect(e.timestamp, 1760700008000);
+      expect(e.breadcrumbs, isEmpty);
+      expect(e.crashMetadata, {
+        'fingerprint': nativeFp,
+        'platform': 'ios',
+        'hangDurationMs': 2000,
+        'appHangTimeoutMs': 2000,
+        'appTerminated': true,
+        'debugImages': [image],
+      });
+    });
+
+    test('wire shape: debugImages reach metadata, the hang id is the eventId',
+        () {
+      final e =
+          CrashTracker.eventFromNativeMarker(iosRecord(), onTimestamp: (_) {})!;
+      final wire = e.toJson();
+      expect(wire['eventId'], hangId);
+      expect(wire['type'], 'ANR');
+      expect(wire.containsKey('fatal'), isFalse);
+      expect(wire.containsKey('title'), isFalse);
+      final metadata = wire['metadata'] as Map;
+      expect(metadata['debugImages'], [image]);
+      expect(metadata['hangDurationMs'], 3200);
+      expect(metadata.containsKey('appTerminated'), isFalse);
+      final unknown =
+          wire.keys.where((k) => !IngestEvent.fields.contains(k)).toList();
+      expect(unknown, isEmpty);
+      expect(IngestEvent.fromJson(wire).type, 'ANR');
+    });
+
+    test('without the plugin fingerprint the same one is computed', () {
+      final e = CrashTracker.eventFromNativeMarker(iosRecord(fingerprint: null),
+          onTimestamp: (_) {})!;
+      expect(e.crashMetadata!['fingerprint'], nativeFp);
+    });
+
+    test('an id that is not a UUID is not used as the event id', () {
+      final e = CrashTracker.eventFromNativeMarker(iosRecord(id: 'x'),
+          onTimestamp: (_) {})!;
+      expect(e.id, isNot('x'));
+      expect(e.id, matches(RegExp(r'^[0-9a-f-]{36}$')));
+    });
+
+    test('Android records keep a new event id and the time of reporting', () {
+      final before = DateTime.now().millisecondsSinceEpoch;
+      final e = CrashTracker.eventFromNativeMarker(
+        jsonEncode({
+          'type': 'ANR',
+          'platform': 'android',
+          'id': hangId,
+          'timestamp': 1,
+          'stackTrace': anrMainThread,
+        }),
+        onTimestamp: (_) {},
+      )!;
+      expect(e.id, isNot(hangId));
+      expect(e.timestamp, greaterThanOrEqualTo(before));
+    });
+
+    test('a terminated hang read at launch goes to its own session', () async {
+      final queue = <String?>[iosRecord(terminated: true)];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(sdk, (call) async {
+        if (call.method != 'readNativeCrash') return null;
+        return queue.isEmpty ? null : queue.removeAt(0);
+      });
+      final reported = <String, UnilitixEvent>{};
+      await tracker.reportNativeCrashIfAny(
+        attribute: (ts) async =>
+            CrashAttribution(ts == 1760700008000 ? 's-hung' : null),
+        report: (id, e) async => reported[id] = e,
+      );
+      expect(reported['s-hung']!.type, EventTypes.anr);
+      expect(reported['s-hung']!.crashMetadata!['appTerminated'], isTrue);
+      expect(crashes, isEmpty);
+      expect(anrs, isEmpty);
+    });
+
+    test('a live hang is an ANR in the current session, not a crash', () {
+      SdkScope.currentScreen = 'Checkout';
+      expect(tracker.handleAppHang(iosRecord()), isTrue);
+      expect(crashes, isEmpty);
+      final e = anrs.single;
+      expect(e.type, EventTypes.anr);
+      expect(e.screen, 'Checkout');
+      expect(e.breadcrumbs, [
+        {'type': 'NAVIGATE', 'screen': 'Checkout'},
+      ]);
+      expect(e.exceptionMessage, 'The main thread was blocked for 3200 ms');
+      expect(e.crashMetadata!['debugImages'], [image]);
+      expect(e.crashMetadata!['hangDurationMs'], 3200);
+      expect(e.crashMetadata!.containsKey('appTerminated'), isFalse);
+      expect(e.id, hangId);
+    });
+
+    test('live hangs follow the per-session caps', () {
+      for (var i = 0; i < 5; i++) {
+        tracker.handleAppHang(
+            iosRecord(id: '00000000-0000-4000-8000-00000000000$i'));
+      }
+      expect(anrs, hasLength(3), reason: 'maxPerFingerprint');
+      tracker.resetSession();
+      expect(tracker.handleAppHang(iosRecord()), isTrue);
+      expect(anrs, hasLength(4));
+    });
+
+    test('live hangs share the per-session total with errors', () {
+      final t = CrashTracker(
+        onCrashEvent: crashes.add,
+        onAnrEvent: anrs.add,
+        breadcrumbs: [],
+        database:
+            EventDatabase(maxOfflineEvents: 1, maxScreenshotsPerSession: 1),
+        maxPerSession: 2,
+      );
+      t.capture(StateError('a'),
+          StackTrace.fromString('#0      A.a (package:app/a.dart:1:1)'));
+      t.capture(StateError('b'),
+          StackTrace.fromString('#0      B.b (package:app/b.dart:1:1)'));
+      expect(t.handleAppHang(iosRecord()), isFalse);
+      expect(anrs, isEmpty);
+    });
+
+    test('without onAnrEvent a live hang goes to onExceptionEvent', () {
+      final exceptions = <UnilitixEvent>[];
+      final t = CrashTracker(
+        onCrashEvent: crashes.add,
+        onExceptionEvent: exceptions.add,
+        breadcrumbs: [],
+        database:
+            EventDatabase(maxOfflineEvents: 1, maxScreenshotsPerSession: 1),
+      );
+      expect(t.handleAppHang(iosRecord()), isTrue);
+      expect(crashes, isEmpty);
+      expect(exceptions.single.type, EventTypes.anr);
+    });
+
+    test('a record that is not an ANR is ignored', () {
+      expect(tracker.handleAppHang('{"type":"CRASH"}'), isFalse);
+      expect(anrs, isEmpty);
+    });
+
+    test('start configures the watchdog, with capture off while denied',
+        () async {
+      await tracker.startAppHangDetection(timeoutMs: 2000, capture: false);
+      await tracker.setAppHangCapture(true);
+      expect(sdkCalls.map((c) => c.method),
+          ['configureAppHang', 'configureAppHang']);
+      expect(sdkCalls[0].arguments, {'timeoutMs': 2000, 'capture': false});
+      expect(sdkCalls[1].arguments, {'timeoutMs': 2000, 'capture': true});
+    });
+
+    test('0 disables detection: nothing is sent to the plugin', () async {
+      await tracker.startAppHangDetection(timeoutMs: 0, capture: true);
+      await tracker.setAppHangCapture(false);
+      expect(sdkCalls, isEmpty);
+    });
+
+    test('onAppHang from the plugin is reported and acknowledged', () async {
+      await tracker.startAppHangDetection(timeoutMs: 2000, capture: true);
+      expect(await pushHang(iosRecord()), isTrue);
+      expect(anrs.single.id, hangId);
+      // Dropped by the caps is still acknowledged: never delivered again.
+      for (var i = 0; i < 3; i++) {
+        expect(await pushHang(iosRecord()), isTrue);
+      }
+      expect(anrs, hasLength(3));
+      // An unreadable record is acknowledged (it would never parse).
+      expect(await pushHang('nope'), isTrue);
+    });
+
+    test('before start (or after uninstall) onAppHang is not handled',
+        () async {
+      Object? answer = 'unset';
+      Future<void> push() =>
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+              .handlePlatformMessage(
+            hangChannel,
+            codec.encodeMethodCall(MethodCall('onAppHang', iosRecord())),
+            (data) => answer = data,
+          );
+      await push();
+      expect(answer, isNull, reason: 'no handler: the plugin keeps the file');
+      await tracker.startAppHangDetection(timeoutMs: 2000, capture: true);
+      tracker.uninstall();
+      answer = 'unset';
+      await push();
+      expect(answer, isNull);
+      expect(anrs, isEmpty);
     });
   });
 }

@@ -1,3 +1,59 @@
+## 2.7.0
+
+App-hang (ANR) reporting on iOS, with UnilitixCore 0.6.0's watchdog and
+stack sampler. One new option, `UnilitixConfig.appHangTimeoutMs`.
+
+### Added
+- **iOS app hangs.** With `autoTrackCrashes`, the plugin watches the main
+  (platform) thread and reports an `ANR` event (contract 1.3.0) when it does
+  not respond for `appHangTimeoutMs` (default 2000; 0 turns it off) while
+  the app is in the foreground. Not while a debugger is attached.
+  - Detection is UnilitixCore's (`AppHangTracker`: pings every 0.5 s, one
+    report per hang, nothing in the background or across a suspension);
+    the stack is the main thread's at detection (`ThreadSampler`, frame
+    pointers, `callStackSymbols` format) with its `debugImages` (name, UUID,
+    load address, arch) for symbolication. `AppHangWatchdog` reports to the
+    native engine, which the plugin does not have, so the plugin runs its
+    own small loop around those pieces (`ios/Classes/UnilitixAppHangMonitor.swift`)
+    and builds the event with UnilitixCore's `Engine.appHangEvent`, so a hang
+    reads the same as one from the native iOS SDK.
+  - **Recovered hangs** are sent to Dart live on a new channel,
+    `com.unilitix/app_hang` (`onAppHang`), and reported in the current
+    session (current screen and breadcrumbs): message `The main thread was
+    blocked for 3200 ms`.
+  - **Hangs the app did not survive** are kept in
+    `Application Support/unilitix_app_hang.json` from the moment they are
+    detected (duration updated about once a second) and returned by
+    `readNativeCrash` on the next launch as a `"type":"ANR"` record, after
+    any native crash; Dart reports them like Android ANRs, against the
+    session that was running, with `appTerminated: true`.
+  - `metadata`: `fingerprint` (contract fingerprint of type `ANR` over the
+    stack, computed natively), `platform`, `hangDurationMs`,
+    `appHangTimeoutMs`, `appTerminated`, `debugImages`. Timestamped when the
+    hang began. Not a crash: the session is not marked crashed.
+  - **Exactly once:** the plugin deletes its file only when Dart answers
+    `onAppHang` (after reporting, holding or dropping it); a hang Dart did
+    not take is resent on the next `configureAppHang` (hot restart) or read
+    on the next launch (as recovered). Hangs of the running process are
+    never returned by `readNativeCrash`. The hang's id is used as the event
+    id, so the server keeps one event in any case.
+  - Per-session caps as for errors (3 per fingerprint, 50 in total).
+    Consent: pending holds the event on the device; denied drops it, and
+    the watchdog records nothing while consent is denied (Dart tells the
+    plugin on every consent change).
+  - Dart starts detection (`configureAppHang`) after reading the earlier
+    launch's records, so this process never overwrites one not yet read.
+- `CrashTracker.anrEventFromRecord` passes a record's `metadata` through
+  (so `debugImages` reach the event) and, for iOS records, uses the
+  record's `id` and `timestamp` as the event's. Android records are
+  unchanged. `UnilitixEvent` takes an optional `id` and `timestamp`.
+
+### Changed
+- Vendored UnilitixCore 0.4.1 → 0.6.0 (`scripts/sync-ios-core.sh`): adds
+  `AppHang.swift` and `ThreadSampler.swift`, SDK contract 1.3.0
+  (`ANR` event type) on the Swift side. No new frameworks (`ThreadSampler`
+  uses only Darwin).
+
 ## 2.6.0
 
 ANR (app not responding) reporting on Android 11+, and SDK contract 1.3.0.
