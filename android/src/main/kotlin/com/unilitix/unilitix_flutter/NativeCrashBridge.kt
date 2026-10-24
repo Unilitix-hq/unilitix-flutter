@@ -4,6 +4,8 @@ import android.annotation.TargetApi
 import android.app.ActivityManager
 import android.content.Context
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.Process
 import io.unilitix.flutter.nativecrash.KeyValueStore
 import io.unilitix.flutter.nativecrash.Logger
@@ -37,6 +39,12 @@ import java.io.InputStream
  * records, exit-info crashes), consuming each from disk, and the calls hand
  * them out oldest first, so each is returned exactly once. Consent and
  * session attribution are the Dart side's.
+ *
+ * When the Unilitix Android SDK (1.8.0+) captures native crashes in the same
+ * app, the plugin leaves them to it ([AndroidSdkNativeCrash]): no signal
+ * handler, and exit-info crashes are dropped (the watermark still moves).
+ * Signal records already on disk were written while the plugin was the one
+ * capturing, so they are still returned.
  */
 internal object NativeCrashBridge {
 
@@ -50,10 +58,34 @@ internal object NativeCrashBridge {
 
     private var ownSignalFile: File? = null
     private var pending: ArrayDeque<String>? = null
+    /** The install decision was taken (installed, skipped or deferred). */
+    private var decided = false
 
-    /** Installs the signal handler (API 21-29 only), once per process. */
+    /**
+     * Installs the signal handler (API 21-29 only), once per process, unless
+     * the Unilitix Android SDK captures native crashes here.
+     */
     @Synchronized
     fun install(context: Context) {
+        if (decided) return
+        decided = true
+        when (AndroidSdkNativeCrash.installDecision(AndroidSdkNativeCrash.state())) {
+            AndroidSdkNativeCrash.Install.INSTALL -> installHandler(context)
+            AndroidSdkNativeCrash.Install.SKIP -> Logger.d("Unilitix: native crashes left to the Unilitix Android SDK")
+            AndroidSdkNativeCrash.Install.DEFER -> Handler(Looper.getMainLooper()).post {
+                try {
+                    if (AndroidSdkNativeCrash.afterDefer(AndroidSdkNativeCrash.state()) == AndroidSdkNativeCrash.Install.INSTALL) {
+                        installHandler(context)
+                    }
+                } catch (_: Throwable) {
+                    // Native capture is best effort.
+                }
+            }
+        }
+    }
+
+    @Synchronized
+    private fun installHandler(context: Context) {
         if (ownSignalFile != null) return
         val file = File(
             File(context.filesDir, SIGNAL_DIRECTORY),
@@ -86,7 +118,12 @@ internal object NativeCrashBridge {
             // Scanned on every launch so the watermark always moves.
             val store = PrefsStore(context.getSharedPreferences(PREFS, Context.MODE_PRIVATE))
             val scan = ProcessExits.scan(store, readProcessExits(context), System.currentTimeMillis())
-            scan.crashes.forEach { records.add(recordFor(it)) }
+            if (AndroidSdkNativeCrash.sdkReportsExits(AndroidSdkNativeCrash.state())) {
+                // The Android SDK reads the same exits and reports them.
+                if (scan.crashes.isNotEmpty()) Logger.d("Unilitix: ${scan.crashes.size} native crash(es) left to the Unilitix Android SDK")
+            } else {
+                scan.crashes.forEach { records.add(recordFor(it)) }
+            }
         }
         return oldestFirst(records)
     }

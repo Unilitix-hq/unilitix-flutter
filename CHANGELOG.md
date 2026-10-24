@@ -1,3 +1,33 @@
+## 2.5.0
+
+No more double native crash reports in apps that also ship the Unilitix
+Android SDK. No API or configuration changes.
+
+### Fixed
+- **Android, with the Unilitix Android SDK 1.8.0+ in the same app:** both
+  captured native (NDK) crashes (two signal handlers on API 21–29, two
+  readers of `ApplicationExitInfo` on API 30+), so one crash was reported
+  twice. The plugin now looks for the SDK at runtime (`Class.forName`, no
+  compile-time dependency) and asks `Unilitix.nativeCrashCaptureActive()`.
+  When it is true the SDK alone reports native crashes, against its own
+  session: the plugin installs no signal handler, and drops the exit
+  records it reads (its watermark still moves, so nothing is reported late
+  if the SDK is later removed).
+  - SDK present but not initialized when the plugin attaches (an engine
+    started in `Application.onCreate` before `Unilitix.init`): the plugin
+    decides on the next main-looper turn.
+  - Signal records already on disk (written while the plugin was capturing)
+    are still reported.
+  - Without the Android SDK, with one older than 1.8.0, or with its
+    `autoTrackCrashes` off, the plugin captures native crashes as in 2.4.0.
+
+### Not changed
+- JVM uncaught exceptions and sessions are still recorded by both SDKs when
+  an app ships both (each keeps its own sessions).
+- Session replay: Flutter content is drawn by the Flutter engine into a
+  `FlutterView` and masked by the Dart side; the Android SDK's Jetpack
+  Compose masking (1.8.0) does not apply to it.
+
 ## 2.4.0
 
 Native (NDK) crash capture on Android, on the implementation the Android SDK
