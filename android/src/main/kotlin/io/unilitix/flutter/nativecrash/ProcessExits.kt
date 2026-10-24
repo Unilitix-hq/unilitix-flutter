@@ -1,4 +1,4 @@
-// VENDORED from unilitix-android 1.7.0 (unilitix-sdk/src/main/java/io/unilitix/sdk/capture/ProcessExits.kt) by scripts/sync-android-native.sh.
+// VENDORED from unilitix-android 1.9.0 (unilitix-sdk/src/main/java/io/unilitix/sdk/capture/ProcessExits.kt) by scripts/sync-android-native.sh.
 // Do not edit here; change the Android SDK and re-run the script.
 
 package io.unilitix.flutter.nativecrash
@@ -6,25 +6,28 @@ package io.unilitix.flutter.nativecrash
 
 /**
  * One `ApplicationExitInfo`, copied out so the selection logic runs in JVM
- * unit tests. [readTrace] returns the start of `getTraceInputStream()`
- * (for a native crash on API 31+, the tombstone in protobuf form) or null.
+ * unit tests. [readTrace] returns the start of `getTraceInputStream()` (for a
+ * native crash on API 31+, the tombstone in protobuf form; for an ANR, the
+ * text thread dump) or null. [importance] is `getImportance()`.
  */
 internal data class ProcessExit(
     val reason: Int,
     val timestampMs: Long,
     val pid: Int,
     val description: String?,
-    val readTrace: () -> ByteArray? = { null }
+    val readTrace: () -> ByteArray? = { null },
+    val importance: Int? = null
 )
 
 /**
- * Native crashes from the system's record of how earlier processes of this
- * app ended (`ActivityManager.getHistoricalProcessExitReasons`, API 30+).
+ * Native crashes and ANRs from the system's record of how earlier processes
+ * of this app ended (`ActivityManager.getHistoricalProcessExitReasons`,
+ * API 30+).
  *
- * Only `REASON_CRASH_NATIVE` is reported. `REASON_CRASH` (an uncaught JVM
+ * `REASON_CRASH_NATIVE` is reported as a CRASH and (from 1.9.0) `REASON_ANR`
+ * as an ANR (contract 1.3.0; not a crash). `REASON_CRASH` (an uncaught JVM
  * exception) is not: CrashHandler reported it, with its stack, before the
- * process died. `REASON_ANR` is not reported yet (the contract has no ANR
- * event type); see [anrs].
+ * process died.
  *
  * A watermark (the newest exit timestamp already looked at) is kept in the
  * SDK's preferences so every exit is considered once. On the first launch
@@ -46,16 +49,18 @@ internal object ProcessExits {
     const val MAX_QUERIED = 32
     /** At most this many native crashes reported per launch (newest kept), so a crash loop cannot flood the queue. */
     const val MAX_REPORTED = 5
+    /** At most this many ANRs reported per launch (newest kept); their dumps are only read for these. */
+    const val MAX_ANRS_REPORTED = 5
 
     const val KEY_WATERMARK = "native_exit_watermark"
 
-    data class Scan(val crashes: List<NativeCrash>, val watermark: Long, val anrs: List<ProcessExit>)
+    data class Scan(val crashes: List<NativeCrash>, val watermark: Long, val anrs: List<Anr> = emptyList())
 
     /**
-     * Picks the native crashes newer than the stored watermark and advances
-     * it past every exit seen (reported or not). Consent is applied by the
-     * caller: a denied scan still advances the watermark, so the crashes are
-     * dropped, not held.
+     * Picks the native crashes and ANRs newer than the stored watermark and
+     * advances it past every exit seen (reported or not), so each is reported
+     * at most once. Consent is applied by the caller: a denied scan still
+     * advances the watermark, so the reports are dropped, not held.
      */
     fun scan(kv: KeyValueStore, exits: List<ProcessExit>, nowMs: Long): Scan {
         val stored = kv.getString(KEY_WATERMARK)?.toLongOrNull()
@@ -75,10 +80,11 @@ internal object ProcessExits {
             .filter { it.reason == REASON_CRASH_NATIVE }
             .takeLast(MAX_REPORTED)
             .map { NativeCrashRecord.fromSignal(signalOf(it), it.timestampMs) }
-        // TODO(anr): ANRs are selected (once, by the same watermark) but not
-        // reported: the SDK contract has no ANR event type yet. When it does,
-        // report Scan.anrs here (trace = the ANR's thread dump text).
-        val anrs = fresh.filter { it.reason == REASON_ANR }
+        // The thread dump is read only for the ANRs kept.
+        val anrs = fresh
+            .filter { it.reason == REASON_ANR }
+            .takeLast(MAX_ANRS_REPORTED)
+            .map { AnrTrace.fromExit(it) }
         return Scan(crashes, maxOf(watermark, newest ?: watermark), anrs)
     }
 

@@ -13,6 +13,11 @@ class EventTypes {
   /// FlutterError.onError). Does not mark the session as crashed.
   static const String exception = 'EXCEPTION';
   static const String custom = 'CUSTOM';
+
+  /// The app stopped responding (Android 11+: an ANR the system killed the
+  /// process for, reported on the next launch). Not a crash: does not mark
+  /// the session crashed. Contract 1.3.0.
+  static const String anr = 'ANR';
   static const String sessionStart = 'SESSION_START';
   static const String scroll = 'SCROLL';
 }

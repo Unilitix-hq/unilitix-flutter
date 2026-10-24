@@ -7,6 +7,8 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.Process
+import io.unilitix.flutter.nativecrash.Anr
+import io.unilitix.flutter.nativecrash.AnrTrace
 import io.unilitix.flutter.nativecrash.KeyValueStore
 import io.unilitix.flutter.nativecrash.Logger
 import io.unilitix.flutter.nativecrash.MiniJson
@@ -34,6 +36,13 @@ import java.io.InputStream
  *   launch with this version: watermark = now, nothing reported; then only
  *   exits newer than the watermark, at most 5).
  *
+ * ANRs (2.6.0, API 30+ only): the same scan, with the same watermark, also
+ * selects `REASON_ANR` exits (at most 5, newest kept), reads the main thread
+ * out of each one's thread dump ([AnrTrace]) and returns them through the
+ * same `readNativeCrash` stream as records with `"type":"ANR"` ([recordFor]),
+ * so each exit is handed out once whatever it was. Dart turns them into `ANR`
+ * events (not crashes).
+ *
  * Dart calls `readNativeCrash` at startup until it returns null. The first
  * call of a process collects every record (the JVM crash file, signal
  * records, exit-info crashes), consuming each from disk, and the calls hand
@@ -44,7 +53,9 @@ import java.io.InputStream
  * app, the plugin leaves them to it ([AndroidSdkNativeCrash]): no signal
  * handler, and exit-info crashes are dropped (the watermark still moves).
  * Signal records already on disk were written while the plugin was the one
- * capturing, so they are still returned.
+ * capturing, so they are still returned. ANRs follow the exit-info crashes:
+ * dropped when the SDK reports exits (SDK 1.9.0+ reports ANRs itself; see
+ * [AndroidSdkNativeCrash.sdkReportsExits] for 1.8.x), returned otherwise.
  */
 internal object NativeCrashBridge {
 
@@ -118,14 +129,24 @@ internal object NativeCrashBridge {
             // Scanned on every launch so the watermark always moves.
             val store = PrefsStore(context.getSharedPreferences(PREFS, Context.MODE_PRIVATE))
             val scan = ProcessExits.scan(store, readProcessExits(context), System.currentTimeMillis())
-            if (AndroidSdkNativeCrash.sdkReportsExits(AndroidSdkNativeCrash.state())) {
-                // The Android SDK reads the same exits and reports them.
-                if (scan.crashes.isNotEmpty()) Logger.d("Unilitix: ${scan.crashes.size} native crash(es) left to the Unilitix Android SDK")
-            } else {
-                scan.crashes.forEach { records.add(recordFor(it)) }
-            }
+            records += exitRecords(scan, AndroidSdkNativeCrash.sdkReportsExits(AndroidSdkNativeCrash.state()))
         }
         return oldestFirst(records)
+    }
+
+    /**
+     * The records for Dart from one exit-info scan: its native crashes and
+     * ANRs, or nothing when [sdkReportsExits] (the Android SDK reads the same
+     * exits and reports them; the scan still moved this plugin's watermark).
+     */
+    fun exitRecords(scan: ProcessExits.Scan, sdkReportsExits: Boolean): List<String> {
+        if (sdkReportsExits) {
+            if (scan.crashes.isNotEmpty() || scan.anrs.isNotEmpty()) {
+                Logger.d("Unilitix: ${scan.crashes.size} native crash(es) and ${scan.anrs.size} ANR(s) left to the Unilitix Android SDK")
+            }
+            return emptyList()
+        }
+        return scan.crashes.map { recordFor(it) } + scan.anrs.map { recordFor(it) }
     }
 
     /**
@@ -170,6 +191,30 @@ internal object NativeCrashBridge {
         return fields.joinToString(",", "{", "}")
     }
 
+    /**
+     * The ANR record for Dart: `type` `ANR` (what tells Dart it is not a
+     * crash), `exceptionType` `ANR`, the system's description as
+     * `exceptionMessage`, the main thread's stack, the kill `timestamp` and
+     * the contract `fingerprint` (type `ANR` over the main thread), plus
+     * `importance` / `foreground` when the system recorded the importance.
+     * The metadata rules are [AnrTrace.toEvent]'s, so they match the Android
+     * SDK's ANR events.
+     */
+    fun recordFor(anr: Anr): String {
+        val metadata = AnrTrace.toEvent(anr, 0L) { "" }["metadata"] as? Map<*, *> ?: emptyMap<Any, Any>()
+        val fields = ArrayList<String>()
+        fields += "\"type\":${quote(AnrTrace.TYPE)}"
+        fields += "\"platform\":${quote(AnrTrace.PLATFORM)}"
+        fields += "\"exceptionType\":${quote(AnrTrace.TYPE)}"
+        fields += "\"exceptionMessage\":${quote(anr.exceptionMessage)}"
+        fields += "\"stackTrace\":${quote(anr.stackTrace)}"
+        anr.timestampMs?.let { fields += "\"timestamp\":$it" }
+        fields += "\"fingerprint\":${quote(anr.fingerprint)}"
+        (metadata["importance"] as? Int)?.let { fields += "\"importance\":$it" }
+        (metadata["foreground"] as? Boolean)?.let { fields += "\"foreground\":$it" }
+        return fields.joinToString(",", "{", "}")
+    }
+
     private fun quote(s: String): String {
         val sb = StringBuilder(s.length + 2).append('"')
         for (c in s) {
@@ -196,11 +241,18 @@ internal object NativeCrashBridge {
                     timestampMs = info.timestamp,
                     pid = info.pid,
                     description = info.description,
+                    importance = info.importance,
                     readTrace = {
-                        // Native crashes carry the tombstone (protobuf) from API 31.
-                        if (info.reason == ProcessExits.REASON_CRASH_NATIVE) {
-                            info.traceInputStream?.use { readPrefix(it, MAX_TRACE_BYTES) }
-                        } else null
+                        // Native crashes carry the tombstone (protobuf) from API 31;
+                        // ANRs the text thread dump from API 30 (read only for
+                        // the ANRs kept, by AnrTrace.fromExit).
+                        when (info.reason) {
+                            ProcessExits.REASON_CRASH_NATIVE ->
+                                info.traceInputStream?.use { readPrefix(it, MAX_TRACE_BYTES) }
+                            ProcessExits.REASON_ANR ->
+                                info.traceInputStream?.use { readPrefix(it, AnrTrace.MAX_TRACE_BYTES) }
+                            else -> null
+                        }
                     }
                 )
             }

@@ -125,8 +125,9 @@ class UnilitixPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
                 }
             }
             // One crash record of an earlier process (JVM uncaught exception,
-            // fatal signal on API 21-29, native exit on API 30+), oldest
-            // first, or null when there are no more. Each is returned once;
+            // fatal signal on API 21-29, native exit on API 30+) or, from
+            // 2.6.0, an ANR exit on API 30+ ("type":"ANR"), oldest first, or
+            // null when there are no more. Each is returned once;
             // Dart calls this until it gets null. See NativeCrashBridge.
             "readNativeCrash" -> {
                 crashExecutor.execute {

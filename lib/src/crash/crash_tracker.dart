@@ -31,6 +31,11 @@ class CrashAttribution {
 ///    or a fatal signal recorded by the platform plugin and reported on the
 ///    next launch, against the session that was running when it happened.
 ///
+/// Android 11+ also reports ANRs the system killed the app for (2.6.0): the
+/// plugin returns them in the same stream as native crashes, and they become
+/// `ANR` events (not crashes: the session is not marked crashed) against the
+/// session that was running, the same way.
+///
 /// Every record carries a [fingerprint] in `metadata` so the server can count
 /// one bug once across devices, and repeats of the same fingerprint within a
 /// session are capped ([maxPerFingerprint]) so a build-method error that
@@ -38,6 +43,11 @@ class CrashAttribution {
 class CrashTracker {
   final void Function(UnilitixEvent event) onCrashEvent;
   final void Function(UnilitixEvent event)? onExceptionEvent;
+
+  /// An ANR from an earlier process that no stored session matches; it goes
+  /// to the current session, which it must not mark crashed. Unset, it
+  /// falls back to [onExceptionEvent], then [onCrashEvent] (the SDK sets it).
+  final void Function(UnilitixEvent event)? onAnrEvent;
   final List<Map<String, dynamic>> breadcrumbs;
   final EventDatabase database;
 
@@ -63,6 +73,7 @@ class CrashTracker {
     required this.breadcrumbs,
     required this.database,
     this.onExceptionEvent,
+    this.onAnrEvent,
     this.maxPerFingerprint = SdkContract.maxReportsPerFingerprint,
     this.maxPerSession = SdkContract.maxErrorReportsPerSession,
   });
@@ -211,6 +222,74 @@ class CrashTracker {
     return _fnv1a64(parts.join('|'));
   }
 
+  static final _appleFrameRe =
+      RegExp(r'^\d+\s+(\S+)\s+0x[0-9a-fA-F]+\s+(.+?)(?:\s+\+\s+(\d+))?$');
+  static final _jsFrameRe = RegExp(r'^at\s+(.*?)\s*\((.*?)(?::\d+)+\)$');
+  static final _jvmFrameRe = RegExp(r'^at\s+(.*?)\(([^:()]+)(?::\d+)?\)$');
+  static final _trailLineRe = RegExp(r':\d+(:\d+)?$');
+
+  /// The SDK contract's crash fingerprint with every platform's frame rules
+  /// (the api repo's `internal/sdkcontract/fingerprint.go`): Dart frames as
+  /// [fingerprint] does, plus JavaScript, JVM (`at a.B.c(B.kt:12)`), bare
+  /// `at` and Apple frames; any other line (an ANR dump's thread header,
+  /// `native:` frames, `- locked` lines) is not a frame.
+  ///
+  /// Used for an Android ANR record that comes without the plugin's
+  /// `fingerprint`, so it groups with the Android SDK's ANRs. Dart's own
+  /// errors keep [fingerprint], which only counts `#n` frames: for a Dart VM
+  /// stack both agree (the contract's Dart vectors pin that), but on the web
+  /// `at` lines would start counting and regroup existing issues.
+  @visibleForTesting
+  static String contractFingerprint(String exceptionType, String? stack) {
+    final parts = <String>[exceptionType];
+    if (stack != null) {
+      var taken = 0;
+      for (final line in stack.split('\n')) {
+        if (taken == SdkContract.fingerprintFrames) break;
+        final frame = normaliseFrame(line);
+        if (frame == null) continue;
+        parts.add(frame);
+        taken++;
+      }
+    }
+    return _fnv1a64(parts.join('|'));
+  }
+
+  /// One stack line in its contract fingerprint form, or null when it is not
+  /// a frame (`NormaliseFrame` in the api repo; first matching rule wins).
+  @visibleForTesting
+  static String? normaliseFrame(String raw) {
+    final line = raw.trim();
+    if (line.isEmpty) return null;
+    final apple = _appleFrameRe.firstMatch(line);
+    if (apple != null) {
+      final image = apple.group(1)!;
+      final symbol = apple.group(2)!.trim();
+      final offset = apple.group(3);
+      if (symbol == image && offset != null && offset.isNotEmpty) {
+        return '$image+$offset';
+      }
+      return '$image $symbol';
+    }
+    final dart = _frameRe.firstMatch(line);
+    if (dart != null) {
+      final frame = dart.group(1)!;
+      final obf = _obfuscatedRe.firstMatch(frame);
+      if (obf != null) return 'virt:${obf.group(1)}';
+      final noLine = frame.replaceAll(_lineColRe, ')');
+      if (noLine.startsWith('<asynchronous suspension>')) return null;
+      return noLine.replaceAll(RegExp(r'\s+'), ' ').trim();
+    }
+    final js = _jsFrameRe.firstMatch(line);
+    if (js != null) return '${js.group(1)} (${js.group(2)})';
+    final jvm = _jvmFrameRe.firstMatch(line);
+    if (jvm != null) return '${jvm.group(1)}(${jvm.group(2)})';
+    if (line.startsWith('at ')) {
+      return line.substring(3).replaceAll(_trailLineRe, '').trim();
+    }
+    return null;
+  }
+
   /// `metadata` block for crash/exception events: grouping key, occurrence
   /// count, and the build identifiers the server needs to symbolicate an
   /// obfuscated trace (`--split-debug-info` builds print them at the top of
@@ -275,11 +354,19 @@ class CrashTracker {
   /// with the SDK contract's frame rules, which group Apple stack frames the
   /// way the native iOS SDK does; it is used as is. Otherwise (Android) the
   /// fingerprint is computed here.
+  ///
+  /// A record with `"type":"ANR"` (Android plugin 2.6.0+) becomes an `ANR`
+  /// event instead ([anrEventFromRecord]).
   @visibleForTesting
   static UnilitixEvent? eventFromNativeMarker(String raw,
       {required void Function(int? timestampMs) onTimestamp}) {
     try {
       final m = jsonDecode(raw) as Map<String, dynamic>;
+      if (m['type'] == EventTypes.anr) {
+        final ts = m['timestamp'];
+        onTimestamp(ts is num ? ts.toInt() : null);
+        return anrEventFromRecord(m);
+      }
       final platform = m['platform'] as String? ?? 'native';
       final exType = (m['exceptionType'] as String?) ?? 'NativeCrash';
       final signal = m['signal'];
@@ -307,10 +394,43 @@ class CrashTracker {
     }
   }
 
+  /// The `ANR` event for an ANR record from the Android plugin, in the shape
+  /// the Unilitix Android SDK sends (contract 1.3.0): `exceptionType` `ANR`,
+  /// the system's description as `exceptionMessage` (no platform prefix),
+  /// the main thread's stack, no `fatal` and no `title`, and `metadata` with
+  /// the fingerprint (the plugin's, else [contractFingerprint] of type `ANR`
+  /// over the stack), `platform`, and `importance` / `foreground` when the
+  /// system recorded the importance.
+  @visibleForTesting
+  static UnilitixEvent anrEventFromRecord(Map<String, dynamic> m) {
+    final message = m['exceptionMessage'];
+    final stack = m['stackTrace'] is String ? m['stackTrace'] as String : '';
+    final nativeFp = m['fingerprint'];
+    final metadata = <String, dynamic>{
+      'fingerprint': nativeFp is String && nativeFp.isNotEmpty
+          ? nativeFp
+          : contractFingerprint(EventTypes.anr, stack),
+      'platform': m['platform'] is String ? m['platform'] : 'android',
+    };
+    final importance = m['importance'];
+    if (importance is num) metadata['importance'] = importance.toInt();
+    final foreground = m['foreground'];
+    if (foreground is bool) metadata['foreground'] = foreground;
+    return UnilitixEvent(type: EventTypes.anr, screen: null)
+      ..exceptionType = EventTypes.anr
+      ..exceptionMessage = message is String && message.isNotEmpty
+          ? message
+          : 'Application Not Responding'
+      ..stackTrace = stack
+      ..breadcrumbs = []
+      ..crashMetadata = metadata;
+  }
+
   /// Most native records read per launch. The Android plugin returns at
-  /// most 7 (a JVM crash, 1 signal record, 5 exit-info crashes); the cap
-  /// only guards against a plugin that never returns null.
-  static const maxNativeCrashesPerLaunch = 8;
+  /// most 16 (a JVM crash, 5 signal records, 5 exit-info crashes, 5 ANRs;
+  /// signal records are API 21-29, exit info API 30+, so 11 in practice);
+  /// the cap only guards against a plugin that never returns null.
+  static const maxNativeCrashesPerLaunch = 16;
 
   /// Reads the next crash record the native plugin kept from an earlier
   /// process, or null when there is none (or no native hook: web, desktop).
@@ -327,12 +447,13 @@ class CrashTracker {
   }
 
   /// Reads every crash recorded by the native plugin in earlier processes and
-  /// reports each as a fatal CRASH against the session that was running when
-  /// its process died ([attribute] maps the marker's timestamp to that
-  /// session's id from the pending stubs; null means "no match"). An event
-  /// is handed to [report] with the resolved session id, or to
-  /// [onCrashEvent] for the current session when there is no match. Returns
-  /// true when a crash was found.
+  /// reports each as a fatal CRASH (an ANR record as an `ANR` event) against
+  /// the session that was running when its process died ([attribute] maps
+  /// the marker's timestamp to that session's id from the pending stubs;
+  /// null means "no match"). An event is handed to [report] with the
+  /// resolved session id, or to [onCrashEvent] for the current session when
+  /// there is no match (an ANR to [onAnrEvent]). Returns true when a record
+  /// was found.
   Future<bool> reportNativeCrashIfAny({
     Future<CrashAttribution> Function(int? timestampMs)? attribute,
     Future<void> Function(String sessionId, UnilitixEvent event)? report,
@@ -354,22 +475,28 @@ class CrashTracker {
           UnilitixLogger.w('Native crash attribution failed: $e');
         }
       }
+      final what = event.type == EventTypes.anr ? 'ANR' : 'native crash';
       if (sessionId != null && report != null) {
         await report(sessionId, event);
-        UnilitixLogger.d('Reported native crash from previous launch '
+        UnilitixLogger.d('Reported $what from previous launch '
             'against session $sessionId');
       } else {
-        onCrashEvent(event);
-        UnilitixLogger.d('Reported native crash from previous launch '
+        if (event.type == EventTypes.anr) {
+          (onAnrEvent ?? onExceptionEvent ?? onCrashEvent)(event);
+        } else {
+          onCrashEvent(event);
+        }
+        UnilitixLogger.d('Reported $what from previous launch '
             '(no matching session; attributed to the current one)');
       }
     }
     return found;
   }
 
-  /// Consent denied: reads and drops the native plugin's crash records, so a
-  /// crash from a denied period is never reported after a later grant (and
-  /// Android's exit-info watermark still moves). Returns how many there were.
+  /// Consent denied: reads and drops the native plugin's crash and ANR
+  /// records, so one from a denied period is never reported after a later
+  /// grant (and Android's exit-info watermark still moves). Returns how
+  /// many there were.
   Future<int> discardNativeCrashes() async {
     var dropped = 0;
     for (var i = 0; i < maxNativeCrashesPerLaunch; i++) {

@@ -3,7 +3,7 @@
 
 /// The Unilitix SDK contract (see sdk-contract.md in the api repo).
 abstract final class SdkContract {
-  static const String version = '1.2.0';
+  static const String version = '1.3.0';
   static const List<String> eventTypes = [
     'SESSION_START',
     'TAP',
@@ -12,7 +12,8 @@ abstract final class SdkContract {
     'NAVIGATE',
     'CUSTOM',
     'EXCEPTION',
-    'CRASH'
+    'CRASH',
+    'ANR'
   ];
   static const Map<String, String> eventTypeAliases = {'NAV': 'NAVIGATE'};
   static const List<String> networkTypes = ['WIFI', '4G', '3G', '2G'];

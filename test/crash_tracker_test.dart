@@ -13,6 +13,16 @@ import 'package:unilitix/src/storage/event_database.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  // The contract's "android anr main thread" vector (fingerprint
+  // ff80a5189f547c4d), as the plugin sends it.
+  const anrMainThread = '"main" prio=5 tid=1 Native\n'
+      '  native: #00 pc 000000000009a1b8  /apex/com.android.runtime/lib64/bionic/libc.so (read+8)\n'
+      '  native: #01 pc 0000000000012c34  /system/lib64/libsqlite.so (unixRead+52)\n'
+      '  at android.database.sqlite.SQLiteConnection.nativeExecuteForCursorWindow(Native method)\n'
+      '  at android.database.sqlite.SQLiteConnection.executeForCursorWindow(SQLiteConnection.java:1001)\n'
+      '  - locked <0x0b1c2d3e> (a android.database.sqlite.SQLiteConnection)\n'
+      '  at com.shop.cart.CartRepository.load(CartRepository.kt:88)\n'
+      '  at com.shop.ui.CheckoutActivity.onPay(CheckoutActivity.kt:118)';
   const symbolized = '''
 #0      CheckoutPage.pay (package:shop/checkout.dart:120:7)
 #1      _InkResponseState.handleTap (package:flutter/src/material/ink_well.dart:1183:21)
@@ -289,6 +299,103 @@ isolate_instructions: 7a1c3c0000, vm_instructions: 7a1c3b0000
     });
   });
 
+  group('ANR records', () {
+    // What NativeCrashBridge.recordFor(Anr) returns (Android plugin 2.6.0).
+    Map<String, dynamic> record({
+      String? fingerprint = 'ff80a5189f547c4d',
+      int? importance = 100,
+    }) =>
+        {
+          'type': 'ANR',
+          'platform': 'android',
+          'exceptionType': 'ANR',
+          'exceptionMessage': 'Input dispatching timed out',
+          'stackTrace': anrMainThread,
+          'timestamp': 1760700000123,
+          if (fingerprint != null) 'fingerprint': fingerprint,
+          if (importance != null) 'importance': importance,
+          if (importance != null) 'foreground': importance <= 100,
+        };
+
+    test('becomes an ANR event, not a crash, with its kill time', () {
+      int? ts;
+      final e = CrashTracker.eventFromNativeMarker(
+        jsonEncode(record()),
+        onTimestamp: (t) => ts = t,
+      )!;
+      expect(ts, 1760700000123);
+      expect(e.type, EventTypes.anr);
+      expect(e.exceptionType, 'ANR');
+      expect(e.exceptionMessage, 'Input dispatching timed out');
+      expect(e.stackTrace, anrMainThread);
+      expect(e.title, isNull);
+      expect(e.crashMetadata, {
+        'fingerprint': 'ff80a5189f547c4d',
+        'platform': 'android',
+        'importance': 100,
+        'foreground': true,
+      });
+    });
+
+    test('wire shape: no fatal, no title, declared fields only', () {
+      final e = CrashTracker.eventFromNativeMarker(
+        jsonEncode(record()),
+        onTimestamp: (_) {},
+      )!;
+      final wire = e.toJson();
+      expect(wire['type'], 'ANR');
+      expect(wire.containsKey('fatal'), isFalse);
+      expect(wire.containsKey('title'), isFalse);
+      expect(wire['exceptionType'], 'ANR');
+      expect(wire['stackTrace'], anrMainThread);
+      expect(wire['breadcrumbs'], isEmpty);
+      expect((wire['metadata'] as Map)['fingerprint'], 'ff80a5189f547c4d');
+      final unknown =
+          wire.keys.where((k) => !IngestEvent.fields.contains(k)).toList();
+      expect(unknown, isEmpty);
+      expect(IngestEvent.fromJson(wire).type, 'ANR');
+    });
+
+    test('without the plugin fingerprint, the contract one is computed', () {
+      final e = CrashTracker.eventFromNativeMarker(
+        jsonEncode(record(fingerprint: null)),
+        onTimestamp: (_) {},
+      )!;
+      // SDK contract 1.3.0, vector "android anr main thread".
+      expect(e.crashMetadata!['fingerprint'], 'ff80a5189f547c4d');
+    });
+
+    test('unknown importance leaves importance and foreground out', () {
+      final e = CrashTracker.eventFromNativeMarker(
+        jsonEncode(record(importance: null)),
+        onTimestamp: (_) {},
+      )!;
+      expect(e.crashMetadata!.containsKey('importance'), isFalse);
+      expect(e.crashMetadata!.containsKey('foreground'), isFalse);
+    });
+
+    test('an empty message and stack still make an event', () {
+      final e = CrashTracker.eventFromNativeMarker(
+        '{"type":"ANR","exceptionType":"ANR","timestamp":1}',
+        onTimestamp: (_) {},
+      )!;
+      expect(e.type, EventTypes.anr);
+      expect(e.exceptionMessage, 'Application Not Responding');
+      expect(e.stackTrace, '');
+      expect(e.crashMetadata!['fingerprint'],
+          CrashTracker.contractFingerprint('ANR', ''));
+      expect(e.crashMetadata!['platform'], 'android');
+    });
+
+    test('a crash record without type stays a CRASH', () {
+      final e = CrashTracker.eventFromNativeMarker(
+        '{"platform":"android","exceptionType":"ANR","timestamp":1}',
+        onTimestamp: (_) {},
+      )!;
+      expect(e.type, EventTypes.crash, reason: 'the type marker decides');
+    });
+  });
+
   group('reading native records', () {
     const channel = MethodChannel('com.unilitix/sdk');
     late List<UnilitixEvent> crashes;
@@ -322,6 +429,18 @@ isolate_instructions: 7a1c3c0000, vm_instructions: 7a1c3b0000
     String signal(int n, int ts) =>
         '{"platform":"android","exceptionType":"SIGNAL","signal":$n,'
         '"timestamp":$ts}';
+
+    String anrRecord({required int ts}) => jsonEncode({
+          'type': 'ANR',
+          'platform': 'android',
+          'exceptionType': 'ANR',
+          'exceptionMessage': 'Input dispatching timed out',
+          'stackTrace': anrMainThread,
+          'timestamp': ts,
+          'fingerprint': 'ff80a5189f547c4d',
+          'importance': 100,
+          'foreground': true,
+        });
 
     test('every record is read, oldest first, each attributed on its own',
         () async {
@@ -381,6 +500,58 @@ isolate_instructions: 7a1c3c0000, vm_instructions: 7a1c3b0000
       expect(await tracker.discardNativeCrashes(), 2);
       expect(crashes, isEmpty);
       expect(calls, hasLength(3), reason: 'read until null');
+      expect(await tracker.reportNativeCrashIfAny(), isFalse);
+    });
+
+    test('an ANR record is an ANR event for its own session, not a crash',
+        () async {
+      final anrs = <UnilitixEvent>[];
+      final t = CrashTracker(
+        onCrashEvent: crashes.add,
+        onAnrEvent: anrs.add,
+        breadcrumbs: [],
+        database:
+            EventDatabase(maxOfflineEvents: 1, maxScreenshotsPerSession: 1),
+      );
+      serve([signal(11, 1000), anrRecord(ts: 2000), anrRecord(ts: 3000)]);
+      final attributed = <int?>[];
+      final reported = <String, UnilitixEvent>{};
+      await t.reportNativeCrashIfAny(
+        attribute: (ts) async {
+          attributed.add(ts);
+          return CrashAttribution(ts == 2000 ? 's-anr' : null);
+        },
+        report: (id, e) async => reported[id] = e,
+      );
+      expect(attributed, [1000, 2000, 3000]);
+      expect(reported.keys.toList(), ['s-anr']);
+      expect(reported['s-anr']!.type, EventTypes.anr);
+      expect(anrs, hasLength(1), reason: 'no match: current session');
+      expect(anrs.single.type, EventTypes.anr);
+      expect(crashes, hasLength(1), reason: 'only the signal is a crash');
+      expect(crashes.single.type, EventTypes.crash);
+    });
+
+    test('without onAnrEvent an ANR goes to onExceptionEvent', () async {
+      final exceptions = <UnilitixEvent>[];
+      final t = CrashTracker(
+        onCrashEvent: crashes.add,
+        onExceptionEvent: exceptions.add,
+        breadcrumbs: [],
+        database:
+            EventDatabase(maxOfflineEvents: 1, maxScreenshotsPerSession: 1),
+      );
+      serve([anrRecord(ts: 1)]);
+      expect(await t.reportNativeCrashIfAny(), isTrue);
+      expect(crashes, isEmpty);
+      expect(exceptions.single.type, EventTypes.anr);
+    });
+
+    test('consent denied: ANR records are consumed and dropped too', () async {
+      final calls = <String>[];
+      serve([signal(11, 1), anrRecord(ts: 2)], calls: calls);
+      expect(await tracker.discardNativeCrashes(), 2);
+      expect(crashes, isEmpty);
       expect(await tracker.reportNativeCrashIfAny(), isFalse);
     });
   });
