@@ -1,6 +1,6 @@
 # Unilitix Flutter SDK
 
-**Version:** 2.4.0 · [pub.dev](https://pub.dev/packages/unilitix) · [GitHub](https://github.com/unilitix/unilitix-flutter)
+**Version:** 2.5.0 · [pub.dev](https://pub.dev/packages/unilitix) · [GitHub](https://github.com/unilitix/unilitix-flutter)
 
 Unilitix is a mobile analytics SDK built for African markets. It captures session replays, screen flows, custom events, and user identity — with offline-first data delivery and Africa-specific context (network type, carrier, power outage correlation).
 
@@ -27,7 +27,7 @@ Or add manually to `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  unilitix: ^2.4.0
+  unilitix: ^2.5.0
 ```
 
 Then run:
@@ -83,7 +83,7 @@ class MyApp extends StatelessWidget {
 Run your app in debug mode. Within 5 seconds you should see:
 
 ```
-[Unilitix] SDK initialized ✅ v2.4.0
+[Unilitix] SDK initialized ✅ v2.5.0
 [Unilitix] Session started ✅ abc123…
 [Unilitix] Screen → /home
 ```
@@ -204,6 +204,16 @@ native code runs); on Android 5–10 a small signal handler
 reported once, on the next launch, as `SIGNAL: Fatal signal 11 (SIGSEGV)`.
 On Android 11+ the first launch with 2.4.0 starts from that moment: exits
 recorded before it are not reported.
+
+**Apps that also ship the Unilitix Android SDK** (`com.unilitix:unilitix-android`):
+from Android SDK 1.8.0 and plugin 2.5.0, a native crash is reported once, by
+the Android SDK, against its own session. The plugin finds the SDK at runtime
+(no dependency between the two) and, when it captures native crashes
+(`Unilitix.nativeCrashCaptureActive()`), installs no signal handler and sends
+none of the system's exit records. Initialize the Android SDK in
+`Application.onCreate`, before any Flutter engine starts. With an Android SDK
+older than 1.8.0 both still report native crashes. JVM crashes and sessions
+are recorded by each SDK separately.
 
 Handlers the app or another SDK installed before `init()` still run. Every
 report carries a stable fingerprint (type + top frames, line numbers
