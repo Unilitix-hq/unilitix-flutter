@@ -1,3 +1,77 @@
+## 2.4.0
+
+Native (NDK) crash capture on Android, on the implementation the Android SDK
+shipped in 1.7.0 (vendored, as UnilitixCore is on iOS). A crash in C/C++
+code — the Flutter engine, a plugin's native library, your own FFI code — is
+reported on the next launch as a fatal `CRASH` against the session that was
+running, as on iOS. On by default; no API or configuration changes.
+
+### Added
+- **Android 11+ (API 30+): no native code.** When Dart reads native crashes
+  at startup, the plugin reads `ActivityManager.getHistoricalProcessExitReasons`
+  and returns exits with `REASON_CRASH_NATIVE` newer than a watermark kept in
+  the plugin's own preferences (`unilitix_flutter_native_crash`), at most 5
+  per launch (the newest). The signal comes from the tombstone (API 31+),
+  else the exit description, else it is unknown. JVM crashes (`REASON_CRASH`)
+  are not taken from here: the plugin's uncaught-exception handler already
+  records them, with their stack.
+  - **First launch with 2.4.0:** the watermark is set to now and nothing is
+    reported, so exits from before the upgrade never arrive as a flood of
+    stale crashes. A native crash in that first process is reported on the
+    launch after it.
+- **Android 5.0–10 (API 21–29): `libunilitix-flutter-native.so`.** A C
+  signal handler (SIGSEGV, SIGABRT, SIGBUS, SIGILL, SIGFPE, SIGTRAP), installed
+  when the plugin attaches, writes one record with async-signal-safe calls
+  only, then chains to the previous handler (debuggerd, Crashlytics,
+  Sentry, …) so the process dies as before. Each process writes its own file
+  in `files/unilitix_native_signals/`, so a crash before Dart has read an
+  older record never overwrites it. Not loaded on API 30+.
+- **Same record and grouping as every Unilitix SDK.**
+  `{"platform":"android","exceptionType":"SIGNAL","signal":11,"timestamp":<ms>}`
+  plus, as on iOS, the contract `fingerprint` (`SIGNAL:11` =
+  `8f1fc15bfa06be00`; an unknown signal is keyed `SIGNAL`) and the message
+  `Fatal signal 11 (SIGSEGV)`, so the event reads
+  `SIGNAL: Fatal signal 11 (SIGSEGV)`, as from the Android SDK.
+- **No double reports.** The JVM crash handler tells the signal handler the
+  exception is handled, so a SIGABRT that follows it is not recorded again.
+  Every record is read and deleted (or passed by the watermark) once.
+
+### Changed
+- `readNativeCrash` returns one record per call, oldest first, and null when
+  there are no more; the Dart side now reads until null (at most 8 per
+  launch) and attributes each crash to its own session. iOS still returns at
+  most one record per launch.
+- **Consent denied:** native crash records (Android and iOS) are now read and
+  dropped at startup. 2.3.x left them on the device, so a crash from a
+  denied period could be reported after a later grant. Pending consent still
+  holds them on the device like other events.
+
+### Size and build
+- The plugin now builds a few KB of plain C per ABI (no libc++, no liblog,
+  `-Os`, stripped, 16 KB page aligned) with CMake and the NDK of the app's
+  build: AGP's default NDK, which is `flutter.ndkVersion` on current
+  Flutter/AGP pairs (no pin of the plugin's own). Apps that already build
+  without an NDK installed get one downloaded by AGP on the first build.
+- The library and its JNI class are distinct from the Android SDK's
+  (`libunilitix-native.so`, `io.unilitix.sdk.capture`), so an app can include
+  both.
+- `consumer-rules.pro` keeps the JNI methods of
+  `io.unilitix.flutter.nativecrash.NativeSignalHandler` under R8.
+
+### How to test
+- Debuggable build on a device or emulator: start the app, then
+  `adb shell run-as <package> kill -SEGV $(adb shell pidof <package>)`,
+  and relaunch. Expect one `CRASH` `SIGNAL: Fatal signal 11 (SIGSEGV)`
+  with fingerprint `8f1fc15bfa06be00` on the session that was running. On
+  Android 11+ the first launch with 2.4.0 only sets the watermark: crash
+  the launch after it.
+
+### Internal
+- The C handler and the Android SDK's pure-Kotlin capture code are vendored
+  into `android/src/main/cpp` and `android/src/main/kotlin/io/unilitix/flutter/nativecrash`
+  by `scripts/sync-android-native.sh` (see CONTRIBUTING); the plugin-owned
+  glue is `NativeCrashBridge.kt`.
+
 ## 2.3.0
 
 iOS native code moves onto UnilitixCore 0.4.1, the Swift core of the native

@@ -45,6 +45,36 @@ scripts/sync-ios-core.sh            # default source: ../unilitix-ios/UnilitixCo
 scripts/sync-ios-core.sh path/to/UnilitixCore
 ```
 
+## Android native crash capture (unilitix-android)
+
+The Android plugin's native (NDK) crash capture is vendored from the
+[Android SDK](https://github.com/Unilitix-hq/unilitix-android) (1.7.0+):
+
+- `android/src/main/cpp/` — the C signal handler (API 21–29) and its
+  `CMakeLists.txt`, built as `libunilitix-flutter-native.so`;
+- `android/src/main/kotlin/io/unilitix/flutter/nativecrash/` — the record
+  format, the `ApplicationExitInfo` scan with its watermark and tombstone
+  parser (API 30+), the JNI wrapper, and the fingerprint.
+
+Each vendored file starts with a `VENDORED from unilitix-android` header. The
+script rewrites only the package (`io.unilitix.flutter.nativecrash`), the
+library name and the matching JNI symbol names, so an app can ship this
+plugin and the Android SDK side by side. Do not edit those files here: change
+the Android SDK, then re-sync and commit the result (a fresh sync of the same
+SDK version must leave `git status` clean):
+
+```bash
+scripts/sync-android-native.sh                     # default source: ../Downloads/tazama-android
+scripts/sync-android-native.sh path/to/unilitix-android
+```
+
+Plugin-owned glue, never touched by the script:
+`nativecrash/PluginSupport.kt` (the SDK's `KeyValueStore` and `Logger`) and
+`com/unilitix/unilitix_flutter/NativeCrashBridge.kt` (install, exit-info
+scan, the records `readNativeCrash` hands to Dart). Its unit tests are in
+`android/src/test/kotlin/.../NativeCrashBridgeTest.kt`; from `example/android`:
+`./gradlew :unilitix_flutter:testDebugUnitTest`.
+
 ## Dart style
 
 - Follow `package:flutter_lints` rules (enforced by `flutter analyze`).

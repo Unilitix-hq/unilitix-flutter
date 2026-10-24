@@ -6,6 +6,8 @@
 .DS_Store
 .atom/
 .build/
+# CMake build cache of the native crash library (android/.cxx)
+.cxx/
 .buildlog/
 .history
 .svn/
