@@ -1,4 +1,4 @@
-// VENDORED from unilitix-android 1.9.0 (unilitix-sdk/src/main/java/io/unilitix/sdk/capture/ProcessExits.kt) by scripts/sync-android-native.sh.
+// VENDORED from unilitix-android 1.10.0 (unilitix-sdk/src/main/java/io/unilitix/sdk/capture/ProcessExits.kt) by scripts/sync-android-native.sh.
 // Do not edit here; change the Android SDK and re-run the script.
 
 package io.unilitix.flutter.nativecrash
@@ -79,7 +79,7 @@ internal object ProcessExits {
         val crashes = fresh
             .filter { it.reason == REASON_CRASH_NATIVE }
             .takeLast(MAX_REPORTED)
-            .map { NativeCrashRecord.fromSignal(signalOf(it), it.timestampMs) }
+            .map { crashOf(it) }
         // The thread dump is read only for the ANRs kept.
         val anrs = fresh
             .filter { it.reason == REASON_ANR }
@@ -88,15 +88,28 @@ internal object ProcessExits {
         return Scan(crashes, maxOf(watermark, newest ?: watermark), anrs)
     }
 
+    /**
+     * The CRASH for a `REASON_CRASH_NATIVE` exit: signal and (1.10.0) the
+     * crashing thread's backtrace from the tombstone (API 31+), else the
+     * signal named in the description and no stack. The trace is read once.
+     */
+    fun crashOf(exit: ProcessExit): NativeCrash {
+        val tombstone = readTombstone(exit)
+        val signal = tombstone?.signal ?: signalFromDescription(exit.description)
+        return NativeCrashRecord.fromSignal(signal, exit.timestampMs, tombstone?.backtrace)
+    }
+
     /** The tombstone's signal (API 31+), else one named in the description, else null (unknown). */
-    fun signalOf(exit: ProcessExit): Int? {
+    fun signalOf(exit: ProcessExit): Int? =
+        readTombstone(exit)?.signal ?: signalFromDescription(exit.description)
+
+    private fun readTombstone(exit: ProcessExit): Tombstone.Info? {
         val trace = try {
             exit.readTrace()
         } catch (e: Exception) {
             null
         }
-        trace?.let { TombstoneSignal.parse(it) }?.let { return it }
-        return signalFromDescription(exit.description)
+        return trace?.let { Tombstone.parse(it) }
     }
 
     private val numbered = Regex("""(?i)\bsignal\s+(\d{1,2})\b""")
@@ -113,30 +126,88 @@ internal object ProcessExits {
     }
 }
 
-/**
- * Reads `Tombstone.signal_info.number` from a tombstone in protobuf form
- * (AOSP system/core/debuggerd/proto/tombstone.proto: `Signal signal_info = 10`
- * in `Tombstone`, `int32 number = 1` in `Signal`). A minimal wire-format
- * reader: no generated code, no dependency. Fields are written in field
- * order, so `signal_info` sits near the start; the caller passes only the
- * first bytes of the trace and a truncated message is read as far as it goes.
- */
+/** The signal of a tombstone in protobuf form; see [Tombstone]. */
 internal object TombstoneSignal {
-    private const val TOMBSTONE_SIGNAL_INFO = 10
+    /** The signal number (1-64), or null when absent or unreadable. */
+    fun parse(bytes: ByteArray): Int? = Tombstone.parse(bytes)?.signal
+}
+
+/**
+ * Reads a tombstone in protobuf form (AOSP
+ * system/core/debuggerd/proto/tombstone.proto), as `getTraceInputStream()`
+ * returns it for a native crash on API 31+: the signal
+ * (`Tombstone.signal_info.number`) and, from 1.10.0, the crashing thread's
+ * backtrace (`Tombstone.threads[Tombstone.tid].current_backtrace`) in the
+ * text format of Android tombstones:
+ *
+ *     #00 pc 000000000001a2b4  /data/app/~~Xy==/com.shop-Ab==/lib/arm64/libshop.so (BuildId: 9f2c…)
+ *     #01 pc 0000000000356f20  /apex/com.android.art/lib64/libart.so (art_quick_generic_jni_trampoline+144) (BuildId: 5e6f…)
+ *
+ * `pc` is the frame's `rel_pc` (the address within the ELF file), so the
+ * server symbolicates it with the unstripped library of the same build id.
+ *
+ * A minimal wire-format reader: no generated code, no dependency. A
+ * truncated message is read as far as it goes (fields come in field-number
+ * order, so the signal and, usually, the threads come before the large
+ * memory-map and log sections).
+ */
+internal object Tombstone {
+    /** [backtrace] null when the crashing thread's frames were not found. */
+    data class Info(val signal: Int?, val backtrace: String?)
+
+    const val MAX_FRAMES = 64
+    private const val MAX_THREADS = 1024
+    private const val MAX_FILE_NAME = 512
+    private const val MAX_FUNCTION_NAME = 256
+
+    // Tombstone
+    private const val ARCH = 1
+    private const val TID = 6
+    private const val SIGNAL_INFO = 10
+    private const val THREADS = 16
+    // Signal
     private const val SIGNAL_NUMBER = 1
+    // map<uint32, Thread> entry
+    private const val ENTRY_KEY = 1
+    private const val ENTRY_VALUE = 2
+    // Thread
+    private const val THREAD_ID = 1
+    private const val THREAD_BACKTRACE = 4
+    // BacktraceFrame
+    private const val FRAME_REL_PC = 1
+    private const val FRAME_FUNCTION_NAME = 4
+    private const val FRAME_FUNCTION_OFFSET = 5
+    private const val FRAME_FILE_NAME = 6
+    private const val FRAME_FILE_MAP_OFFSET = 7
+    private const val FRAME_BUILD_ID = 8
+
+    // Architecture: ARM32 = 0, ARM64 = 1, X86 = 2, X86_64 = 3, RISCV64 = 4.
+    private const val ARCH_ARM32 = 0
+    private const val ARCH_X86 = 2
 
     private const val WIRE_VARINT = 0
     private const val WIRE_FIXED64 = 1
     private const val WIRE_LEN = 2
     private const val WIRE_FIXED32 = 5
 
-    /** The signal number (1-64), or null when absent or unreadable. */
-    fun parse(bytes: ByteArray): Int? {
-        var found: Int? = null
+    private val hexOnly = Regex("^[0-9a-fA-F]{1,128}$")
+
+    /** Null when nothing could be read. */
+    fun parse(bytes: ByteArray): Info? {
+        var signal: Int? = null
+        var arch = 1L
+        var tid: Long? = null
+        // (key, value start, value end) of each threads entry, read after the
+        // pass: tid may follow the threads in a hand-built message.
+        val threads = ArrayList<LongArray>()
         try {
             forEachField(bytes, 0, bytes.size) { field, wire, value, start, end ->
-                if (field == TOMBSTONE_SIGNAL_INFO && wire == WIRE_LEN) {
-                    signalNumber(bytes, start, end)?.let { found = it }
+                when {
+                    field == ARCH && wire == WIRE_VARINT -> arch = value
+                    field == TID && wire == WIRE_VARINT -> tid = value
+                    field == SIGNAL_INFO && wire == WIRE_LEN -> signalNumber(bytes, start, end)?.let { signal = it }
+                    field == THREADS && wire == WIRE_LEN && threads.size < MAX_THREADS ->
+                        threadEntry(bytes, start, end)?.let { threads.add(it) }
                 }
             }
         } catch (e: IndexOutOfBoundsException) {
@@ -144,15 +215,120 @@ internal object TombstoneSignal {
         } catch (e: IllegalArgumentException) {
             // Malformed: keep what was read.
         }
-        return found?.takeIf { it in 1..64 }
+        val validSignal = signal?.takeIf { it in 1..64 }
+        val crashed = tid?.let { t -> threads.firstOrNull { it[0] == t } }
+        val backtrace = crashed?.let {
+            try {
+                backtrace(bytes, it[1].toInt(), it[2].toInt(), arch)
+            } catch (e: IndexOutOfBoundsException) {
+                null
+            } catch (e: IllegalArgumentException) {
+                null
+            }
+        }?.takeIf { it.isNotEmpty() }
+        if (validSignal == null && backtrace == null) return null
+        return Info(validSignal, backtrace)
     }
 
     private fun signalNumber(bytes: ByteArray, start: Int, end: Int): Int? {
         var number: Int? = null
-        forEachField(bytes, start, end) { field, wire, value, _, _ ->
-            if (field == SIGNAL_NUMBER && wire == WIRE_VARINT) number = value.toInt()
+        try {
+            forEachField(bytes, start, end) { field, wire, value, _, _ ->
+                if (field == SIGNAL_NUMBER && wire == WIRE_VARINT) number = value.toInt()
+            }
+        } catch (e: IndexOutOfBoundsException) {
+        } catch (e: IllegalArgumentException) {
         }
         return number
+    }
+
+    /** `[key, valueStart, valueEnd]` of one map entry, or null. */
+    private fun threadEntry(bytes: ByteArray, start: Int, end: Int): LongArray? {
+        var key: Long? = null
+        var vStart = -1
+        var vEnd = -1
+        try {
+            forEachField(bytes, start, end) { field, wire, value, s, e ->
+                if (field == ENTRY_KEY && wire == WIRE_VARINT) key = value
+                if (field == ENTRY_VALUE && wire == WIRE_LEN) { vStart = s; vEnd = e }
+            }
+        } catch (e: IndexOutOfBoundsException) {
+            return null
+        } catch (e: IllegalArgumentException) {
+            return null
+        }
+        if (vStart < 0) return null
+        // The key is optional on the wire (0 is the default); Thread.id has it too.
+        val k = key ?: threadId(bytes, vStart, vEnd) ?: 0L
+        return longArrayOf(k, vStart.toLong(), vEnd.toLong())
+    }
+
+    private fun threadId(bytes: ByteArray, start: Int, end: Int): Long? {
+        var id: Long? = null
+        try {
+            forEachField(bytes, start, end) { field, wire, value, _, _ ->
+                if (field == THREAD_ID && wire == WIRE_VARINT) id = value
+            }
+        } catch (e: IndexOutOfBoundsException) {
+        } catch (e: IllegalArgumentException) {
+        }
+        return id
+    }
+
+    private fun backtrace(bytes: ByteArray, start: Int, end: Int, arch: Long): String {
+        val width = if (arch == ARCH_ARM32.toLong() || arch == ARCH_X86.toLong()) 8 else 16
+        val sb = StringBuilder()
+        var index = 0
+        forEachField(bytes, start, end) { field, wire, _, s, e ->
+            if (field == THREAD_BACKTRACE && wire == WIRE_LEN && index < MAX_FRAMES) {
+                frameLine(bytes, s, e, index, width)?.let {
+                    if (sb.isNotEmpty()) sb.append('\n')
+                    sb.append(it)
+                    index++
+                }
+            }
+        }
+        return sb.toString()
+    }
+
+    private fun frameLine(bytes: ByteArray, start: Int, end: Int, index: Int, width: Int): String? {
+        var relPc = 0L
+        var function = ""
+        var functionOffset = 0L
+        var fileName = ""
+        var fileMapOffset = 0L
+        var buildId = ""
+        forEachField(bytes, start, end) { field, wire, value, s, e ->
+            when {
+                field == FRAME_REL_PC && wire == WIRE_VARINT -> relPc = value
+                field == FRAME_FUNCTION_NAME && wire == WIRE_LEN -> function = text(bytes, s, e, MAX_FUNCTION_NAME)
+                field == FRAME_FUNCTION_OFFSET && wire == WIRE_VARINT -> functionOffset = value
+                field == FRAME_FILE_NAME && wire == WIRE_LEN -> fileName = text(bytes, s, e, MAX_FILE_NAME)
+                field == FRAME_FILE_MAP_OFFSET && wire == WIRE_VARINT -> fileMapOffset = value
+                field == FRAME_BUILD_ID && wire == WIRE_LEN -> buildId = text(bytes, s, e, 128)
+            }
+        }
+        // As tombstone_proto_to_text prints it.
+        val pc = java.lang.Long.toHexString(relPc).padStart(width, '0')
+        val line = StringBuilder("#").append(index.toString().padStart(2, '0')).append(" pc ").append(pc)
+        line.append("  ").append(fileName.ifEmpty { "<unknown>" })
+        if (fileMapOffset != 0L) line.append(" (offset 0x").append(java.lang.Long.toHexString(fileMapOffset)).append(')')
+        if (function.isNotEmpty()) {
+            line.append(" (").append(function)
+            if (functionOffset != 0L) line.append('+').append(functionOffset)
+            line.append(')')
+        }
+        if (hexOnly.matches(buildId)) line.append(" (BuildId: ").append(buildId.lowercase()).append(')')
+        return line.toString()
+    }
+
+    /** UTF-8 text with control characters replaced, so a frame stays one line. */
+    private fun text(bytes: ByteArray, start: Int, end: Int, max: Int): String {
+        val s = String(bytes, start, end - start, Charsets.UTF_8)
+        val capped = if (s.length > max) s.substring(0, max) else s
+        return buildString(capped.length) {
+            for (c in capped) append(if (c < ' ' || c == '\u007f') '?' else c)
+        }
     }
 
     /**

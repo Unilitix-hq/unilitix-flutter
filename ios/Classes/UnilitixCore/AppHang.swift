@@ -1,4 +1,4 @@
-// VENDORED from UnilitixCore 0.6.0 (AppHang.swift) by scripts/sync-ios-core.sh.
+// VENDORED from UnilitixCore 0.7.0 (AppHang.swift) by scripts/sync-ios-core.sh.
 // Do not edit here; change UnilitixCore and re-run the script.
 
 import Foundation
@@ -77,6 +77,13 @@ struct DebugImage: Codable, Equatable {
         ]
         if let a = arch { m["arch"] = .string(a) }
         return .object(m)
+    }
+
+    /// The same object for `JSONSerialization` (the crash file).
+    var dictionary: [String: Any] {
+        var m: [String: Any] = ["name": name, "uuid": uuid, "loadAddress": loadAddress]
+        if let a = arch { m["arch"] = a }
+        return m
     }
 
     /// `6F1E2D3C-4B5A-6978-8796-A5B4C3D2E1F0` for the 16 bytes of an

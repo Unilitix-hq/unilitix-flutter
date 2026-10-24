@@ -1,4 +1,4 @@
-// VENDORED from UnilitixCore 0.6.0 (CrashReporter.swift) by scripts/sync-ios-core.sh.
+// VENDORED from UnilitixCore 0.7.0 (CrashReporter.swift) by scripts/sync-ios-core.sh.
 // Do not edit here; change UnilitixCore and re-run the script.
 
 import Foundation
@@ -23,6 +23,9 @@ enum CrashReporter {
     static func install(_ e: Engine) {
         guard !installed else { return }
         installed = true
+        #if canImport(Darwin)
+        BinaryImages.install()  // so the handler only looks images up
+        #endif
         engine = e
         previous = NSGetUncaughtExceptionHandler()
         NSSetUncaughtExceptionHandler { exception in
@@ -45,7 +48,16 @@ enum CrashReporter {
         let name = exception.name.rawValue
         if ignoredNamePrefixes.contains(where: { name.hasPrefix($0) }) { return false }
         let stack = exception.callStackSymbols.joined(separator: "\n")
-        let stored = engine?.recordFatalSynchronously(type: name, message: exception.reason ?? "", stack: stack)
+        // The images of the stack's return addresses (a lookup in the table
+        // BinaryImages keeps), for exact symbolication.
+        #if canImport(Darwin)
+        let images = BinaryImages.debugImages(
+            returnAddresses: exception.callStackReturnAddresses.map { $0.uintValue })
+        #else
+        let images: [DebugImage] = []
+        #endif
+        let stored = engine?.recordFatalSynchronously(type: name, message: exception.reason ?? "", stack: stack,
+                                                      debugImages: images)
         #if canImport(Darwin)
         if stored == false { return CrashFile.record(exception) }
         #endif

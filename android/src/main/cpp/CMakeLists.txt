@@ -1,4 +1,4 @@
-# VENDORED from unilitix-android 1.9.0 (unilitix-sdk/src/main/cpp/CMakeLists.txt) by scripts/sync-android-native.sh.
+# VENDORED from unilitix-android 1.10.0 (unilitix-sdk/src/main/cpp/CMakeLists.txt) by scripts/sync-android-native.sh.
 # Do not edit here; change the Android SDK and re-run the script.
 
 # Native crash capture for Android 5.0-10 (API 21-29). On API 30+ the SDK
@@ -8,7 +8,10 @@ project(unilitix_flutter_native LANGUAGES C)
 
 add_library(unilitix-flutter-native SHARED unilitix_native.c)
 
-# Plain C, no libc++ and no liblog: the library is a few KB per ABI.
+# Plain C, no libc++ and no liblog: the library is a few KB per ABI. From
+# 1.10.0 it also captures the crashed thread's backtrace with the
+# toolchain's _Unwind_Backtrace (libunwind, linked statically and hidden by
+# --exclude-libs).
 target_compile_options(unilitix-flutter-native PRIVATE
     -Os
     -fvisibility=hidden

@@ -1,4 +1,4 @@
-// VENDORED from UnilitixCore 0.6.0 (Transport.swift) by scripts/sync-ios-core.sh.
+// VENDORED from UnilitixCore 0.7.0 (Transport.swift) by scripts/sync-ios-core.sh.
 // Do not edit here; change UnilitixCore and re-run the script.
 
 import Foundation
@@ -97,7 +97,7 @@ final class URLSessionTransport: Transport {
 
 public enum UnilitixVersion {
     /// This package's version.
-    public static let current = "0.6.0"
+    public static let current = "0.7.0"
     /// What the SDK reports to the API (session `sdkVersion`, User-Agent).
     /// Wrappers that embed UnilitixCore, such as React Native, set their own.
     static var reported = current
