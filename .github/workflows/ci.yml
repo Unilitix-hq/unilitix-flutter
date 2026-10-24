@@ -92,6 +92,34 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: SDK size gate (fail above baseline + 2%)
+        # The baseline is the example's release arm64 APK size, in bytes, in
+        # .github/size-baseline.txt. Raise it on purpose, in the same PR, when
+        # a release adds weight that is worth it (say why in the CHANGELOG).
+        # 0 means no baseline yet: the step reports the size and passes.
+        working-directory: example
+        run: |
+          SIZE=$(stat -c %s build/app/outputs/flutter-apk/app-release.apk)
+          BASE=$(tr -dc '0-9' < ../.github/size-baseline.txt)
+          BASE=${BASE:-0}
+          if [ "$BASE" -eq 0 ]; then
+            echo "::warning::No size baseline yet. Put $SIZE in .github/size-baseline.txt to turn the gate on."
+            exit 0
+          fi
+          LIMIT=$(( BASE + BASE / 50 ))
+          DELTA=$(( SIZE - BASE ))
+          {
+            echo
+            echo "| Baseline | Limit (+2%) | This build | Delta |"
+            echo "|---|---|---|---|"
+            printf '| %s | %s | %s | %+d |\n' "$BASE" "$LIMIT" "$SIZE" "$DELTA"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$SIZE" -gt "$LIMIT" ]; then
+            echo "::error::Example release APK is $SIZE bytes, over the limit of $LIMIT (baseline $BASE + 2%). Shrink it, or raise .github/size-baseline.txt in this PR with a reason."
+            exit 1
+          fi
+          echo "Size OK: $SIZE bytes (baseline $BASE, limit $LIMIT)"
+
   ios-build:
     runs-on: macos-14
     needs: analyze-and-test
