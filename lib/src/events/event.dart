@@ -27,7 +27,7 @@ class UnilitixEvent {
   double? cpuUsagePct;
   int? frameDrops;
 
-  // CRASH / EXCEPTION fields
+  // CRASH / EXCEPTION / ANR fields
   /// True when the process could not continue (native crash, signal). Dart
   /// errors are non-fatal: the app keeps running.
   bool fatal = false;
@@ -39,7 +39,8 @@ class UnilitixEvent {
 
   /// Grouping and symbolication data for CRASH / EXCEPTION events, sent as
   /// the event's `metadata`: `fingerprint`, `occurrence`, and for obfuscated
-  /// builds `buildId` / `isolateDsoBase`.
+  /// builds `buildId` / `isolateDsoBase`. For ANR events: `fingerprint`,
+  /// `platform`, and `importance` / `foreground` when known.
   Map<String, dynamic>? crashMetadata;
 
   // CUSTOM fields
@@ -74,6 +75,16 @@ class UnilitixEvent {
     if (type == EventTypes.crash || type == EventTypes.exception) {
       map['fatal'] = fatal;
       if (title != null) map['title'] = title;
+      if (stackTrace != null) map['stackTrace'] = stackTrace;
+      if (exceptionType != null) map['exceptionType'] = exceptionType;
+      if (exceptionMessage != null) map['exceptionMessage'] = exceptionMessage;
+      if (breadcrumbs != null) map['breadcrumbs'] = breadcrumbs;
+      if (crashMetadata != null) map['metadata'] = crashMetadata;
+    }
+
+    // An ANR is not a crash: no `fatal`, and no `title` (the server titles
+    // ANR issues from the main thread's first app frame).
+    if (type == EventTypes.anr) {
       if (stackTrace != null) map['stackTrace'] = stackTrace;
       if (exceptionType != null) map['exceptionType'] = exceptionType;
       if (exceptionMessage != null) map['exceptionMessage'] = exceptionMessage;

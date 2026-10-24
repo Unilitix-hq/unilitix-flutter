@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Copies the Android SDK's native (NDK) crash capture into this plugin, the
-# way scripts/sync-ios-core.sh vendors UnilitixCore on iOS.
+# Copies the Android SDK's native (NDK) crash capture and (from 2.6.0) its
+# ApplicationExitInfo ANR reading into this plugin, the way
+# scripts/sync-ios-core.sh vendors UnilitixCore on iOS.
 #
 #   scripts/sync-android-native.sh [path/to/unilitix-android checkout]   (default ../Downloads/tazama-android)
 #
@@ -16,9 +17,10 @@
 #   android/src/main/kotlin/io/unilitix/flutter/nativecrash/PluginSupport.kt
 #     (KeyValueStore and Logger, which the SDK defines elsewhere),
 #   android/src/main/kotlin/com/unilitix/unilitix_flutter/NativeCrashBridge.kt
-#     (install, exit-info scan, records for Dart).
+#     (install, exit-info scan, crash and ANR records for Dart).
 # NativeCrashReporter (consent, session attribution) is not used: the Dart
-# side owns both.
+# side owns both. AnrTrace.toEvent is vendored but only its metadata rules
+# are used: Dart builds the ANR event.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="${1:-../Downloads/tazama-android}"
@@ -40,6 +42,7 @@ header() { # comment-prefix, source path relative to the SDK module
 for rel in \
   java/io/unilitix/sdk/capture/NativeCrash.kt \
   java/io/unilitix/sdk/capture/ProcessExits.kt \
+  java/io/unilitix/sdk/capture/AnrTrace.kt \
   java/io/unilitix/sdk/capture/NativeSignalHandler.kt \
   java/io/unilitix/sdk/core/Fingerprint.kt; do
   { header "//" "$rel"
@@ -60,4 +63,4 @@ done
       -e 's/^project(unilitix_native /project(unilitix_flutter_native /' \
       "$SRC/cpp/CMakeLists.txt"; } > "$CPP_DEST/CMakeLists.txt"
 
-echo "Synced unilitix-android $VERSION native crash capture into $KT_DEST and $CPP_DEST"
+echo "Synced unilitix-android $VERSION native crash and ANR capture into $KT_DEST and $CPP_DEST"

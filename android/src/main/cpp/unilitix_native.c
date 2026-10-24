@@ -1,4 +1,4 @@
-// VENDORED from unilitix-android 1.7.0 (unilitix-sdk/src/main/cpp/unilitix_native.c) by scripts/sync-android-native.sh.
+// VENDORED from unilitix-android 1.9.0 (unilitix-sdk/src/main/cpp/unilitix_native.c) by scripts/sync-android-native.sh.
 // Do not edit here; change the Android SDK and re-run the script.
 
 /*

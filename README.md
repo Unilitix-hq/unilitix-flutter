@@ -1,6 +1,6 @@
 # Unilitix Flutter SDK
 
-**Version:** 2.5.0 · [pub.dev](https://pub.dev/packages/unilitix) · [GitHub](https://github.com/unilitix/unilitix-flutter)
+**Version:** 2.6.0 · [pub.dev](https://pub.dev/packages/unilitix) · [GitHub](https://github.com/unilitix/unilitix-flutter)
 
 Unilitix is a mobile analytics SDK built for African markets. It captures session replays, screen flows, custom events, and user identity — with offline-first data delivery and Africa-specific context (network type, carrier, power outage correlation).
 
@@ -27,7 +27,7 @@ Or add manually to `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  unilitix: ^2.5.0
+  unilitix: ^2.6.0
 ```
 
 Then run:
@@ -83,7 +83,7 @@ class MyApp extends StatelessWidget {
 Run your app in debug mode. Within 5 seconds you should see:
 
 ```
-[Unilitix] SDK initialized ✅ v2.5.0
+[Unilitix] SDK initialized ✅ v2.6.0
 [Unilitix] Session started ✅ abc123…
 [Unilitix] Screen → /home
 ```
@@ -186,14 +186,15 @@ device now — for example right before the user signs out.
 
 ## Crashes and Errors
 
-Crash reporting is on by default (`autoTrackCrashes`). Three things are
-recorded, the way Crashlytics and Sentry classify them:
+Crash reporting is on by default (`autoTrackCrashes`). Errors are recorded
+the way Crashlytics and Sentry classify them, and Android ANRs on their own:
 
 | Type | Source | Marks session crashed |
 |---|---|---|
 | `EXCEPTION` (non-fatal) | `FlutterError.onError` — errors the framework caught (overflow, build errors) and `captureException` | No |
 | `CRASH` (fatal: false) | `PlatformDispatcher.onError` — an uncaught Dart error | Yes |
 | `CRASH` (fatal: true) | Native: JVM uncaught exception, `NSException`, fatal signal — recorded by the plugin and reported on the next launch against the session that was running | Yes |
+| `ANR` | Android 11+: the app stopped responding and the system killed it — reported on the next launch against the session that was running | No |
 
 Native fatal signals (SIGSEGV, SIGABRT, SIGBUS, SIGILL, SIGFPE, SIGTRAP) —
 a crash in C/C++ code, the Flutter engine or a plugin's native library — are
@@ -214,6 +215,50 @@ none of the system's exit records. Initialize the Android SDK in
 `Application.onCreate`, before any Flutter engine starts. With an Android SDK
 older than 1.8.0 both still report native crashes. JVM crashes and sessions
 are recorded by each SDK separately.
+
+### ANRs (Android 11+)
+
+From 2.6.0, when Android kills the app because it stopped responding (an
+ANR: input not handled for 5 seconds, so the system showed the "isn't
+responding" dialog and the user closed the app, or killed a background app
+outright), the next launch reports an `ANR` event (SDK contract 1.3.0)
+against the session that was running. On by default with
+`autoTrackCrashes`; no configuration.
+
+- Read from the same `ApplicationExitInfo` scan as native crashes, with the
+  same watermark, so each exit is reported once; at most 5 ANRs per launch
+  (the newest). Upgrading from 2.4.0/2.5.0 keeps the watermark, so an ANR of
+  the last process before the upgrade is reported and older ones are not; a
+  new install starts from its first launch.
+- The event carries the system's description (`Input dispatching timed out
+  …`) as the message and the **main thread's stack** from the ANR thread
+  dump as `stackTrace` (thread properties dropped, capped at 16 KB), plus
+  `metadata.fingerprint` (type `ANR` over the main thread, so ANRs group by
+  where the main thread was stuck), `platform`, `importance` and
+  `foreground`.
+- An ANR is **not a crash**: the session is not marked crashed, and
+  crash-free rates are unchanged. Consent works as for crashes (pending
+  holds it on the device, denied drops it).
+
+Limitations:
+- Android 11+ (API 30+) only: older versions keep no exit record. iOS has no
+  ANR equivalent reported here.
+- Only ANRs the system or the user ended by killing the app are reported. An
+  ANR the app recovered from (the user chose "Wait") leaves no record; there
+  is no in-process watchdog.
+- The stack is the Android main thread (Flutter's platform thread). Dart
+  code that blocks it (where the UI and platform threads are merged) shows
+  up as native `libflutter.so` / `libapp.so` frames, not Dart frames; the
+  fingerprint counts only the Java `at` frames, so such ANRs group by those.
+- **With the Unilitix Android SDK in the same app:** when it captures crashes
+  (`Unilitix.nativeCrashCaptureActive()`), ANRs are left to it like native
+  crashes. Android SDK 1.9.0+ reports them; **1.8.x does not, and the plugin
+  cannot tell 1.8.x from 1.9.x at runtime in a minified release build, so
+  with 1.8.x no ANRs are reported — update the Android SDK to 1.9.0.** With
+  an Android SDK older than 1.8.0, or one without `autoTrackCrashes`, the
+  plugin reports them.
+- Needs the Unilitix API with contract 1.3.0; an older API drops the unknown
+  `ANR` type.
 
 Handlers the app or another SDK installed before `init()` still run. Every
 report carries a stable fingerprint (type + top frames, line numbers

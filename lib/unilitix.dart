@@ -367,6 +367,11 @@ class Unilitix {
         // Non-fatal: recorded, never marks the session crashed, no urgent flush.
         _emitEvent(event); // gated on consent inside
       },
+      onAnrEvent: (event) {
+        // An ANR from an earlier process that no stored session matches:
+        // recorded in the current session, which it does not mark crashed.
+        _emitEvent(event); // gated on consent inside
+      },
       breadcrumbs: _breadcrumbs,
       database: _database,
     );
@@ -391,7 +396,8 @@ class Unilitix {
     // Native crashes (JVM exception, NSException, fatal signal) from earlier
     // processes are reported now, each as a fatal CRASH against the session
     // that was running when it happened (its stub is still in
-    // pending_sessions), so the crash and its replay stay together.
+    // pending_sessions), so the crash and its replay stay together. Android
+    // 11+ ANRs come the same way, as ANR events (not crashes).
     // Awaited: the queued batch must exist before session recovery below
     // decides what is worth sending.
     if (!_optManager.isOptedOut) {
@@ -908,9 +914,22 @@ class Unilitix {
     return CrashAttribution(best);
   }
 
-  /// Queues a crash event straight into the retry queue under [sessionId]
-  /// (a session that is no longer live), so it is uploaded with the next
-  /// flush and the stub is recovered because it now has pending events.
+  /// Sessions of earlier processes that got a native CRASH this launch, and
+  /// those that got an ANR (see [_queueCrashForSession]).
+  static final Set<String> _nativeCrashSessions = {};
+  static final Set<String> _anrSessions = {};
+
+  /// Queues a crash (or ANR) event straight into the retry queue under
+  /// [sessionId] (a session that is no longer live), so it is uploaded with
+  /// the next flush and the stub is recovered because it now has pending
+  /// events.
+  ///
+  /// The stub of a session that did not end cleanly still says
+  /// `crashed: true` (the start sentinel). An ANR is not a crash, so a
+  /// session that ended in an ANR has it cleared, unless a native crash was
+  /// also attributed to it this launch. Known gap: an uncaught Dart error
+  /// earlier in that session is not recorded in the stub, so the session is
+  /// then uploaded as not crashed (its CRASH event is still reported).
   static Future<void> _queueCrashForSession(
       String sessionId, UnilitixEvent event) async {
     await _database.insertEvent(PendingEvent(
@@ -920,6 +939,35 @@ class Unilitix {
       createdAt: DateTime.now().millisecondsSinceEpoch,
       networkAtCapture: _networkMonitor.currentType(),
     ));
+    if (event.type == EventTypes.anr) {
+      _anrSessions.add(sessionId);
+      if (!_nativeCrashSessions.contains(sessionId)) {
+        await _setStubCrashed(sessionId, false);
+      }
+    } else {
+      _nativeCrashSessions.add(sessionId);
+      if (_anrSessions.contains(sessionId)) {
+        await _setStubCrashed(sessionId, true);
+      }
+    }
+  }
+
+  /// Rewrites `crashed` in the pending stub of [sessionId], if there is one.
+  static Future<void> _setStubCrashed(String sessionId, bool crashed) async {
+    try {
+      for (final s in await _database.getPendingSessions()) {
+        if (s['id'] != sessionId) continue;
+        final raw = s['session_json'] as String?;
+        if (raw == null) return;
+        final payload = jsonDecode(raw) as Map<String, dynamic>;
+        if (payload['crashed'] == crashed) return;
+        await _database.savePendingSession(
+            sessionId, jsonEncode({...payload, 'crashed': crashed}));
+        return;
+      }
+    } catch (e) {
+      UnilitixLogger.w('Could not update session stub $sessionId: $e');
+    }
   }
 
   static Future<void> _refreshDeviceInfoIfNeeded() async {

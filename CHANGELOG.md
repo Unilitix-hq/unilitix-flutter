@@ -1,3 +1,57 @@
+## 2.6.0
+
+ANR (app not responding) reporting on Android 11+, and SDK contract 1.3.0.
+No API or configuration changes.
+
+### Added
+- **Android ANRs (API 30+).** The `ApplicationExitInfo` scan that finds
+  native crashes now also selects `REASON_ANR` exits, with the same
+  watermark (each exit is handed out once) and at most 5 per launch (newest
+  kept). The plugin reads the main thread out of each ANR's thread dump and
+  returns it through the existing `readNativeCrash` stream as a record with
+  `"type":"ANR"`; Dart reports it as an `ANR` event against the session that
+  was running, as for native crashes:
+  - `exceptionType` `ANR`, the system's description as `exceptionMessage`,
+    the main thread's stack (`|` property lines dropped, capped at 16 KB) as
+    `stackTrace`; no `fatal`, no `title`.
+  - `metadata`: `fingerprint` (contract fingerprint of type `ANR` over the
+    main thread, computed natively; `ff80a5189f547c4d` for the contract
+    vector), `platform`, `importance`, `foreground`.
+  - **Not a crash:** the session is not marked crashed. The ANR'd session's
+    stub (which says `crashed: true` until a session ends cleanly) has the
+    flag cleared, unless a native crash was also attributed to it.
+  - Consent as for native crashes: pending holds the event on the device,
+    denied drops the record (and the watermark still moves).
+- Vendored from the Unilitix Android SDK 1.9.0 by
+  `scripts/sync-android-native.sh`, which now also copies `AnrTrace.kt`
+  (dump parser, ANR metadata rules); `ProcessExits.kt` and the rest are
+  refreshed to 1.9.0.
+- `CrashTracker.contractFingerprint`: the contract fingerprint with every
+  platform's frame rules (JVM, JavaScript, Apple, Dart), used for an ANR
+  record that arrives without the plugin's fingerprint. Dart errors keep the
+  existing Dart-frame fingerprint (unchanged grouping).
+
+### With the Unilitix Android SDK in the same app
+- ANRs follow the 2.5.0 native-crash decision: when the SDK captures crashes
+  (`Unilitix.nativeCrashCaptureActive()`), the plugin returns no ANRs (its
+  watermark still moves). Android SDK 1.9.0+ reports them itself.
+- **Android SDK 1.8.x does not report ANRs, and is left to anyway:** 1.8.x
+  and 1.9.x cannot be told apart at runtime in a minified release build (no
+  new public member; `BuildConfig` and internal classes are removed or
+  renamed by R8), so reporting them would mean every ANR twice with 1.9.0.
+  Update the Android SDK to 1.9.0 to get ANRs. Without the SDK, with one
+  older than 1.8.0, or with its `autoTrackCrashes` off, the plugin reports
+  them.
+
+### Changed
+- SDK contract 1.3.0 (`lib/src/generated/sdk_contract.dart`): event type
+  `ANR`. The ingest models are unchanged.
+- Native records read per launch: up to 16 (was 8), for the ANRs.
+
+### Not reported
+- ANRs on Android 10 and older (no exit record), ANRs the app recovered from
+  ("Wait"), and iOS hangs. There is no in-process watchdog.
+
 ## 2.5.0
 
 No more double native crash reports in apps that also ship the Unilitix

@@ -17,6 +17,9 @@ package com.unilitix.unilitix_flutter
  * runs the same without the SDK, and with an SDK older than 1.8.0 (no such
  * method) it keeps its own capture as in 2.4.0.
  *
+ * ANRs (plugin 2.6.0, API 30+) follow the same decision as exit-info native
+ * crashes ([sdkReportsExits]).
+ *
  * JVM crashes and sessions are not coordinated: each SDK keeps reporting its own.
  */
 internal object AndroidSdkNativeCrash {
@@ -77,7 +80,24 @@ internal object AndroidSdkNativeCrash {
 
     fun afterDefer(state: State): Install = if (state == State.ACTIVE) Install.SKIP else Install.INSTALL
 
-    /** At collection (next launch): exit records are the SDK's to report when it is active. */
+    /**
+     * At collection (next launch): exit records, native crashes and ANRs
+     * alike, are the SDK's to report when it is active.
+     *
+     * ANRs (2.6.0): Android SDK 1.9.0+ reports them from the same exits. SDK
+     * 1.8.x does not, and this plugin's own scan would still see them (its
+     * watermark is its own, in its own preferences), but 1.8.x and 1.9.x
+     * cannot be told apart at runtime: neither adds a public member, and in
+     * an R8-minified release build the SDK's BuildConfig and internal classes
+     * are removed or renamed. Reporting them whenever the SDK is active
+     * would send every ANR twice with 1.9.0+, so they are left to the SDK in
+     * every version: with 1.8.x, ANRs are not reported until the app moves to
+     * Android SDK 1.9.0 (README). Without the SDK, with one older than 1.8.0
+     * ([State.LEGACY], which never reports ANRs) or one initialized without
+     * crash capture ([State.INACTIVE]), the plugin reports them; an SDK not
+     * initialized yet when Dart reads the records is treated as for native
+     * crashes (the plugin reports).
+     */
     fun sdkReportsExits(state: State): Boolean = state == State.ACTIVE
 
     private fun loadSdkClass(name: String): Class<*>? = try {
