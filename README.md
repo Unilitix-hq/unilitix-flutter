@@ -1,6 +1,6 @@
 # Unilitix Flutter SDK
 
-**Version:** 2.6.0 · [pub.dev](https://pub.dev/packages/unilitix) · [GitHub](https://github.com/unilitix/unilitix-flutter)
+**Version:** 2.7.0 · [pub.dev](https://pub.dev/packages/unilitix) · [GitHub](https://github.com/unilitix/unilitix-flutter)
 
 Unilitix is a mobile analytics SDK built for African markets. It captures session replays, screen flows, custom events, and user identity — with offline-first data delivery and Africa-specific context (network type, carrier, power outage correlation).
 
@@ -27,7 +27,7 @@ Or add manually to `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  unilitix: ^2.6.0
+  unilitix: ^2.7.0
 ```
 
 Then run:
@@ -83,7 +83,7 @@ class MyApp extends StatelessWidget {
 Run your app in debug mode. Within 5 seconds you should see:
 
 ```
-[Unilitix] SDK initialized ✅ v2.6.0
+[Unilitix] SDK initialized ✅ v2.7.0
 [Unilitix] Session started ✅ abc123…
 [Unilitix] Screen → /home
 ```
@@ -187,7 +187,8 @@ device now — for example right before the user signs out.
 ## Crashes and Errors
 
 Crash reporting is on by default (`autoTrackCrashes`). Errors are recorded
-the way Crashlytics and Sentry classify them, and Android ANRs on their own:
+the way Crashlytics and Sentry classify them, and ANRs (Android) and app
+hangs (iOS) on their own:
 
 | Type | Source | Marks session crashed |
 |---|---|---|
@@ -195,6 +196,7 @@ the way Crashlytics and Sentry classify them, and Android ANRs on their own:
 | `CRASH` (fatal: false) | `PlatformDispatcher.onError` — an uncaught Dart error | Yes |
 | `CRASH` (fatal: true) | Native: JVM uncaught exception, `NSException`, fatal signal — recorded by the plugin and reported on the next launch against the session that was running | Yes |
 | `ANR` | Android 11+: the app stopped responding and the system killed it — reported on the next launch against the session that was running | No |
+| `ANR` | iOS: the main thread was blocked for `appHangTimeoutMs` (2 s) — reported when it recovers, or on the next launch if the app did not survive | No |
 
 Native fatal signals (SIGSEGV, SIGABRT, SIGBUS, SIGILL, SIGFPE, SIGTRAP) —
 a crash in C/C++ code, the Flutter engine or a plugin's native library — are
@@ -241,8 +243,8 @@ against the session that was running. On by default with
   holds it on the device, denied drops it).
 
 Limitations:
-- Android 11+ (API 30+) only: older versions keep no exit record. iOS has no
-  ANR equivalent reported here.
+- Android 11+ (API 30+) only: older versions keep no exit record. iOS
+  reports app hangs instead ([below](#app-hangs-ios)).
 - Only ANRs the system or the user ended by killing the app are reported. An
   ANR the app recovered from (the user chose "Wait") leaves no record; there
   is no in-process watchdog.
@@ -259,6 +261,54 @@ Limitations:
   plugin reports them.
 - Needs the Unilitix API with contract 1.3.0; an older API drops the unknown
   `ANR` type.
+
+### App hangs (iOS)
+
+From 2.7.0, the iOS plugin watches the main thread and reports an `ANR`
+event when it does not respond for `appHangTimeoutMs` (default 2000 ms)
+while the app is in the foreground. On by default with `autoTrackCrashes`;
+`appHangTimeoutMs: 0` turns it off. It uses the same watchdog and stack
+sampler as the native iOS SDK (UnilitixCore 0.6.0).
+
+**What counts.** In a Flutter app the iOS main thread is the *platform
+thread*: it runs UIKit, platform-channel handlers and plugins' native code,
+and delivers touches to Flutter. Hangs reported are those that block it: a
+slow synchronous platform-channel handler (yours or a plugin's), main-thread
+file or database I/O, a deadlock or a blocking wait in native code. **Pure
+Dart jank is not reported:** Dart runs on the UI thread, so a long build or
+a busy `main` isolate drops frames without blocking the main thread (see
+the performance metrics for that).
+
+- **Recovered hangs** are reported when the main thread answers again, in
+  the current session, on the current screen with the current breadcrumbs:
+  message `The main thread was blocked for 3200 ms`.
+- **Hangs the app did not survive** (the system watchdog or the user killed
+  it while it was blocked) are written to a file as soon as they are
+  detected and reported on the next launch against the session that was
+  running, with `appTerminated: true` and the duration measured so far
+  (`…blocked for at least 2000 ms; the app was terminated before it
+  recovered`).
+- The event: `exceptionType` `ANR`, the **main thread's stack** at
+  detection as `stackTrace` (`callStackSymbols` format), timestamped when
+  the hang began, and `metadata` with `fingerprint` (contract fingerprint of
+  type `ANR` over that stack, so hangs group by where the main thread was
+  stuck), `platform`, `hangDurationMs`, `appHangTimeoutMs`, `appTerminated`
+  (when terminated) and `debugImages` (the binaries in the stack, with their
+  UUIDs and load addresses, so the server can symbolicate the frames
+  against the matching dSYMs).
+- One hang is reported once, however long it lasts. Each is delivered
+  exactly once: the plugin deletes its copy only after Dart has taken it,
+  and the hang's id is the event id, so the server keeps one event.
+- An app hang is **not a crash**: the session is not marked crashed. The
+  same per-session caps as errors apply (3 per fingerprint, 50 in total).
+  Consent as for crashes: pending holds the event on the device; while
+  consent is denied hangs are not even recorded.
+- Not reported while a debugger is attached (a thread paused at a
+  breakpoint is not a hang), so `flutter run` debug sessions report none;
+  test with a profile or release build started from the home screen.
+- **With the Unilitix iOS SDK in the same app**, each SDK watches the main
+  thread and reports its own hangs against its own sessions; set
+  `appHangTimeoutMs: 0` here (or `appHangTimeoutMs = 0` there) to keep one.
 
 Handlers the app or another SDK installed before `init()` still run. Every
 report carries a stable fingerprint (type + top frames, line numbers
@@ -525,6 +575,7 @@ await Unilitix.init(
     uploadScreenshotsOnWifiOnly: true,   // hold screenshot uploads until Wi-Fi (default)
     maxScreenshotsPerMinute: 20,         // cap for continuously redrawing screens
     screenshotHeartbeatMs: 10000,        // frame at least this often when static
+    appHangTimeoutMs: 2000,              // iOS app hangs; 0 turns them off
   ),
 );
 ```

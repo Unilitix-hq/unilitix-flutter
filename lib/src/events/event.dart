@@ -40,21 +40,28 @@ class UnilitixEvent {
   /// Grouping and symbolication data for CRASH / EXCEPTION events, sent as
   /// the event's `metadata`: `fingerprint`, `occurrence`, and for obfuscated
   /// builds `buildId` / `isolateDsoBase`. For ANR events: `fingerprint`,
-  /// `platform`, and `importance` / `foreground` when known.
+  /// `platform`, and `importance` / `foreground` when known (Android), or
+  /// `hangDurationMs`, `appHangTimeoutMs`, `appTerminated` and
+  /// `debugImages` (iOS app hangs).
   Map<String, dynamic>? crashMetadata;
 
   // CUSTOM fields
   String? eventName;
 
+  /// [id] and [timestamp] (epoch ms) default to a new UUID v4 and now; an
+  /// iOS app hang passes its record's id (so the server keeps one event if
+  /// it is ever sent twice) and the moment the hang began.
   UnilitixEvent({
     required this.type,
     this.screen,
     this.x,
     this.y,
     Map<String, dynamic>? properties,
-  })  : id = generateUuidV4(),
+    String? id,
+    int? timestamp,
+  })  : id = id ?? generateUuidV4(),
         properties = properties ?? {},
-        timestamp = DateTime.now().millisecondsSinceEpoch;
+        timestamp = timestamp ?? DateTime.now().millisecondsSinceEpoch;
 
   Map<String, dynamic> toJson() {
     final map = <String, dynamic>{

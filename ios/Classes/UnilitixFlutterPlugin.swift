@@ -11,6 +11,9 @@ public class UnilitixPlugin: NSObject, FlutterPlugin {
 
   // MARK: Power-outage contribution state (opt-in; all on the main thread)
   private var sdkChannel: FlutterMethodChannel?
+  /// Hangs that recovered go to Dart here (`onAppHang`); a channel of its
+  /// own so it never competes with another Dart handler on the sdk channel.
+  private var appHangChannel: FlutterMethodChannel?
   private var batteryObserver: NSObjectProtocol?
   /// True when this plugin turned battery monitoring on (so it only turns
   /// off what it turned on, never the host app's own monitoring).
@@ -29,6 +32,10 @@ public class UnilitixPlugin: NSObject, FlutterPlugin {
     )
     registrar.addMethodCallDelegate(instance, channel: methodChannel)
     instance.sdkChannel = methodChannel
+    instance.appHangChannel = FlutterMethodChannel(
+      name: "com.unilitix/app_hang",
+      binaryMessenger: registrar.messenger()
+    )
 
     let eventChannel = FlutterEventChannel(
       name: "com.unilitix/network",
@@ -103,9 +110,24 @@ public class UnilitixPlugin: NSObject, FlutterPlugin {
       ])
 
     // The record CrashFile wrote in a previous process (deleted on read),
-    // with its contract fingerprint, or nil.
+    // with its contract fingerprint; then the app hang a previous process
+    // left (a `type: "ANR"` record, see UnilitixAppHangMonitor.swift); then
+    // nil. Dart reads until nil.
     case "readNativeCrash":
-      result(CrashFile.consume())
+      result(CrashFile.consume() ?? UnilitixAppHangs.shared.consumeEarlierHang())
+
+    // App-hang (ANR) detection. Dart calls it after reading the earlier
+    // launch's records, when `autoTrackCrashes` is on and
+    // `appHangTimeoutMs` > 0, and again on every consent change
+    // (`capture` false while consent is denied).
+    case "configureAppHang":
+      let args = call.arguments as? [String: Any]
+      let timeoutMs = (args?["timeoutMs"] as? NSNumber)?.intValue ?? 0
+      let capture = (args?["capture"] as? Bool) ?? true
+      if let channel = appHangChannel {
+        UnilitixAppHangs.shared.configure(timeoutMs: timeoutMs, captureAllowed: capture, channel: channel)
+      }
+      result(nil)
 
     // Power-outage contribution. Dart calls these only when the app opted in
     // and consent is granted.

@@ -1,10 +1,15 @@
-// VENDORED from UnilitixCore 0.4.1 (CrashReporter.swift) by scripts/sync-ios-core.sh.
+// VENDORED from UnilitixCore 0.6.0 (CrashReporter.swift) by scripts/sync-ios-core.sh.
 // Do not edit here; change UnilitixCore and re-run the script.
 
 import Foundation
 
 /// Reports uncaught Objective-C exceptions, then hands over to the handler
 /// that was installed before (another SDK's or the system's).
+///
+/// Fatal signals are `CrashFile`'s (installed alongside with
+/// `CrashFile.installSignalHandlers(path:)`). An uncaught exception ends in
+/// abort(), so every exception seen here, reported or ignored, is marked
+/// handled there: the SIGABRT that follows is not reported a second time.
 enum CrashReporter {
     private static weak var engine: Engine?
     private static var previous: (@convention(c) (NSException) -> Void)?
@@ -21,14 +26,29 @@ enum CrashReporter {
         engine = e
         previous = NSGetUncaughtExceptionHandler()
         NSSetUncaughtExceptionHandler { exception in
-            let name = exception.name.rawValue
-            if !CrashReporter.ignoredNamePrefixes.contains(where: { name.hasPrefix($0) }) {
-                CrashReporter.engine?.recordFatalSynchronously(
-                    type: name,
-                    message: exception.reason ?? "",
-                    stack: exception.callStackSymbols.joined(separator: "\n"))
-            }
+            CrashReporter.handle(exception, engine: CrashReporter.engine)
             CrashReporter.previous?(exception)
         }
+    }
+
+    /// Reports `exception` to `engine` unless its name is ignored, and keeps
+    /// the signal handlers from recording the abort that follows. When the
+    /// store cannot take the report within the fatal budget, it goes to the
+    /// crash file instead (if signal capture is installed), to be reported
+    /// on the next launch. Returns false when the exception was ignored or
+    /// could be kept neither in the store nor in the file.
+    @discardableResult
+    static func handle(_ exception: NSException, engine: Engine?) -> Bool {
+        #if canImport(Darwin)
+        CrashFile.markExceptionHandled()
+        #endif
+        let name = exception.name.rawValue
+        if ignoredNamePrefixes.contains(where: { name.hasPrefix($0) }) { return false }
+        let stack = exception.callStackSymbols.joined(separator: "\n")
+        let stored = engine?.recordFatalSynchronously(type: name, message: exception.reason ?? "", stack: stack)
+        #if canImport(Darwin)
+        if stored == false { return CrashFile.record(exception) }
+        #endif
+        return stored ?? false
     }
 }

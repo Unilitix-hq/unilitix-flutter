@@ -1,4 +1,4 @@
-// VENDORED from UnilitixCore 0.4.1 (EventStore.swift) by scripts/sync-ios-core.sh.
+// VENDORED from UnilitixCore 0.6.0 (EventStore.swift) by scripts/sync-ios-core.sh.
 // Do not edit here; change UnilitixCore and re-run the script.
 
 import Foundation
@@ -106,6 +106,21 @@ final class EventStore {
             guard let s = sessions.first(where: { $0.dirty || !$0.events.isEmpty }) else { return nil }
             return Batch(session: s.info, events: Array(s.events.prefix(max(1, limit))), revision: s.revision)
         }
+    }
+
+    /// The stored session with the latest `startedAt` not after `date` (any
+    /// date when nil): the one running when a crash at `date` happened.
+    func latestSession(startedAtOrBefore date: Date?) -> SessionInfo? {
+        withLock {
+            sessions.map { $0.info }
+                .filter { s in date.map { s.startedAt <= $0 } ?? true }
+                .max { $0.startedAt < $1.startedAt }
+        }
+    }
+
+    /// The queued events of one session (tests and diagnostics).
+    func events(sessionId: String) -> [IngestEvent] {
+        withLock { sessions.first(where: { $0.info.id == sessionId })?.events ?? [] }
     }
 
     // MARK: Acknowledgement

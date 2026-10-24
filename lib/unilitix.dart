@@ -21,6 +21,8 @@ import 'dart:async' show Timer, unawaited;
 import 'dart:convert' show jsonDecode, jsonEncode;
 import 'dart:math' show Random;
 
+import 'package:flutter/foundation.dart'
+    show defaultTargetPlatform, kIsWeb, TargetPlatform;
 import 'package:flutter/widgets.dart';
 
 import 'src/africa/africa_context.dart';
@@ -413,6 +415,18 @@ class Unilitix {
       // Denied: the records are consumed and dropped, never held for later.
       await _crashTracker.discardNativeCrashes();
     }
+    // iOS app hangs (ANR): the plugin's main-thread watchdog, started only
+    // now that the earlier launch's hang record has been read. Recorded
+    // unless consent is denied (see _applyConsent).
+    if (effectiveConfig.autoTrackCrashes &&
+        effectiveConfig.appHangTimeoutMs > 0 &&
+        !kIsWeb &&
+        defaultTargetPlatform == TargetPlatform.iOS) {
+      await _crashTracker.startAppHangDetection(
+        timeoutMs: effectiveConfig.appHangTimeoutMs,
+        capture: !_optManager.isOptedOut,
+      );
+    }
     _flushScheduler.start();
     if (_optManager.isOptedOut) {
       // Denied: anything a previous process left behind must not survive.
@@ -642,6 +656,8 @@ class Unilitix {
     await _optManager.set(value);
     // Power contribution starts, or stops and deletes what it held.
     unawaited(_power?.onConsentChanged());
+    // iOS app hangs are not even recorded while consent is denied.
+    unawaited(_crashTracker.setAppHangCapture(value != UnilitixConsent.denied));
     switch (value) {
       case UnilitixConsent.denied:
         _snapshotCapture.stop();

@@ -1,4 +1,4 @@
-// VENDORED from UnilitixCore 0.4.1 (Config.swift) by scripts/sync-ios-core.sh.
+// VENDORED from UnilitixCore 0.6.0 (Config.swift) by scripts/sync-ios-core.sh.
 // Do not edit here; change UnilitixCore and re-run the script.
 
 import Foundation
@@ -18,8 +18,17 @@ public struct UnilitixConfig {
     public var autoTrackTaps: Bool = true
     /// Record rage taps: three or more taps close together within a second.
     public var autoTrackRageTaps: Bool = true
-    /// Report uncaught Objective-C exceptions as CRASH events.
+    /// Report uncaught Objective-C exceptions and fatal signals (SIGABRT,
+    /// SIGBUS, SIGFPE, SIGILL, SIGSEGV, SIGTRAP) as CRASH events. A signal is
+    /// reported on the next launch, against the session that crashed.
+    /// Also turns on app-hang (`ANR`) detection; see `appHangTimeoutMs`.
     public var autoTrackCrashes: Bool = true
+    /// With `autoTrackCrashes`, report an app hang (`ANR`) when the main
+    /// thread does not respond for this long, in milliseconds, while the app
+    /// is in the foreground. 0 turns hang detection off. iOS only: not a
+    /// contract option (Sentry's `appHangTimeoutInterval` defaults to 2 s
+    /// too). Hangs shorter than this are not reported.
+    public var appHangTimeoutMs: Int = 2000
     /// Upload queued events at least this often, in seconds.
     public var flushIntervalSeconds: Int = 30
     /// Upload early once this many events are queued; also the most events

@@ -36,6 +36,12 @@ class CrashAttribution {
 /// `ANR` events (not crashes: the session is not marked crashed) against the
 /// session that was running, the same way.
 ///
+/// iOS reports app hangs (2.7.0): the plugin's main-thread watchdog
+/// (UnilitixCore's detector and stack sampler) sends a hang the app recovered
+/// from live, on `com.unilitix/app_hang` ([handleAppHang]: an `ANR` in the
+/// current session, under the per-session caps), and one the process did not
+/// survive through `readNativeCrash` on the next launch, like Android's.
+///
 /// Every record carries a [fingerprint] in `metadata` so the server can count
 /// one bug once across devices, and repeats of the same fingerprint within a
 /// session are capped ([maxPerFingerprint]) so a build-method error that
@@ -60,10 +66,18 @@ class CrashTracker {
 
   static const _sdkChannel = MethodChannel('com.unilitix/sdk');
 
+  /// iOS: hangs the main thread recovered from, pushed by the plugin.
+  static const _appHangChannel = MethodChannel('com.unilitix/app_hang');
+
+  /// The iOS plugin's hang id (a lower-case UUID), used as the event id.
+  static final _uuidRe =
+      RegExp(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$');
+
   FlutterExceptionHandler? _previousFlutterHandler;
   bool Function(Object error, StackTrace stack)? _previousPlatformHandler;
   bool _isRecording = false;
   bool _installed = false;
+  int _appHangTimeoutMs = 0;
 
   final Map<String, int> _seen = {};
   int _reportedThisSession = 0;
@@ -114,10 +128,89 @@ class CrashTracker {
   /// Restores the handlers that were in place before [install]. Used by
   /// tests and hot restart.
   void uninstall() {
+    if (_appHangTimeoutMs > 0) {
+      // Stops listening only; the plugin keeps a hang it could not deliver.
+      _appHangChannel.setMethodCallHandler(null);
+      _appHangTimeoutMs = 0;
+    }
     if (!_installed) return;
     _installed = false;
     FlutterError.onError = _previousFlutterHandler;
     PlatformDispatcher.instance.onError = _previousPlatformHandler;
+  }
+
+  // ── iOS app hangs ─────────────────────────────────────────────────────────
+
+  /// iOS: starts the plugin's main-thread watchdog (once per process; later
+  /// calls only update [capture]) and listens for the hangs it reports.
+  /// [timeoutMs] <= 0 does nothing. Call after [reportNativeCrashIfAny] /
+  /// [discardNativeCrashes], so the earlier launch's hang is read before
+  /// this process can record one. [capture] is false while consent is
+  /// denied: a hang is then not recorded at all.
+  Future<void> startAppHangDetection(
+      {required int timeoutMs, required bool capture}) async {
+    if (timeoutMs <= 0) return;
+    _appHangTimeoutMs = timeoutMs;
+    _appHangChannel.setMethodCallHandler(_onAppHangCall);
+    await _configureAppHang(capture);
+  }
+
+  /// Consent changed: hangs are recorded unless [capture] is false.
+  Future<void> setAppHangCapture(bool capture) async {
+    if (_appHangTimeoutMs <= 0) return;
+    await _configureAppHang(capture);
+  }
+
+  Future<void> _configureAppHang(bool capture) async {
+    try {
+      await _sdkChannel.invokeMethod<void>('configureAppHang',
+          {'timeoutMs': _appHangTimeoutMs, 'capture': capture});
+    } catch (e) {
+      // Old plugin, or no native side: no hang detection.
+      UnilitixLogger.d('App-hang detection unavailable: $e');
+    }
+  }
+
+  /// Answers true once the hang is dealt with (reported, held for consent,
+  /// or dropped), so the plugin deletes its copy; it is never sent twice.
+  Future<Object?> _onAppHangCall(MethodCall call) async {
+    if (call.method != 'onAppHang') throw MissingPluginException();
+    final raw = call.arguments;
+    if (raw is String) {
+      try {
+        handleAppHang(raw);
+      } catch (e) {
+        UnilitixLogger.w('Could not report app hang: $e');
+      }
+    }
+    return true;
+  }
+
+  /// A hang the main thread recovered from in this process (iOS plugin
+  /// record, see [anrEventFromRecord]): an `ANR` in the current session, on
+  /// the current screen with the current breadcrumbs, not marking it
+  /// crashed, under the same per-session caps as crashes and exceptions.
+  /// Returns true when it was reported (consent is applied by the
+  /// receiver: pending holds it, denied drops it).
+  @visibleForTesting
+  bool handleAppHang(String raw) {
+    final m = jsonDecode(raw);
+    if (m is! Map<String, dynamic> || m['type'] != EventTypes.anr) {
+      return false;
+    }
+    final event = anrEventFromRecord(m,
+        screen: SdkScope.currentScreen, breadcrumbs: List.of(breadcrumbs));
+    final fp = event.crashMetadata!['fingerprint'] as String;
+    final n = (_seen[fp] ?? 0) + 1;
+    _seen[fp] = n;
+    if (n > maxPerFingerprint || _reportedThisSession >= maxPerSession) {
+      UnilitixLogger.d('Suppressed repeat ANR $fp (#$n this session)');
+      return false;
+    }
+    _reportedThisSession++;
+    UnilitixLogger.d('App hang: ${event.exceptionMessage}');
+    (onAnrEvent ?? onExceptionEvent ?? onCrashEvent)(event);
+    return true;
   }
 
   /// Clears the per-session dedup state. Called on every session start.
@@ -355,8 +448,8 @@ class CrashTracker {
   /// way the native iOS SDK does; it is used as is. Otherwise (Android) the
   /// fingerprint is computed here.
   ///
-  /// A record with `"type":"ANR"` (Android plugin 2.6.0+) becomes an `ANR`
-  /// event instead ([anrEventFromRecord]).
+  /// A record with `"type":"ANR"` (Android plugin 2.6.0+, iOS 2.7.0+)
+  /// becomes an `ANR` event instead ([anrEventFromRecord]).
   @visibleForTesting
   static UnilitixEvent? eventFromNativeMarker(String raw,
       {required void Function(int? timestampMs) onTimestamp}) {
@@ -394,35 +487,56 @@ class CrashTracker {
     }
   }
 
-  /// The `ANR` event for an ANR record from the Android plugin, in the shape
-  /// the Unilitix Android SDK sends (contract 1.3.0): `exceptionType` `ANR`,
-  /// the system's description as `exceptionMessage` (no platform prefix),
-  /// the main thread's stack, no `fatal` and no `title`, and `metadata` with
-  /// the fingerprint (the plugin's, else [contractFingerprint] of type `ANR`
-  /// over the stack), `platform`, and `importance` / `foreground` when the
-  /// system recorded the importance.
+  /// The `ANR` event for an ANR record from the plugin, in the shape the
+  /// native Unilitix SDKs send (contract 1.3.0): `exceptionType` `ANR`, the
+  /// record's description as `exceptionMessage` (no platform prefix), the
+  /// main thread's stack, no `fatal` and no `title`, and `metadata` with the
+  /// fingerprint (the plugin's, else [contractFingerprint] of type `ANR`
+  /// over the stack) and `platform`.
+  ///
+  /// Android records add `importance` / `foreground` when the system
+  /// recorded the importance. iOS app-hang records (2.7.0) carry their own
+  /// `metadata` (`hangDurationMs`, `appHangTimeoutMs`, `appTerminated`,
+  /// `debugImages` for symbolication), which is passed through; their `id`
+  /// becomes the event id and their `timestamp` (when the hang began) the
+  /// event time, as the native iOS SDK does.
   @visibleForTesting
-  static UnilitixEvent anrEventFromRecord(Map<String, dynamic> m) {
+  static UnilitixEvent anrEventFromRecord(Map<String, dynamic> m,
+      {String? screen, List<Map<String, dynamic>>? breadcrumbs}) {
     final message = m['exceptionMessage'];
     final stack = m['stackTrace'] is String ? m['stackTrace'] as String : '';
     final nativeFp = m['fingerprint'];
-    final metadata = <String, dynamic>{
-      'fingerprint': nativeFp is String && nativeFp.isNotEmpty
-          ? nativeFp
-          : contractFingerprint(EventTypes.anr, stack),
-      'platform': m['platform'] is String ? m['platform'] : 'android',
-    };
+    final platform = m['platform'] is String ? m['platform'] : 'android';
+    final metadata = <String, dynamic>{};
+    final extra = m['metadata'];
+    if (extra is Map) {
+      for (final entry in extra.entries) {
+        if (entry.key is String) metadata[entry.key as String] = entry.value;
+      }
+    }
+    metadata['fingerprint'] = nativeFp is String && nativeFp.isNotEmpty
+        ? nativeFp
+        : contractFingerprint(EventTypes.anr, stack);
+    metadata['platform'] = platform;
     final importance = m['importance'];
     if (importance is num) metadata['importance'] = importance.toInt();
     final foreground = m['foreground'];
     if (foreground is bool) metadata['foreground'] = foreground;
-    return UnilitixEvent(type: EventTypes.anr, screen: null)
+    final id = m['id'];
+    final ts = m['timestamp'];
+    final ios = platform == 'ios';
+    return UnilitixEvent(
+      type: EventTypes.anr,
+      screen: screen,
+      id: ios && id is String && _uuidRe.hasMatch(id) ? id : null,
+      timestamp: ios && ts is num && ts > 0 ? ts.toInt() : null,
+    )
       ..exceptionType = EventTypes.anr
       ..exceptionMessage = message is String && message.isNotEmpty
           ? message
           : 'Application Not Responding'
       ..stackTrace = stack
-      ..breadcrumbs = []
+      ..breadcrumbs = breadcrumbs ?? []
       ..crashMetadata = metadata;
   }
 
@@ -434,8 +548,8 @@ class CrashTracker {
 
   /// Reads the next crash record the native plugin kept from an earlier
   /// process, or null when there is none (or no native hook: web, desktop).
-  /// iOS returns at most one record per launch, Android one per earlier
-  /// crash, oldest first; each is returned once.
+  /// iOS returns at most a crash and an app hang per launch, Android one
+  /// per earlier crash, oldest first; each is returned once.
   Future<String?> _readNativeCrash() async {
     try {
       final raw = await _sdkChannel.invokeMethod<String>('readNativeCrash');
