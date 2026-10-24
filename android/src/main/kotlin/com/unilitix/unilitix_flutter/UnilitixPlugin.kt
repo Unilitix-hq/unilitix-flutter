@@ -48,6 +48,8 @@ class UnilitixPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
 
     /** Power-outage contribution: file, preferences, WorkManager and network work, off the main thread. */
     private val powerExecutor = Executors.newSingleThreadExecutor { r -> Thread(r, "unilitix-power") }
+    /** Native crash records (file reads, the exit-info scan) at startup, off the main thread. */
+    private val crashExecutor = Executors.newSingleThreadExecutor { r -> Thread(r, "unilitix-crash") }
     /** Runtime power receiver, registered only while the feature is enabled. */
     private var powerReceiver: BroadcastReceiver? = null
 
@@ -122,9 +124,20 @@ class UnilitixPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
                     result.success(null)
                 }
             }
-            // Returns the JSON written by the uncaught-exception handler of a
-            // previous process (or null), and clears it.
-            "readNativeCrash" -> result.success(NativeCrashHandler.consume(context))
+            // One crash record of an earlier process (JVM uncaught exception,
+            // fatal signal on API 21-29, native exit on API 30+), oldest
+            // first, or null when there are no more. Each is returned once;
+            // Dart calls this until it gets null. See NativeCrashBridge.
+            "readNativeCrash" -> {
+                crashExecutor.execute {
+                    val record = try {
+                        NativeCrashBridge.next(context)
+                    } catch (_: Throwable) {
+                        null
+                    }
+                    mainHandler.post { result.success(record) }
+                }
+            }
             // Power-outage contribution (opt-in). The Dart SDK sends
             // enabled=true only when the app set the config flag and consent
             // is granted; anything else disables and deletes everything.
@@ -353,6 +366,7 @@ class UnilitixPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
         imageExecutor.shutdown()
         unregisterPowerReceiver()
         powerExecutor.shutdown()
+        crashExecutor.shutdown()
     }
 
     /** Main thread. Registers the runtime receiver when enabled, removes it otherwise. */
@@ -379,6 +393,10 @@ class UnilitixPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
  * plugin crashes, OOM, platform-thread failures) to a marker file that the
  * SDK reads and reports as a fatal CRASH on the next launch. Chains to the
  * previously installed handler so the process still terminates normally.
+ *
+ * Also installs native (signal) crash capture on API 21-29
+ * ([NativeCrashBridge]); the JVM handler tells it the exception is handled,
+ * so a SIGABRT that follows is not reported a second time.
  */
 object NativeCrashHandler {
     private const val FILE_NAME = "unilitix_native_crash.json"
@@ -389,6 +407,11 @@ object NativeCrashHandler {
         installed = true
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            // First: this exception is the crash, not the signal that may follow it.
+            try {
+                NativeCrashBridge.markExceptionHandled()
+            } catch (_: Throwable) {
+            }
             try {
                 val sw = StringWriter()
                 throwable.printStackTrace(PrintWriter(sw))
@@ -404,6 +427,11 @@ object NativeCrashHandler {
                 // Never let crash reporting mask the real crash.
             }
             previous?.uncaughtException(thread, throwable)
+        }
+        try {
+            NativeCrashBridge.install(context)
+        } catch (_: Throwable) {
+            // Native capture is best effort; the JVM handler is installed.
         }
     }
 

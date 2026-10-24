@@ -26,7 +26,25 @@ apply plugin: 'kotlin-android'
 android {
     namespace 'com.unilitix.unilitix_flutter'
     compileSdk 35
-    defaultConfig { minSdk 21 }
+    defaultConfig {
+        minSdk 21
+        // Keeps the JNI methods of the native crash handler (bound by name).
+        consumerProguardFiles 'consumer-rules.pro'
+    }
+
+    // Native crash capture for API 21-29 (src/main/cpp, vendored from the
+    // Android SDK by scripts/sync-android-native.sh): a few KB of plain C per
+    // ABI. No abiFilters: built for the NDK's ABIs, and the app's
+    // abiFilters / splits / --target-platform decide what is packaged. No NDK
+    // pin of our own: the line below (from Flutter's plugin_ffi template)
+    // keeps AGP's default NDK, which is Flutter's flutter.ndkVersion on
+    // current Flutter/AGP pairs (27.0.12077973 with AGP 8.7, as the example).
+    ndkVersion android.ndkVersion
+    externalNativeBuild {
+        cmake {
+            path "src/main/cpp/CMakeLists.txt"
+        }
+    }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17

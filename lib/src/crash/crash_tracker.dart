@@ -307,46 +307,80 @@ class CrashTracker {
     }
   }
 
-  /// Reads a crash recorded by the native plugin in a previous process and
-  /// reports it as a fatal CRASH against the session that was running when
-  /// the process died ([attribute] maps the marker's timestamp to that
-  /// session's id from the pending stubs; null means "no match"). The event
-  /// is handed to [report] with the resolved session id, or to [onCrashEvent]
-  /// for the current session when there is no match. Returns true when a
-  /// crash was found.
+  /// Most native records read per launch. The Android plugin returns at
+  /// most 7 (a JVM crash, 1 signal record, 5 exit-info crashes); the cap
+  /// only guards against a plugin that never returns null.
+  static const maxNativeCrashesPerLaunch = 8;
+
+  /// Reads the next crash record the native plugin kept from an earlier
+  /// process, or null when there is none (or no native hook: web, desktop).
+  /// iOS returns at most one record per launch, Android one per earlier
+  /// crash, oldest first; each is returned once.
+  Future<String?> _readNativeCrash() async {
+    try {
+      final raw = await _sdkChannel.invokeMethod<String>('readNativeCrash');
+      return raw == null || raw.isEmpty ? null : raw;
+    } catch (_) {
+      // Platform without the native hook (web, desktop, old plugin).
+      return null;
+    }
+  }
+
+  /// Reads every crash recorded by the native plugin in earlier processes and
+  /// reports each as a fatal CRASH against the session that was running when
+  /// its process died ([attribute] maps the marker's timestamp to that
+  /// session's id from the pending stubs; null means "no match"). An event
+  /// is handed to [report] with the resolved session id, or to
+  /// [onCrashEvent] for the current session when there is no match. Returns
+  /// true when a crash was found.
   Future<bool> reportNativeCrashIfAny({
     Future<CrashAttribution> Function(int? timestampMs)? attribute,
     Future<void> Function(String sessionId, UnilitixEvent event)? report,
   }) async {
-    String? raw;
-    try {
-      raw = await _sdkChannel.invokeMethod<String>('readNativeCrash');
-    } catch (_) {
-      return false; // platform without the native hook (web, desktop, old plugin)
-    }
-    if (raw == null || raw.isEmpty) return false;
-    int? ts;
-    final event = eventFromNativeMarker(raw, onTimestamp: (t) => ts = t);
-    if (event == null) return false;
+    var found = false;
+    for (var i = 0; i < maxNativeCrashesPerLaunch; i++) {
+      final raw = await _readNativeCrash();
+      if (raw == null) break;
+      int? ts;
+      final event = eventFromNativeMarker(raw, onTimestamp: (t) => ts = t);
+      if (event == null) continue;
+      found = true;
 
-    String? sessionId;
-    if (attribute != null) {
-      try {
-        sessionId = (await attribute(ts)).sessionId;
-      } catch (e) {
-        UnilitixLogger.w('Native crash attribution failed: $e');
+      String? sessionId;
+      if (attribute != null) {
+        try {
+          sessionId = (await attribute(ts)).sessionId;
+        } catch (e) {
+          UnilitixLogger.w('Native crash attribution failed: $e');
+        }
+      }
+      if (sessionId != null && report != null) {
+        await report(sessionId, event);
+        UnilitixLogger.d('Reported native crash from previous launch '
+            'against session $sessionId');
+      } else {
+        onCrashEvent(event);
+        UnilitixLogger.d('Reported native crash from previous launch '
+            '(no matching session; attributed to the current one)');
       }
     }
-    if (sessionId != null && report != null) {
-      await report(sessionId, event);
-      UnilitixLogger.d('Reported native crash from previous launch '
-          'against session $sessionId');
-    } else {
-      onCrashEvent(event);
-      UnilitixLogger.d('Reported native crash from previous launch '
-          '(no matching session; attributed to the current one)');
+    return found;
+  }
+
+  /// Consent denied: reads and drops the native plugin's crash records, so a
+  /// crash from a denied period is never reported after a later grant (and
+  /// Android's exit-info watermark still moves). Returns how many there were.
+  Future<int> discardNativeCrashes() async {
+    var dropped = 0;
+    for (var i = 0; i < maxNativeCrashesPerLaunch; i++) {
+      if (await _readNativeCrash() == null) break;
+      dropped++;
     }
-    return true;
+    if (dropped > 0) {
+      UnilitixLogger.d('Dropped $dropped native crash record(s) from an '
+          'earlier launch (consent denied)');
+    }
+    return dropped;
   }
 
   /// On next launch, logs any crash batches persisted from the previous session.

@@ -388,11 +388,12 @@ class Unilitix {
     _sessionManager.start();
     if (effectiveConfig.autoTrackCrashes) _crashTracker.install();
     await _crashTracker.logPendingCrashesIfAny();
-    // A native crash (JVM exception, NSException, fatal signal) from the last
-    // process is reported now as a fatal CRASH against the session that was
-    // running when it happened (its stub is still in pending_sessions), so
-    // the crash and its replay stay together. Awaited: the queued batch must
-    // exist before session recovery below decides what is worth sending.
+    // Native crashes (JVM exception, NSException, fatal signal) from earlier
+    // processes are reported now, each as a fatal CRASH against the session
+    // that was running when it happened (its stub is still in
+    // pending_sessions), so the crash and its replay stay together.
+    // Awaited: the queued batch must exist before session recovery below
+    // decides what is worth sending.
     if (!_optManager.isOptedOut) {
       try {
         await _crashTracker.reportNativeCrashIfAny(
@@ -402,6 +403,9 @@ class Unilitix {
       } catch (e) {
         UnilitixLogger.w('Native crash report failed: $e');
       }
+    } else {
+      // Denied: the records are consumed and dropped, never held for later.
+      await _crashTracker.discardNativeCrashes();
     }
     _flushScheduler.start();
     if (_optManager.isOptedOut) {

@@ -1,6 +1,6 @@
 # Unilitix Flutter SDK
 
-**Version:** 2.3.0 · [pub.dev](https://pub.dev/packages/unilitix) · [GitHub](https://github.com/unilitix/unilitix-flutter)
+**Version:** 2.4.0 · [pub.dev](https://pub.dev/packages/unilitix) · [GitHub](https://github.com/unilitix/unilitix-flutter)
 
 Unilitix is a mobile analytics SDK built for African markets. It captures session replays, screen flows, custom events, and user identity — with offline-first data delivery and Africa-specific context (network type, carrier, power outage correlation).
 
@@ -27,7 +27,7 @@ Or add manually to `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  unilitix: ^2.3.0
+  unilitix: ^2.4.0
 ```
 
 Then run:
@@ -83,7 +83,7 @@ class MyApp extends StatelessWidget {
 Run your app in debug mode. Within 5 seconds you should see:
 
 ```
-[Unilitix] SDK initialized ✅ v2.3.0
+[Unilitix] SDK initialized ✅ v2.4.0
 [Unilitix] Session started ✅ abc123…
 [Unilitix] Screen → /home
 ```
@@ -194,6 +194,16 @@ recorded, the way Crashlytics and Sentry classify them:
 | `EXCEPTION` (non-fatal) | `FlutterError.onError` — errors the framework caught (overflow, build errors) and `captureException` | No |
 | `CRASH` (fatal: false) | `PlatformDispatcher.onError` — an uncaught Dart error | Yes |
 | `CRASH` (fatal: true) | Native: JVM uncaught exception, `NSException`, fatal signal — recorded by the plugin and reported on the next launch against the session that was running | Yes |
+
+Native fatal signals (SIGSEGV, SIGABRT, SIGBUS, SIGILL, SIGFPE, SIGTRAP) —
+a crash in C/C++ code, the Flutter engine or a plugin's native library — are
+captured on both platforms. On Android 11+ (API 30+) they are read from the
+system's record of how earlier processes ended (`ApplicationExitInfo`; no
+native code runs); on Android 5–10 a small signal handler
+(`libunilitix-flutter-native.so`, a few KB per ABI) records them. Each is
+reported once, on the next launch, as `SIGNAL: Fatal signal 11 (SIGSEGV)`.
+On Android 11+ the first launch with 2.4.0 starts from that moment: exits
+recorded before it are not reported.
 
 Handlers the app or another SDK installed before `init()` still run. Every
 report carries a stable fingerprint (type + top frames, line numbers
@@ -508,7 +518,9 @@ compileSdk 35
 minSdk 21
 ```
 
-For NDK-dependent builds, pin the NDK version:
+The plugin compiles a little C (native crash capture) with the NDK your app
+build uses; an NDK is installed automatically by the Android Gradle Plugin
+when missing. To pin the version (Flutter's default is `flutter.ndkVersion`):
 
 ```kotlin
 // android/app/build.gradle.kts

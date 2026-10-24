@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:unilitix/src/crash/crash_tracker.dart';
 import 'package:unilitix/src/events/event.dart';
@@ -258,6 +259,129 @@ isolate_instructions: 7a1c3c0000, vm_instructions: 7a1c3b0000
     test('garbage is ignored', () {
       expect(CrashTracker.eventFromNativeMarker('nope', onTimestamp: (_) {}),
           isNull);
+    });
+
+    test('an Android signal record (2.4.0 plugin) keeps its name and key', () {
+      // What NativeCrashBridge.recordFor returns for a SIGSEGV, from the
+      // signal handler (API 21-29) or ApplicationExitInfo (API 30+).
+      int? ts;
+      final e = CrashTracker.eventFromNativeMarker(
+        '{"platform":"android","exceptionType":"SIGNAL","signal":11,'
+        '"exceptionMessage":"Fatal signal 11 (SIGSEGV)",'
+        '"timestamp":1760700000123,"fingerprint":"8f1fc15bfa06be00"}',
+        onTimestamp: (t) => ts = t,
+      )!;
+      expect(ts, 1760700000123);
+      expect(e.fatal, isTrue);
+      expect(e.title, 'SIGNAL: Fatal signal 11 (SIGSEGV)');
+      expect(e.exceptionMessage, '[android] Fatal signal 11 (SIGSEGV)');
+      expect(e.crashMetadata!['fingerprint'], '8f1fc15bfa06be00');
+    });
+
+    test('an Android record with an unknown signal is keyed SIGNAL', () {
+      final e = CrashTracker.eventFromNativeMarker(
+        '{"platform":"android","exceptionType":"SIGNAL","timestamp":1}',
+        onTimestamp: (_) {},
+      )!;
+      expect(e.crashMetadata!['fingerprint'],
+          CrashTracker.fingerprint('SIGNAL', null));
+      expect(e.title, 'SIGNAL: Native crash');
+    });
+  });
+
+  group('reading native records', () {
+    const channel = MethodChannel('com.unilitix/sdk');
+    late List<UnilitixEvent> crashes;
+    late CrashTracker tracker;
+
+    void serve(List<String?> records, {List<String>? calls}) {
+      final queue = List<String?>.of(records);
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+        calls?.add(call.method);
+        if (call.method != 'readNativeCrash') return null;
+        return queue.isEmpty ? null : queue.removeAt(0);
+      });
+    }
+
+    setUp(() {
+      crashes = [];
+      tracker = CrashTracker(
+        onCrashEvent: crashes.add,
+        breadcrumbs: [],
+        database:
+            EventDatabase(maxOfflineEvents: 1, maxScreenshotsPerSession: 1),
+      );
+    });
+
+    tearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null);
+    });
+
+    String signal(int n, int ts) =>
+        '{"platform":"android","exceptionType":"SIGNAL","signal":$n,'
+        '"timestamp":$ts}';
+
+    test('every record is read, oldest first, each attributed on its own',
+        () async {
+      serve([signal(11, 1000), signal(6, 2000), null]);
+      final attributed = <int?>[];
+      final reported = <String, UnilitixEvent>{};
+      final found = await tracker.reportNativeCrashIfAny(
+        attribute: (ts) async {
+          attributed.add(ts);
+          return CrashAttribution(ts == 1000 ? 's-old' : null);
+        },
+        report: (id, e) async => reported[id] = e,
+      );
+      expect(found, isTrue);
+      expect(attributed, [1000, 2000]);
+      expect(reported.keys.toList(), ['s-old']);
+      expect(reported['s-old']!.exceptionMessage, '[android] Fatal signal 11');
+      expect(crashes, hasLength(1), reason: 'no match: current session');
+      expect(crashes.single.exceptionMessage, '[android] Fatal signal 6');
+    });
+
+    test('one record then null (iOS) reports one', () async {
+      final calls = <String>[];
+      serve([signal(11, 1)], calls: calls);
+      expect(await tracker.reportNativeCrashIfAny(), isTrue);
+      expect(crashes, hasLength(1));
+      expect(calls, ['readNativeCrash', 'readNativeCrash']);
+    });
+
+    test('an unreadable record is skipped, the next one still read', () async {
+      serve(['nope', signal(11, 1)]);
+      expect(await tracker.reportNativeCrashIfAny(), isTrue);
+      expect(crashes, hasLength(1));
+    });
+
+    test('nothing pending reports nothing', () async {
+      serve([]);
+      expect(await tracker.reportNativeCrashIfAny(), isFalse);
+      expect(crashes, isEmpty);
+    });
+
+    test('reads are capped per launch', () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (_) async => signal(11, 1));
+      await tracker.reportNativeCrashIfAny();
+      expect(crashes, hasLength(CrashTracker.maxNativeCrashesPerLaunch));
+    });
+
+    test('no native hook (MissingPluginException) is not a crash', () async {
+      expect(await tracker.reportNativeCrashIfAny(), isFalse);
+      expect(await tracker.discardNativeCrashes(), 0);
+    });
+
+    test('consent denied: records are consumed and dropped', () async {
+      final calls = <String>[];
+      serve([signal(11, 1), signal(6, 2)], calls: calls);
+      expect(await tracker.discardNativeCrashes(), 2);
+      expect(crashes, isEmpty);
+      expect(calls, hasLength(3), reason: 'read until null');
+      expect(await tracker.reportNativeCrashIfAny(), isFalse);
     });
   });
 }
