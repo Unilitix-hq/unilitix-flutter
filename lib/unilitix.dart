@@ -309,6 +309,25 @@ class Unilitix {
       unawaited(_flushScheduler.flushEventsOnly());
     };
 
+    // The crash stub says crashed: true only while the app is in the
+    // foreground. Backgrounded, a kill (swipe away, low memory) is not a
+    // crash, so the stub is rewritten as clean; back in the same session it
+    // is armed again. Real crashes are reported by the crash tracker.
+    _sessionManager.onForegroundChanged = (foreground) {
+      final session = _sessionManager.currentSession;
+      if (session == null || _optManager.isOptedOut) return;
+      unawaited(() async {
+        try {
+          final payload = await _buildSessionPayload();
+          if (payload == null) return;
+          await _database.savePendingSession(
+              session.id, jsonEncode({...payload, 'crashed': foreground}));
+        } catch (e) {
+          UnilitixLogger.w('Failed to update pending session stub: $e');
+        }
+      }());
+    };
+
     _screenshotCapture = ScreenshotCapture(
       repaintKey: SdkScope.repaintKey,
       intervalMs: effectiveConfig.screenshotIntervalMs,

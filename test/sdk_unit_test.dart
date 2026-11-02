@@ -736,6 +736,18 @@ void main() {
       short.didChangeAppLifecycleState(AppLifecycleState.resumed);
       expect(short.currentSession!.id, isNot(equals(idBefore)));
     });
+
+    test(
+        'background disarms the crash stub; resuming the same session re-arms it',
+        () {
+      final changes = <bool>[];
+      manager.onForegroundChanged = changes.add;
+      manager.didChangeAppLifecycleState(AppLifecycleState.paused);
+      expect(changes, [false],
+          reason: 'a kill in the background is not a crash');
+      manager.didChangeAppLifecycleState(AppLifecycleState.resumed);
+      expect(changes, [false, true]);
+    });
   });
 
   // ── UnilitixObserver.resolveName ───────────────────────────────────────────

@@ -1,3 +1,17 @@
+## 2.7.2
+
+Two Android and crash-rate fixes from the 24 October 2026 audit. No API changes.
+
+### Fixed
+- **No crash at launch on Android 5.0–7.1 (API 21–25).** Network-type changes
+  were sent to Flutter from Android's ConnectivityThread, which Flutter
+  rejects off the main thread. Every send is now posted to the main thread.
+- **Background app kills are no longer counted as crashes.** The session stub
+  that marks a session crashed if the app dies is now disarmed when the app
+  goes to the background and re-armed when it returns to the same session, so
+  swiping the app away or a low-memory kill no longer lowers crash-free rates.
+  Crashes are still reported by the crash tracker as before.
+
 ## 2.7.1
 
 Exact symbolication for native crashes, from UnilitixCore 0.7.0 and
