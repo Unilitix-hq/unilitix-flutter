@@ -16,6 +16,11 @@ class SessionManager with WidgetsBindingObserver {
   /// app goes dark. Does not end the session or send a session record.
   void Function()? onEventsFlush;
 
+  /// Called with false when the app goes to the background and with true when
+  /// it returns to the same session. The crash stub uses it: an app killed in
+  /// the background (swipe away, low memory) did not crash.
+  void Function(bool foreground)? onForegroundChanged;
+
   Session? _currentSession;
   Session? _lastEndedSession;
   DateTime? _backgroundedAt;
@@ -126,6 +131,7 @@ class SessionManager with WidgetsBindingObserver {
         _commitForegroundWindow();
         _backgroundedAt = DateTime.now();
         onEventsFlush?.call(); // drain events on background, no session POST
+        onForegroundChanged?.call(false);
         // End the session after the timeout elapses in the background.
         _backgroundTimer = Timer(
           Duration(seconds: sessionTimeoutSeconds),
@@ -162,6 +168,7 @@ class SessionManager with WidgetsBindingObserver {
             ..reset()
             ..start();
           _currentSession?.backgroundTimeMs += awayMs;
+          onForegroundChanged?.call(true);
         } else {
           if (_currentSession != null) _endCurrentSession();
           _startNewSession();

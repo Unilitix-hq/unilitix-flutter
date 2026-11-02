@@ -270,16 +270,21 @@ class UnilitixPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
         eventSink = sink
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
 
+        // Flutter only accepts channel messages on the main thread. On API 26+
+        // the callback is registered with mainHandler; below that Android runs
+        // it on its own ConnectivityThread, so every send is posted to main
+        // (sending from that thread crashed the app at launch on Android 5-7.1).
+        val send: (String) -> Unit = { value -> mainHandler.post { sink?.success(value) } }
         networkCallback = object : ConnectivityManager.NetworkCallback() {
             override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
-                sink?.success(getNetworkType(caps))
+                send(getNetworkType(caps))
             }
             override fun onAvailable(network: Network) {
                 val caps = cm.getNetworkCapabilities(network)
-                sink?.success(if (caps != null) getNetworkType(caps) else "OFFLINE")
+                send(if (caps != null) getNetworkType(caps) else "OFFLINE")
             }
             override fun onLost(network: Network) {
-                sink?.success("OFFLINE")
+                send("OFFLINE")
             }
         }
 
