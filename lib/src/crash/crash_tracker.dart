@@ -443,10 +443,11 @@ class CrashTracker {
   /// or null when the marker cannot be parsed. [timestampMs] is the moment
   /// the process died, as the marker recorded it.
   ///
-  /// The iOS plugin (UnilitixCore's crash file) adds `fingerprint`, computed
-  /// with the SDK contract's frame rules, which group Apple stack frames the
-  /// way the native iOS SDK does; it is used as is. Otherwise (Android) the
-  /// fingerprint is computed here.
+  /// The iOS plugin (UnilitixCore's crash file) and the Android plugin's JVM
+  /// handler (2.7.3+) add `fingerprint`, computed with the SDK contract's
+  /// frame rules, the way the native SDKs group; it is used as is.
+  /// Otherwise the fingerprint is computed here: the contract rules for an
+  /// Android JVM record, the Dart rules for anything else.
   ///
   /// A record with `"type":"ANR"` (Android plugin 2.6.0+, iOS 2.7.0+)
   /// becomes an `ANR` event instead ([anrEventFromRecord]).
@@ -470,9 +471,15 @@ class CrashTracker {
       onTimestamp(ts is num ? ts.toInt() : null);
       final nativeFp = m['fingerprint'];
       final key = signal != null ? '$exType:$signal' : exType;
+      // Plugin 2.7.3+ writes the contract fingerprint into JVM records. An
+      // older record without one is computed here with the contract's frame
+      // rules too: [fingerprint] only reads Dart `#n` frames, so a JVM stack
+      // used to group by exception type alone.
       final fp = nativeFp is String && nativeFp.isNotEmpty
           ? nativeFp
-          : fingerprint(key, stack);
+          : (platform == 'android' && signal == null
+              ? contractFingerprint(exType, stack)
+              : fingerprint(key, stack));
       final title = '$exType: $msg';
       final metadata = crashMetadata(fp, 1, stack);
       // iOS records (UnilitixCore 0.7.0+) carry the binary images of the

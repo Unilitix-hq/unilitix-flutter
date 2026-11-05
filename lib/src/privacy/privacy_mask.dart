@@ -1,5 +1,9 @@
+import 'package:flutter/material.dart' show CircleAvatar;
 import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
+
+/// Wireframe node type for a platform view (WebView, map, video, ad).
+const String kPlatformViewKind = 'PlatformView';
 
 /// Marks a widget subtree as sensitive.
 ///
@@ -125,7 +129,10 @@ class PrivacyRegistry {
   /// Global bounds of every mounted [UnilitixUnmasked] subtree.
   static List<Rect> unmaskedRects() => _rectsOf(_unmasked);
 
-  /// Widget types treated as images for `maskImages`.
+  /// Third-party image widgets recognised by name for `maskImages`. Names
+  /// are only reliable without `--obfuscate`; [isImageWidget] also matches
+  /// by type, and these widgets build an [Image] inside, which is caught by
+  /// type in any build.
   static const Set<String> imageTypes = {
     'Image',
     'RawImage',
@@ -135,6 +142,24 @@ class PrivacyRegistry {
     'SvgPicture',
   };
 
+  /// Whether [w] shows an image, for `maskImages`. Type checks first, so it
+  /// keeps working in builds made with `--obfuscate`.
+  static bool isImageWidget(Widget w) =>
+      w is Image ||
+      w is RawImage ||
+      w is FadeInImage ||
+      w is CircleAvatar ||
+      imageTypes.contains(w.runtimeType.toString());
+
+  /// Whether [w] hosts a platform view (Android or iOS view, hybrid
+  /// composition, or a web element): a WebView, map, video player or ad.
+  static bool isPlatformViewWidget(Widget w) =>
+      w is AndroidView ||
+      w is UiKitView ||
+      w is PlatformViewLink ||
+      w is PlatformViewSurface ||
+      w is HtmlElementView;
+
   /// Global bounds of every image widget currently in the tree. Walks the
   /// element tree, so only call it when `maskImages` is on.
   static List<Rect> imageRects() {
@@ -142,12 +167,37 @@ class PrivacyRegistry {
     if (root == null) return const [];
     final out = <Rect>[];
     void visit(Element e) {
-      if (imageTypes.contains(e.widget.runtimeType.toString())) {
+      if (isImageWidget(e.widget)) {
         final r = _globalRect(e.renderObject);
-        if (r != null) out.add(r);
-        return; // nested images are covered by the parent box
+        if (r != null) {
+          out.add(r);
+          return; // nested images are covered by the parent box
+        }
       }
       e.visitChildren(visit);
+    }
+
+    visit(root);
+    return out;
+  }
+
+  /// Global bounds of every platform view on screen. Their content (a web
+  /// page, a map with the user's location, a video) is drawn by the OS, so
+  /// none of the text or image rules can see inside: native screenshots
+  /// would carry it unmasked. Always masked when screenshots are masked.
+  static List<Rect> platformViewRects() {
+    final root = WidgetsBinding.instance.rootElement?.renderObject;
+    if (root == null) return const [];
+    final out = <Rect>[];
+    void visit(RenderObject ro) {
+      if (ro is RenderAndroidView ||
+          ro is RenderUiKitView ||
+          ro is PlatformViewRenderBox) {
+        final r = _globalRect(ro);
+        if (r != null) out.add(r);
+        return;
+      }
+      ro.visitChildren(visit);
     }
 
     visit(root);

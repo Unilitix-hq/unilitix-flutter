@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/widgets.dart';
 
 import 'snapshot_buffer.dart';
+import 'widget_kind.dart';
 import '../core/sdk_scope.dart';
 import '../privacy/privacy_mask.dart';
 import '../logger/logger.dart';
@@ -183,10 +184,14 @@ class SnapshotCapture with WidgetsBindingObserver {
     Element element,
     List<Map<String, dynamic>> output,
   ) async {
-    final type = element.widget.runtimeType.toString();
+    final type = widgetKind(element.widget);
 
     if (type == 'UnilitixPrivate') {
       output.add({'type': 'masked'});
+      return;
+    }
+    if (type == kPlatformViewKind) {
+      output.add(_platformViewNode(element));
       return;
     }
 
@@ -213,10 +218,14 @@ class SnapshotCapture with WidgetsBindingObserver {
 
   /// Synchronous recursive visitor used within each microtask chunk.
   void _visitElement(Element element, List<Map<String, dynamic>> output) {
-    final type = element.widget.runtimeType.toString();
+    final type = widgetKind(element.widget);
 
     if (type == 'UnilitixPrivate') {
       output.add({'type': 'masked'});
+      return;
+    }
+    if (type == kPlatformViewKind) {
+      output.add(_platformViewNode(element));
       return;
     }
 
@@ -285,7 +294,7 @@ class SnapshotCapture with WidgetsBindingObserver {
       node['text'] = '[MASKED]';
     }
 
-    if (maskImages && PrivacyRegistry.imageTypes.contains(type)) {
+    if (maskImages && PrivacyRegistry.isImageWidget(widget)) {
       node['masked'] = true;
     }
 
@@ -301,6 +310,25 @@ class SnapshotCapture with WidgetsBindingObserver {
 
     if (type == 'Image') node['role'] = 'image';
 
+    return node;
+  }
+
+  /// A platform view (WebView, map, video) as an opaque masked box: its
+  /// content is not Flutter's and is never serialised.
+  Map<String, dynamic> _platformViewNode(Element element) {
+    final node = <String, dynamic>{'type': 'masked', 'role': 'platform-view'};
+    final ro = element.renderObject;
+    if (ro is RenderBox && ro.hasSize) {
+      node['w'] = ro.size.width.round();
+      node['h'] = ro.size.height.round();
+      try {
+        final o = ro.localToGlobal(Offset.zero);
+        node['x'] = o.dx.round();
+        node['y'] = o.dy.round();
+      } catch (_) {}
+      _mix(ro.size.width.round() * 7919 + ro.size.height.round());
+    }
+    _mix(kPlatformViewKind.hashCode);
     return node;
   }
 

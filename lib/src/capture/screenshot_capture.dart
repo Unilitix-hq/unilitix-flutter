@@ -158,7 +158,8 @@ class ScreenshotCapture with WidgetsBindingObserver {
   /// Regions painted over before the frame is encoded, in logical pixels:
   /// every [UnilitixPrivate] subtree; every text input when [maskInputs] is
   /// on; every paragraph of text when [maskAllText] is on (minus
-  /// [UnilitixUnmasked] subtrees); every image when [maskImages] is on.
+  /// [UnilitixUnmasked] subtrees); every image when [maskImages] is on;
+  /// every platform view (WebView, map, video) always.
   ///
   /// If collection fails the frame is dropped rather than sent unmasked.
   List<ui.Rect>? _collectMasks() {
@@ -168,6 +169,7 @@ class ScreenshotCapture with WidgetsBindingObserver {
       rects.addAll(
           PrivacyRegistry.textRects(inputs: maskInputs, allText: maskAllText));
       if (maskImages) rects.addAll(PrivacyRegistry.imageRects());
+      rects.addAll(PrivacyRegistry.platformViewRects());
       return rects;
     } catch (e) {
       UnilitixLogger.w('Mask collection failed — frame skipped: $e');

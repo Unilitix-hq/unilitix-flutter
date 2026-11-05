@@ -26,6 +26,7 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
+import io.unilitix.flutter.nativecrash.Fingerprint
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -421,12 +422,18 @@ object NativeCrashHandler {
             try {
                 val sw = StringWriter()
                 throwable.printStackTrace(PrintWriter(sw))
+                val stack = sw.toString().take(16_000)
+                val type = throwable.javaClass.name
                 val json = JSONObject()
                     .put("platform", "android")
                     .put("thread", thread.name)
-                    .put("exceptionType", throwable.javaClass.name)
+                    .put("exceptionType", type)
                     .put("exceptionMessage", throwable.message ?: "")
-                    .put("stackTrace", sw.toString().take(16_000))
+                    .put("stackTrace", stack)
+                    // The contract fingerprint (type + first JVM frames), the
+                    // same the Android SDK computes, so one NullPointerException
+                    // site is one issue, not every NPE in the app.
+                    .put("fingerprint", Fingerprint.of(type, stack))
                     .put("timestamp", System.currentTimeMillis())
                 File(context.filesDir, FILE_NAME).writeText(json.toString())
             } catch (_: Throwable) {

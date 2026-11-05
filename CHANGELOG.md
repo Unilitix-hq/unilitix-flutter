@@ -1,3 +1,28 @@
+## 2.7.3
+
+Crash grouping and replay privacy fixes from the 24 October 2026 audit. No
+API changes.
+
+### Fixed
+- **Android JVM crashes group by where they happened.** The plugin's JVM
+  crash handler now writes the SDK contract fingerprint (the exception type
+  plus the first JVM frames, line numbers removed), the same one the Android
+  SDK computes. Before, every `NullPointerException` in an app became one
+  issue. Records written by older plugins are grouped the same way on the
+  next launch. Existing JVM crash issues split once by crash site.
+- **Platform views are always masked in replay.** WebViews, maps, video
+  players and ads are drawn by the OS, so none of the text or image masks
+  could see inside them and native screenshots carried their content. Their
+  bounds are now painted over in every screenshot (when `maskScreenshots` is
+  on, the default) and they appear as a masked box in wireframes.
+- **Masking and wireframes work in `--obfuscate` builds.** Widgets were
+  identified by `runtimeType` names, which obfuscation mangles: wireframes
+  came out empty and `maskImages` stopped masking. Widgets are now identified
+  with type checks. Third-party image widgets (`CachedNetworkImage`) are
+  masked through the `Image` they build; `SvgPicture` is still matched by
+  name, so wrap SVGs that need masking in an obfuscated build in
+  `UnilitixPrivate`.
+
 ## 2.7.2
 
 Two Android and crash-rate fixes from the 24 October 2026 audit. No API changes.
