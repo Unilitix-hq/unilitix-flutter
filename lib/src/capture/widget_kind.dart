@@ -30,7 +30,7 @@ class _Kind {
 final List<_Kind> _kinds = [
   _Kind('UnilitixPrivate', (w) => w is UnilitixPrivate),
   // Platform views: WebViews, maps, video. Their pixels are not Flutter's.
-  _Kind(kPlatformViewKind, PrivacyRegistry.isPlatformViewWidget),
+  const _Kind(kPlatformViewKind, PrivacyRegistry.isPlatformViewWidget),
   // Text
   _Kind('Text', (w) => w is Text),
   _Kind('RichText', (w) => w is RichText),
