@@ -225,6 +225,45 @@ isolate_instructions: 7a1c3c0000, vm_instructions: 7a1c3b0000
       expect(e.stackTrace, 'at a.b(c.kt:1)');
     });
 
+    test('an old Android JVM marker groups by its first frames, not its type',
+        () {
+      // Plugins before 2.7.3 wrote no fingerprint; every NPE used to become
+      // one issue because the Dart rules skip JVM `at` frames.
+      String fp(String stack, String msg) => CrashTracker.eventFromNativeMarker(
+            jsonEncode({
+              'platform': 'android',
+              'exceptionType': 'java.lang.NullPointerException',
+              'exceptionMessage': msg,
+              'stackTrace': stack,
+              'timestamp': 1,
+            }),
+            onTimestamp: (_) {},
+          )!
+              .crashMetadata!['fingerprint'] as String;
+      const cart = 'java.lang.NullPointerException: a\n'
+          '\tat com.shop.Cart.pay(Cart.kt:12)\n'
+          '\tat com.shop.Main.run(Main.kt:3)';
+      const login = 'java.lang.NullPointerException: b\n'
+          '\tat com.shop.Login.submit(Login.kt:40)\n'
+          '\tat com.shop.Main.run(Main.kt:3)';
+      expect(fp(cart, 'a'), isNot(fp(login, 'b')));
+      // Line numbers and the message do not split an issue.
+      expect(fp(cart.replaceAll('Cart.kt:12', 'Cart.kt:99'), 'other'),
+          fp(cart, 'a'));
+      expect(
+          fp(cart, 'a'),
+          CrashTracker.contractFingerprint(
+              'java.lang.NullPointerException', cart));
+    });
+
+    test('an Android JVM marker with the plugin fingerprint uses it', () {
+      final e = CrashTracker.eventFromNativeMarker(
+        '{"platform":"android","exceptionType":"java.lang.IllegalStateException","stackTrace":"at a.b(c.kt:1)","fingerprint":"00000000deadbeef","timestamp":1}',
+        onTimestamp: (_) {},
+      )!;
+      expect(e.crashMetadata!['fingerprint'], '00000000deadbeef');
+    });
+
     test('an iOS record carries its UnilitixCore fingerprint, used as is', () {
       // What UnilitixCore's CrashFile.consume returns: the on-disk record
       // (sorted keys) plus the contract fingerprint over the Apple frames.
