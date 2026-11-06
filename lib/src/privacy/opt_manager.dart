@@ -32,29 +32,59 @@ class OptManager {
   /// True when uploads are allowed.
   bool get canUpload => _consent == UnilitixConsent.granted;
 
+  /// True when [load] could not read the stored decision (the platform
+  /// storage failed). Consent is then treated as denied for this process:
+  /// nothing is collected or uploaded, but nothing stored is deleted either,
+  /// because the user's real decision is unknown.
+  bool get loadFailed => _loadFailed;
+  bool _loadFailed = false;
+
   /// Loads the persisted decision. [initial] is used only when the user has
   /// never decided on this device (first launch, or an app that upgraded from
-  /// an SDK without consent states).
+  /// an SDK without consent states). Never throws.
   Future<void> load({UnilitixConsent initial = UnilitixConsent.granted}) async {
+    try {
+      final stored = await readStored();
+      _loadFailed = false;
+      _consent = stored ?? initial;
+    } catch (_) {
+      _loadFailed = true;
+      _consent = UnilitixConsent.denied;
+    }
+  }
+
+  /// The decision stored on this device, or null if there is none. Throws if
+  /// platform storage fails.
+  static Future<UnilitixConsent?> readStored() async {
     final prefs = await SharedPreferences.getInstance();
     final stored = prefs.getString(_key);
     if (stored != null) {
-      _consent = UnilitixConsent.values.firstWhere(
-        (c) => c.name == stored,
-        orElse: () => initial,
-      );
-      return;
+      for (final c in UnilitixConsent.values) {
+        if (c.name == stored) return c;
+      }
+      return null;
     }
     // Pre-2.1 installs stored only the opt-out flag; honour it.
-    if (prefs.getBool(_legacyKey) == true) {
-      _consent = UnilitixConsent.denied;
-      return;
-    }
-    _consent = initial;
+    if (prefs.getBool(_legacyKey) == true) return UnilitixConsent.denied;
+    return null;
   }
 
+  /// Records [c] in memory and persists it. A storage failure is swallowed:
+  /// the in-memory decision still applies for this process.
   Future<void> set(UnilitixConsent c) async {
     _consent = c;
+    _loadFailed = false;
+    try {
+      await persist(c);
+    } catch (_) {
+      // Storage unavailable; the decision holds until the process ends.
+    }
+  }
+
+  /// Writes [c] to platform storage without an [OptManager] instance; used
+  /// by `Unilitix.setConsent` before `init` so an early decision is kept.
+  /// Throws if storage fails.
+  static Future<void> persist(UnilitixConsent c) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_key, c.name);
     await prefs.setBool(_legacyKey, c == UnilitixConsent.denied);

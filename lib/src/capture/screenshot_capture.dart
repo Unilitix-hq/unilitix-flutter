@@ -130,19 +130,31 @@ class ScreenshotCapture with WidgetsBindingObserver {
     if (_ordinal >= maxScreenshots) return;
     if (_isCapturing) return;
     _isCapturing = true;
-    final ordinal = _ordinal++;
 
     try {
-      // Occlusion regions are read in the same frame the pixels come from.
-      final masks = _collectMasks();
-      if (masks == null) return; // never upload a frame we could not mask
+      // Masks are read before the pixels and again once they are back. The
+      // native capture is asynchronous, so a scroll, route transition or
+      // animation can move content in between; a frame whose masks moved
+      // could show text beside its mask, and is dropped (the screen stays
+      // dirty, so the next quiet frame is taken instead).
+      final before = _collectMasks();
+      if (before == null) return; // never upload a frame we could not mask
+      final padded = padMasks(before);
       final view = SchedulerBinding.instance.platformDispatcher.views.first;
       final dpr = view.devicePixelRatio;
 
-      Uint8List? jpegBytes = await _tryNativeCapture(masks, dpr);
-      jpegBytes ??= await _tryDartCapture(masks);
+      Uint8List? jpegBytes = await _tryNativeCapture(padded, dpr);
+      jpegBytes ??= await _tryDartCapture(padded);
       if (jpegBytes == null) return;
 
+      final after = _collectMasks();
+      if (after == null || !masksStable(before, after)) {
+        _dirty = true;
+        UnilitixLogger.d('Screen moved during capture — frame dropped');
+        return;
+      }
+
+      final ordinal = _ordinal++;
       final screen = SdkScope.currentScreen ?? 'unknown';
       final w = (view.physicalSize.width / dpr).round();
       final h = (view.physicalSize.height / dpr).round();
@@ -153,6 +165,38 @@ class ScreenshotCapture with WidgetsBindingObserver {
     } finally {
       _isCapturing = false;
     }
+  }
+
+  /// Logical pixels added on every side of each mask, to cover
+  /// anti-aliasing and sub-pixel rounding between layout and the encoder.
+  static const double maskPadding = 2.0;
+
+  /// Largest movement, in logical pixels, of any mask edge between the
+  /// start and end of a capture for the frame to be kept.
+  static const double maskTolerance = 1.0;
+
+  /// [masks], each grown by [maskPadding] on every side.
+  @visibleForTesting
+  static List<ui.Rect> padMasks(List<ui.Rect> masks) =>
+      [for (final r in masks) r.inflate(maskPadding)];
+
+  /// Whether the masks read after a capture match those read before it: the
+  /// same regions, in the same order, none moved or resized by more than
+  /// [maskTolerance].
+  @visibleForTesting
+  static bool masksStable(List<ui.Rect> before, List<ui.Rect> after) {
+    if (before.length != after.length) return false;
+    for (var i = 0; i < before.length; i++) {
+      final a = before[i];
+      final b = after[i];
+      if ((a.left - b.left).abs() > maskTolerance ||
+          (a.top - b.top).abs() > maskTolerance ||
+          (a.right - b.right).abs() > maskTolerance ||
+          (a.bottom - b.bottom).abs() > maskTolerance) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /// Regions painted over before the frame is encoded, in logical pixels:

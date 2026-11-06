@@ -1,6 +1,6 @@
 # Unilitix Flutter SDK
 
-**Version:** 2.7.3 · [pub.dev](https://pub.dev/packages/unilitix) · [GitHub](https://github.com/unilitix/unilitix-flutter)
+**Version:** 2.7.4 · [pub.dev](https://pub.dev/packages/unilitix) · [GitHub](https://github.com/unilitix/unilitix-flutter)
 
 Unilitix is a mobile analytics SDK built for African markets. It captures session replays, screen flows, custom events, and user identity — with offline-first data delivery and Africa-specific context (network type, carrier, power outage correlation).
 
@@ -27,7 +27,7 @@ Or add manually to `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  unilitix: ^2.7.3
+  unilitix: ^2.7.4
 ```
 
 Then run:
@@ -83,7 +83,7 @@ class MyApp extends StatelessWidget {
 Run your app in debug mode. Within 5 seconds you should see:
 
 ```
-[Unilitix] SDK initialized ✅ v2.7.3
+[Unilitix] SDK initialized ✅ v2.7.4
 [Unilitix] Session started ✅ abc123…
 [Unilitix] Screen → /home
 ```
@@ -440,6 +440,8 @@ await Unilitix.setConsent(UnilitixConsent.denied);  // deletes everything held
 
 The decision is persisted; on later launches it overrides the `consent:`
 argument. `optOut()` / `optIn()` are shortcuts for `denied` / `granted`.
+`setConsent` (and `optOut()` / `optIn()`) may be called before `init`: the
+decision is saved at once and `init` starts in it.
 `denied` stops capture, clears memory buffers, purges the whole on-device
 queue including crash reports and session stubs, and gates every upload path.
 
@@ -684,6 +686,9 @@ If upgrading from v2.0.70 or earlier to v2.0.74, users will receive a new anonym
 ### Events returning 402
 
 Your workspace has reached its event limit. Upgrade your plan or contact support to increase your limit.
+Since 2.7.4 the SDK keeps what it has captured (within its on-device caps)
+and pauses uploads for 15 minutes (or the server's `Retry-After`) at a time,
+so nothing is lost while the plan is topped up.
 
 ---
 

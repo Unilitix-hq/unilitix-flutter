@@ -27,6 +27,7 @@ import 'package:flutter/widgets.dart';
 
 import 'src/africa/africa_context.dart';
 import 'src/config.dart';
+import 'src/core/init_guard.dart';
 import 'src/core/sdk_scope.dart';
 import 'src/events/event.dart';
 import 'src/events/event_buffer.dart';
@@ -45,6 +46,7 @@ import 'src/performance/performance_monitor.dart';
 import 'src/crash/crash_tracker.dart';
 import 'src/privacy/identity.dart';
 import 'src/privacy/opt_manager.dart';
+import 'src/privacy/privacy_mask.dart';
 import 'src/flush/flush_scheduler.dart';
 import 'src/util/device_info.dart';
 import 'src/core/version.dart';
@@ -128,7 +130,12 @@ class Unilitix {
   /// Initializes the Unilitix SDK.
   /// Call once in [main] before [runApp].
   ///
-  /// Calling [init] more than once is a no-op — the first API key and config win.
+  /// Calling [init] more than once is a no-op — the first API key and config
+  /// win. Calls made while the first is still running wait for it.
+  ///
+  /// [init] never throws: if setup fails (a platform channel or storage
+  /// error), the error is logged in debug, the SDK stays disabled for this
+  /// process and every other call is ignored.
   ///
   /// ```dart
   /// await Unilitix.init('your_api_key');
@@ -150,15 +157,59 @@ class Unilitix {
     String apiKey, {
     UnilitixConfig? config,
     UnilitixConsent consent = UnilitixConsent.granted,
-  }) async {
-    if (_initialized) {
+  }) {
+    if (_initGuard.started) {
       UnilitixLogger.w(
         'Unilitix.init() called more than once — ignoring. '
         'The first API key and config are used.',
       );
-      return;
     }
+    return _initGuard.run(() => _init(apiKey, config, consent));
+  }
 
+  /// One initialisation per process; concurrent callers share it and errors
+  /// never reach the caller.
+  static final InitGuard _initGuard = InitGuard(onError: (e, st) {
+    UnilitixLogger.e(
+        'Unilitix.init() failed — the SDK is disabled for this '
+        'run of the app',
+        e,
+        st);
+    _teardownAfterFailedInit();
+  });
+
+  /// Stops whatever a failed [init] had already started, so no timer or
+  /// callback runs against half-built state. Every step is independent: a
+  /// component that was never created throws LateInitializationError here,
+  /// which is ignored.
+  static void _teardownAfterFailedInit() {
+    _initialized = false;
+    _config = null;
+    SdkScope.onScreenChange = null;
+    SdkScope.onTap = null;
+    SdkScope.onScroll = null;
+    final steps = <void Function()>[
+      () => _flushScheduler.stop(),
+      () => _snapshotCapture.stop(),
+      () => _screenshotCapture.stop(),
+      () => _sessionManager.stop(),
+      () => _networkMonitor.stop(),
+      () => _performanceMonitor.stop(),
+      // Its handlers would call into callbacks of the half-built SDK.
+      () => _crashTracker.uninstall(),
+    ];
+    for (final step in steps) {
+      try {
+        step();
+      } catch (_) {}
+    }
+  }
+
+  static Future<void> _init(
+    String apiKey,
+    UnilitixConfig? config,
+    UnilitixConsent consent,
+  ) async {
     final effectiveConfig =
         config?.copyWith(apiKey: apiKey) ?? UnilitixConfig(apiKey: apiKey);
     _config = effectiveConfig;
@@ -176,7 +227,16 @@ class Unilitix {
     await _identity.initialize();
 
     _optManager = OptManager();
+    // A decision made before init (setConsent/optOut called early) is written
+    // first, so load() reads it back.
+    await _earlyConsentWrite;
     await _optManager.load(initial: consent);
+    final early = _earlyConsent;
+    if (early != null && _optManager.consent != early) {
+      // The early write failed; the decision still holds for this process.
+      await _optManager.set(early);
+    }
+    _earlyConsent = null;
 
     _database = EventDatabase(
       maxOfflineEvents: effectiveConfig.maxOfflineEvents,
@@ -228,11 +288,12 @@ class Unilitix {
     _rageTapDetector = RageTapDetector(
       onRageTap: (screen, x, y, cx, cy) {
         _addBreadcrumb('RAGE_TAP', screen);
+        final hidden = _insidePrivateArea(cx, cy);
         _emitEvent(UnilitixEvent(
           type: EventTypes.rageTap,
           screen: screen,
-          x: cx,
-          y: cy,
+          x: hidden ? null : cx,
+          y: hidden ? null : cy,
         ));
       },
     );
@@ -449,7 +510,9 @@ class Unilitix {
     _flushScheduler.start();
     if (_optManager.isOptedOut) {
       // Denied: anything a previous process left behind must not survive.
-      unawaited(_database.purgeAll());
+      // Not when the stored decision could not be read: the user may never
+      // have denied, so nothing is deleted on a guess.
+      if (!_optManager.loadFailed) unawaited(_database.purgeAll());
     } else {
       // Events written to the write-ahead log by a previous process that never
       // flushed them become retry batches first, then session stubs are
@@ -652,9 +715,17 @@ class Unilitix {
 
   // ── Privacy ───────────────────────────────────────────────────────
 
-  /// The current consent state.
-  static UnilitixConsent get consent =>
-      _initialized ? _optManager.consent : UnilitixConsent.granted;
+  /// The current consent state. Before [init] completes this is the
+  /// decision passed to [setConsent] early, if any, else
+  /// [UnilitixConsent.granted].
+  static UnilitixConsent get consent => _initialized
+      ? _optManager.consent
+      : (_earlyConsent ?? UnilitixConsent.granted);
+
+  /// A decision made before [init]: kept in memory and persisted at once, so
+  /// it applies when [init] runs (on this launch or the next).
+  static UnilitixConsent? _earlyConsent;
+  static Future<void> _earlyConsentWrite = Future<void>.value();
 
   /// Records the user's consent decision and acts on it immediately.
   ///
@@ -665,8 +736,29 @@ class Unilitix {
   /// * [UnilitixConsent.denied]: capture stops, memory buffers and the whole
   ///   on-device queue are purged, and nothing captured afterwards leaves the
   ///   device. Same as [optOut].
+  ///
+  /// May be called before [init]: the decision is persisted immediately and
+  /// [init] starts in it (a denial made before [init] means nothing is ever
+  /// collected). Before 2.7.4 such a call was ignored.
   static Future<void> setConsent(UnilitixConsent value) async {
-    if (!_ready('setConsent')) return;
+    if (!_initialized) {
+      _earlyConsent = value;
+      final running = _initGuard.future;
+      if (running != null && _initGuard.inFlight) {
+        // init picks the decision up if it has not loaded consent yet;
+        // either way it is applied below once init is done.
+        await running;
+      }
+      if (!_initialized) {
+        final write = OptManager.persist(value).catchError((Object e) {
+          UnilitixLogger.w('Could not persist consent before init: $e');
+        });
+        _earlyConsentWrite = write;
+        await write;
+        return;
+      }
+      _earlyConsent = null;
+    }
     await _guardAsync('setConsent', () => _applyConsent(value));
   }
 
@@ -781,7 +873,7 @@ class Unilitix {
             await _database.deletePendingSession(id);
             UnilitixLogger.w(
                 'Discarding session $id rejected with ${r.status}');
-          } else if (r.isAuthFailure || r.retryable) {
+          } else if (r.isAuthFailure || r.retryable || r.isPaymentRequired) {
             break; // same outcome for every other stub this launch
           }
         } on FormatException catch (e) {
@@ -822,18 +914,33 @@ class Unilitix {
       if (_config?.autoTrackTaps != true) return;
       bool isRage = false;
       if (_config?.autoTrackRageTaps == true) {
+        // Coordinates stay in memory here; the rage event checks its own.
         isRage = _rageTapDetector.recordTap(screen, x, y);
       }
       if (!isRage) {
+        // A tap inside a UnilitixPrivate area is recorded without its
+        // position: on a PIN pad or card form the coordinates are the secret.
+        final hidden = _insidePrivateArea(x, y);
         _addBreadcrumb(EventTypes.tap, screen);
         _emitEvent(UnilitixEvent(
           type: EventTypes.tap,
           screen: screen,
-          x: x,
-          y: y,
+          x: hidden ? null : x,
+          y: hidden ? null : y,
         ));
       }
     });
+  }
+
+  /// Whether the global logical point ([x], [y]) is inside a mounted
+  /// [UnilitixPrivate] subtree.
+  static bool _insidePrivateArea(double x, double y) {
+    if (PrivacyRegistry.mountedCount == 0) return false;
+    final p = Offset(x, y);
+    for (final r in PrivacyRegistry.privateRects()) {
+      if (r.contains(p)) return true;
+    }
+    return false;
   }
 
   static void _emitEvent(UnilitixEvent event) {
@@ -1079,6 +1186,9 @@ class Unilitix {
   /// is logged and ignored instead of throwing a LateInitializationError.
   static bool _ready(String method) {
     if (_initialized) return true;
+    // While init runs, or after it failed (already logged), calls are
+    // ignored quietly; the assert is for calls made before init at all.
+    if (_initGuard.started) return false;
     assert(
       _initialized,
       'Unilitix.$method() called before Unilitix.init(). '

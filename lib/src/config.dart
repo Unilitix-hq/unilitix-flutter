@@ -79,7 +79,10 @@ class UnilitixConfig {
   /// Snapshot interval in milliseconds (clamped to 1000–60000).
   final int snapshotIntervalMs;
 
-  /// Maximum snapshots per session.
+  /// Maximum wireframe snapshots held on the device waiting to be sent. The
+  /// buffer is also capped at about 1.5 MB of JSON (oldest dropped first),
+  /// whichever limit is reached first, and is sent in chunks of at most
+  /// about 200 KB.
   final int maxSnapshotsPerSession;
 
   /// Capture screenshots via RepaintBoundary.

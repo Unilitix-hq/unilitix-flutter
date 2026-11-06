@@ -1,4 +1,4 @@
-// VENDORED from UnilitixCore 0.7.0 (Models.swift) by scripts/sync-ios-core.sh.
+// VENDORED from UnilitixCore 0.7.2 (Models.swift) by scripts/sync-ios-core.sh.
 // Do not edit here; change UnilitixCore and re-run the script.
 
 import Foundation
@@ -15,17 +15,19 @@ public enum JSONValue: Codable, Equatable {
     case null
 
     /// Converts a value from an app-supplied `[String: Any]`. Values JSON
-    /// cannot represent are stored as their description.
+    /// cannot represent are stored as their description; non-finite numbers
+    /// (NaN, ±infinity) become `null`, since JSON has no form for them.
     public init(any value: Any?) {
         guard let value = value else { self = .null; return }
         switch value {
-        case let v as JSONValue: self = v
+        case let v as JSONValue: self = v.sanitized
         case let v as String: self = .string(v)
         case let v as NSNumber:
             if CFGetTypeID(v) == CFBooleanGetTypeID() {
                 self = .bool(v.boolValue)
             } else if CFNumberIsFloatType(v) {
-                self = .number(v.doubleValue)
+                let d = v.doubleValue
+                self = d.isFinite ? .number(d) : .null
             } else {
                 self = .int(v.int64Value)
             }
@@ -54,11 +56,22 @@ public enum JSONValue: Codable, Equatable {
         switch self {
         case .string(let v): try c.encode(v)
         case .int(let v): try c.encode(v)
-        case .number(let v): try c.encode(v)
+        // JSONEncoder throws on NaN and infinity; write null instead.
+        case .number(let v): if v.isFinite { try c.encode(v) } else { try c.encodeNil() }
         case .bool(let v): try c.encode(v)
         case .array(let v): try c.encode(v)
         case .object(let v): try c.encode(v)
         case .null: try c.encodeNil()
+        }
+    }
+
+    /// This value with every non-finite number replaced by `null`.
+    var sanitized: JSONValue {
+        switch self {
+        case .number(let d): return d.isFinite ? self : .null
+        case .array(let v): return .array(v.map { $0.sanitized })
+        case .object(let v): return .object(v.mapValues { $0.sanitized })
+        default: return self
         }
     }
 

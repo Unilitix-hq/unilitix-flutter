@@ -33,6 +33,13 @@ class EventDatabase {
   final int maxQueueBytes;
   final int maxScreenshotsPerSession;
 
+  /// Cap on stored screenshot bytes (sum of `image_bytes` over every
+  /// session). Oldest frames are deleted beyond it.
+  final int maxScreenshotBytes;
+
+  /// Stored screenshots older than this are deleted.
+  static const Duration maxScreenshotAge = Duration(days: 7);
+
   /// Overrides the database location (tests pass `inMemoryDatabasePath`).
   final String? dbPath;
 
@@ -43,6 +50,7 @@ class EventDatabase {
     required this.maxOfflineEvents,
     required this.maxScreenshotsPerSession,
     this.maxQueueBytes = 5 * 1024 * 1024,
+    this.maxScreenshotBytes = 30 * 1024 * 1024,
     this.dbPath,
   });
 
@@ -420,16 +428,75 @@ class EventDatabase {
       await deleteOldestScreenshots(count - maxScreenshotsPerSession + 1);
     }
     await _db!.insert(_tScreenshots, s.toMap());
+    await enforceScreenshotLimits();
   }
 
-  Future<List<PendingScreenshot>> getPendingScreenshots(
-      String sessionId) async {
+  /// Total bytes of stored screenshot images.
+  Future<int> screenshotBytes() async {
+    if (!_available) return 0;
+    final r = await _db!.rawQuery(
+        'SELECT COALESCE(SUM(LENGTH(image_bytes)), 0) AS b FROM $_tScreenshots');
+    return (r.first['b'] as int?) ?? 0;
+  }
+
+  /// Deletes screenshots older than [maxScreenshotAge], then the oldest
+  /// until the rest fit in [maxScreenshotBytes]. Reads only ids and sizes,
+  /// never the images. Best-effort: a storage error is logged, not thrown.
+  Future<void> enforceScreenshotLimits({DateTime? now}) async {
+    if (!_available) return;
+    try {
+      final cutoff = (now ?? DateTime.now()).subtract(maxScreenshotAge);
+      await _db!.delete(_tScreenshots,
+          where: 'created_at < ?', whereArgs: [cutoff.millisecondsSinceEpoch]);
+
+      if (await screenshotBytes() <= maxScreenshotBytes) return;
+      final rows = await _db!
+          .rawQuery('SELECT id, LENGTH(image_bytes) AS b FROM $_tScreenshots '
+              'ORDER BY created_at DESC, id DESC');
+      var kept = 0;
+      final drop = <int>[];
+      for (final r in rows) {
+        kept += (r['b'] as int?) ?? 0;
+        if (kept > maxScreenshotBytes) drop.add(r['id'] as int);
+      }
+      for (var i = 0; i < drop.length; i += 500) {
+        final ids = drop.skip(i).take(500).toList();
+        await _db!.delete(_tScreenshots,
+            where: 'id IN (${List.filled(ids.length, '?').join(',')})',
+            whereArgs: ids);
+      }
+      if (drop.isNotEmpty) {
+        UnilitixLogger.d('Screenshot store over its cap — deleted '
+            '${drop.length} oldest frames');
+      }
+    } catch (e) {
+      UnilitixLogger.w('Screenshot cleanup failed: $e');
+    }
+  }
+
+  /// The oldest stored screenshots of any session, at most [limit]. Paged so
+  /// a long backlog is never loaded into memory at once.
+  Future<List<PendingScreenshot>> getOldestPendingScreenshots(
+      {int limit = 30}) async {
+    if (!_available) return [];
+    final rows = await _db!.query(
+      _tScreenshots,
+      orderBy: 'created_at ASC, id ASC',
+      limit: limit,
+    );
+    return rows.map(PendingScreenshot.fromMap).toList();
+  }
+
+  /// One session's stored screenshots in ordinal order, at most [limit].
+  Future<List<PendingScreenshot>> getPendingScreenshots(String sessionId,
+      {int limit = 100}) async {
     if (!_available) return [];
     final rows = await _db!.query(
       _tScreenshots,
       where: 'session_id = ?',
       whereArgs: [sessionId],
       orderBy: 'ordinal ASC',
+      limit: limit,
     );
     return rows.map(PendingScreenshot.fromMap).toList();
   }

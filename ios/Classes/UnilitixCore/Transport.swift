@@ -1,4 +1,4 @@
-// VENDORED from UnilitixCore 0.7.0 (Transport.swift) by scripts/sync-ios-core.sh.
+// VENDORED from UnilitixCore 0.7.2 (Transport.swift) by scripts/sync-ios-core.sh.
 // Do not edit here; change UnilitixCore and re-run the script.
 
 import Foundation
@@ -38,6 +38,10 @@ final class URLSessionTransport: Transport {
         cfg.timeoutIntervalForRequest = TimeInterval(SdkContract.requestTimeoutSeconds)
         cfg.timeoutIntervalForResource = TimeInterval(SdkContract.requestTimeoutSeconds)
         cfg.waitsForConnectivity = false
+        // Never share the app's cookie jar with the ingest API.
+        cfg.httpCookieAcceptPolicy = .never
+        cfg.httpShouldSetCookies = false
+        cfg.httpCookieStorage = nil
         session = URLSession(configuration: cfg)
         let up = URLSessionConfiguration.default
         up.timeoutIntervalForRequest = URLSessionTransport.uploadTimeoutSeconds
@@ -45,6 +49,7 @@ final class URLSessionTransport: Transport {
         up.waitsForConnectivity = false
         up.httpCookieAcceptPolicy = .never
         up.httpShouldSetCookies = false
+        up.httpCookieStorage = nil
         uploads = URLSession(configuration: up)
     }
 
@@ -97,7 +102,7 @@ final class URLSessionTransport: Transport {
 
 public enum UnilitixVersion {
     /// This package's version.
-    public static let current = "0.7.0"
+    public static let current = "0.7.2"
     /// What the SDK reports to the API (session `sdkVersion`, User-Agent).
     /// Wrappers that embed UnilitixCore, such as React Native, set their own.
     static var reported = current
