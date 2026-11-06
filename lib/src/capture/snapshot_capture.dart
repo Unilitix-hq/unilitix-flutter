@@ -1,4 +1,5 @@
 import 'dart:async';
+
 import 'package:flutter/widgets.dart';
 
 import 'snapshot_buffer.dart';
@@ -72,6 +73,29 @@ const Set<String> _kSkipPositionTypes = {
   'FractionallySizedBox',
 };
 
+/// Result of one wireframe walk.
+class WireframeWalk {
+  /// Serialised top-level nodes.
+  final List<Map<String, dynamic>> children;
+
+  /// Order-sensitive structural hash of the tree.
+  final int hash;
+
+  /// Approximate JSON size of [children], in bytes.
+  final int approxBytes;
+
+  /// How many times the walk gave the UI isolate back before finishing.
+  final int yields;
+
+  const WireframeWalk(this.children, this.hash, this.approxBytes, this.yields);
+}
+
+class _Pending {
+  final Element element;
+  final List<Map<String, dynamic>> output;
+  const _Pending(this.element, this.output);
+}
+
 class SnapshotCapture with WidgetsBindingObserver {
   final SnapshotBuffer buffer;
   final int intervalMs;
@@ -83,6 +107,11 @@ class SnapshotCapture with WidgetsBindingObserver {
   /// Mark image nodes as masked.
   final bool maskImages;
 
+  /// Longest stretch the walk runs on the UI isolate before it yields to the
+  /// event loop, so frames and input are handled in between. At 4 ms a 60 Hz
+  /// frame keeps three quarters of its budget even if a slice lands in it.
+  final Duration sliceBudget;
+
   /// Notified when the structural hash of the tree changes between captures,
   /// so screenshot capture can take a frame only when the UI actually moved.
   void Function()? onChanged;
@@ -93,6 +122,23 @@ class SnapshotCapture with WidgetsBindingObserver {
   bool _active = false;
   int _lastHash = 0;
   int _hash = 0;
+  int _approxBytes = 0;
+
+  /// Frames drawn since the counter was installed. Read before and during a
+  /// walk: a frame in between means the element tree may have changed.
+  static int _framesDrawn = 0;
+  static bool _frameCounterInstalled = false;
+
+  /// [_framesDrawn] when the last completed walk started; -1 before the first.
+  int _lastWalkFrame = -1;
+
+  /// Consecutive walks abandoned because a frame landed mid-walk.
+  int _abandoned = 0;
+
+  /// After this many abandoned walks in a row (a screen that animates without
+  /// pause), the next walk runs to completion across frames, skipping any
+  /// element that was unmounted in between, rather than never finishing.
+  static const int _kMaxAbandoned = 3;
 
   SnapshotCapture({
     required this.buffer,
@@ -100,11 +146,27 @@ class SnapshotCapture with WidgetsBindingObserver {
     required this.maskInputs,
     this.maskAllText = true,
     this.maskImages = false,
+    this.sliceBudget = const Duration(milliseconds: 4),
   });
+
+  /// Counts frames with a persistent frame callback: it runs only inside
+  /// frames the app draws anyway and never schedules one, so an idle app
+  /// stays idle. Installed once per process (persistent callbacks cannot be
+  /// removed).
+  static void _installFrameCounter() {
+    if (_frameCounterInstalled) return;
+    _frameCounterInstalled = true;
+    WidgetsBinding.instance.addPersistentFrameCallback((_) => _framesDrawn++);
+  }
+
+  /// Counts a frame as if one had been drawn; for tests.
+  @visibleForTesting
+  static void debugNoteFrame() => _framesDrawn++;
 
   void start() {
     if (_active) return; // idempotent: consent changes may call this again
     _active = true;
+    _installFrameCounter();
     WidgetsBinding.instance.addObserver(this);
     final clamped = intervalMs.clamp(1000, 60000);
     _timer = Timer.periodic(
@@ -129,13 +191,14 @@ class SnapshotCapture with WidgetsBindingObserver {
     }
   }
 
-  // Fix 1: defer capture to after the current frame is committed so the
-  // traversal does not block rasterisation.
+  /// Timer tick. Nothing is walked unless a frame was drawn since the last
+  /// walk: an unchanged screen cannot produce a different wireframe. The
+  /// walk starts from the timer (between frames), not from a post-frame
+  /// callback, so ticks on an idle screen leave nothing queued behind.
   void _scheduledCapture() {
-    if (!_active) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _capture();
-    });
+    if (!_active || _capturing) return;
+    if (_framesDrawn == _lastWalkFrame) return;
+    unawaited(_capture());
   }
 
   Future<void> _capture() async {
@@ -145,17 +208,15 @@ class SnapshotCapture with WidgetsBindingObserver {
       final element = WidgetsBinding.instance.rootElement;
       if (element == null) return;
 
-      final children = <Map<String, dynamic>>[];
-      _hash = 17;
-      // Fix 3: async traversal yields between top-level subtrees.
-      await _visitElementAsync(element, children);
-
+      final result = await walk(element);
+      if (result == null || !_active) return; // abandoned or stopped
+      final children = result.children;
       if (children.isEmpty) return;
 
       // Identical tree to the previous capture: nothing to add. Replays
       // interpolate across the gap, and the session stays within its caps.
-      if (_hash == _lastHash) return;
-      _lastHash = _hash;
+      if (result.hash == _lastHash) return;
+      _lastHash = result.hash;
       onChanged?.call();
 
       final view = WidgetsBinding.instance.platformDispatcher.views.first;
@@ -169,7 +230,7 @@ class SnapshotCapture with WidgetsBindingObserver {
         'viewportWidth': w,
         'viewportHeight': h,
         'hierarchy': {'type': 'Root', 'w': w, 'h': h, 'children': children},
-      });
+      }, approxBytes: result.approxBytes + 200);
     } catch (e, stack) {
       UnilitixLogger.e('Snapshot capture failed', e, stack);
     } finally {
@@ -177,68 +238,133 @@ class SnapshotCapture with WidgetsBindingObserver {
     }
   }
 
-  /// Async top-level visitor — collects direct children then yields a
-  /// microtask between each one so the event loop can process input and
-  /// frames between major subtrees.
-  Future<void> _visitElementAsync(
-    Element element,
-    List<Map<String, dynamic>> output,
-  ) async {
-    final type = widgetKind(element.widget);
+  /// Walks the element tree under [root] and serialises it, in slices of at
+  /// most [sliceBudget] separated by a yield to the event loop.
+  ///
+  /// Returns null when the walk was abandoned: a frame was drawn between two
+  /// slices (the tree may have changed, so the half-built wireframe would mix
+  /// two screens) or an element was unmounted. The next timer tick retries.
+  /// The output is identical to a single synchronous pre-order walk.
+  @visibleForTesting
+  Future<WireframeWalk?> walk(Element root) async {
+    final startFrame = _framesDrawn;
+    final tolerant = _abandoned >= _kMaxAbandoned;
+    _hash = 17;
+    _approxBytes = 0;
+    final out = <Map<String, dynamic>>[];
+    // Renderable nodes get their child list up front; empty ones are removed
+    // at the end so the output matches the recursive serialiser's.
+    final parents = <Map<String, dynamic>>[];
+    final stack = <_Pending>[_Pending(root, out)];
+    final sw = Stopwatch()..start();
+    var yields = 0;
 
-    if (type == 'UnilitixPrivate') {
-      output.add({'type': 'masked'});
-      return;
-    }
-    if (type == kPlatformViewKind) {
-      output.add(_platformViewNode(element));
-      return;
-    }
-
-    if (_kRenderableTypes.contains(type)) {
-      final node = _serializeRenderable(element, type);
-      if (node != null) {
-        final childOutput = <Map<String, dynamic>>[];
-        final childElements = <Element>[];
-        element.visitChildren(childElements.add);
-        for (final child in childElements) {
-          await Future.microtask(() => _visitElement(child, childOutput));
+    while (stack.isNotEmpty) {
+      if (sw.elapsed >= sliceBudget) {
+        await Future<void>.delayed(Duration.zero);
+        yields++;
+        if (!tolerant && _framesDrawn != startFrame) {
+          _abandoned++;
+          return null;
         }
-        if (childOutput.isNotEmpty) node['children'] = childOutput;
-        output.add(node);
+        sw
+          ..reset()
+          ..start();
       }
-    } else {
-      final childElements = <Element>[];
-      element.visitChildren(childElements.add);
-      for (final child in childElements) {
-        await Future.microtask(() => _visitElement(child, output));
+      final p = stack.removeLast();
+      final element = p.element;
+      if (!element.mounted) {
+        if (tolerant) continue;
+        _abandoned++;
+        return null;
+      }
+      try {
+        _visit(element, p.output, stack, parents);
+      } catch (_) {
+        // A defunct or mid-update element: leave it out of this wireframe.
       }
     }
+
+    for (final node in parents) {
+      if ((node['children'] as List).isEmpty) node.remove('children');
+    }
+    _abandoned = 0;
+    _lastWalkFrame = startFrame;
+    return WireframeWalk(out, _hash, _approxBytes, yields);
   }
 
-  /// Synchronous recursive visitor used within each microtask chunk.
-  void _visitElement(Element element, List<Map<String, dynamic>> output) {
+  /// The pre-2.7.4 serialiser: one synchronous recursive walk. Kept as the
+  /// reference the sliced [walk] is tested against; not used at runtime.
+  @visibleForTesting
+  WireframeWalk walkSync(Element root) {
+    _hash = 17;
+    _approxBytes = 0;
+    final out = <Map<String, dynamic>>[];
+    void visit(Element element, List<Map<String, dynamic>> output) {
+      final type = widgetKind(element.widget);
+      if (type == 'UnilitixPrivate') {
+        output.add({'type': 'masked'});
+        _approxBytes += 20;
+        return;
+      }
+      if (type == kPlatformViewKind) {
+        output.add(_platformViewNode(element));
+        _approxBytes += 90;
+        return;
+      }
+      if (_kRenderableTypes.contains(type)) {
+        final node = _serializeRenderable(element, type);
+        if (node != null) {
+          final childOutput = <Map<String, dynamic>>[];
+          element.visitChildren((child) => visit(child, childOutput));
+          if (childOutput.isNotEmpty) node['children'] = childOutput;
+          output.add(node);
+        }
+      } else {
+        element.visitChildren((child) => visit(child, output));
+      }
+    }
+
+    visit(root, out);
+    return WireframeWalk(out, _hash, _approxBytes, 0);
+  }
+
+  /// Serialises one element into [output] and pushes its children (in
+  /// reverse, so they pop in order) for the walk to continue with.
+  void _visit(
+    Element element,
+    List<Map<String, dynamic>> output,
+    List<_Pending> stack,
+    List<Map<String, dynamic>> parents,
+  ) {
     final type = widgetKind(element.widget);
 
     if (type == 'UnilitixPrivate') {
       output.add({'type': 'masked'});
+      _approxBytes += 20;
       return;
     }
     if (type == kPlatformViewKind) {
       output.add(_platformViewNode(element));
+      _approxBytes += 90;
       return;
     }
 
+    var target = output;
     if (_kRenderableTypes.contains(type)) {
       final node = _serializeRenderable(element, type);
-      if (node != null) {
-        final childOutput = <Map<String, dynamic>>[];
-        element.visitChildren((child) => _visitElement(child, childOutput));
-        if (childOutput.isNotEmpty) node['children'] = childOutput;
-        output.add(node);
-      }
-    } else {
-      element.visitChildren((child) => _visitElement(child, output));
+      if (node == null) return; // zero-size: the subtree is not drawn
+      final childOutput = <Map<String, dynamic>>[];
+      node['children'] = childOutput;
+      output.add(node);
+      parents.add(node);
+      target = childOutput;
+    }
+
+    final children = <Element>[];
+    element.visitChildren(children.add);
+    for (var i = children.length - 1; i >= 0; i--) {
+      stack.add(_Pending(children[i], target));
     }
   }
 
@@ -269,6 +395,7 @@ class SnapshotCapture with WidgetsBindingObserver {
       if (offset != null) 'x': offset.dx.round(),
       if (offset != null) 'y': offset.dy.round(),
     };
+    _approxBytes += 56 + type.length;
     _mix(type.hashCode);
     if (size != null) _mix(size.width.round() * 7919 + size.height.round());
     if (offset != null) _mix(offset.dx.round() * 7919 + offset.dy.round());
@@ -287,6 +414,8 @@ class SnapshotCapture with WidgetsBindingObserver {
       // layout fidelity but never carries the characters themselves.
       node['text'] = maskAllText ? redactText(text) : text;
       if (maskAllText) node['redacted'] = true;
+      // Redacted text is all '•', three bytes each in UTF-8.
+      _approxBytes += 24 + text.length * 3;
       _mix(text.hashCode);
     }
 

@@ -1,4 +1,4 @@
-// VENDORED from UnilitixCore 0.7.0 (EventStore.swift) by scripts/sync-ios-core.sh.
+// VENDORED from UnilitixCore 0.7.2 (EventStore.swift) by scripts/sync-ios-core.sh.
 // Do not edit here; change UnilitixCore and re-run the script.
 
 import Foundation
@@ -30,17 +30,22 @@ final class EventStore {
     private var sessions: [StoredSession] = []  // oldest first
     private var saveScheduled = false
     private let ioQueue = DispatchQueue(label: "io.unilitix.store", qos: .utility)
+    /// The file has been read (or there is none). Until then nothing is
+    /// written, so an early save cannot replace the queue on disk.
+    private var loaded: Bool
+    /// `purge` ran before the file was read: its content is discarded.
+    private var discardOnLoad = false
+    /// Debug logging; set by the engine before use.
+    var log: (String) -> Void = { _ in }
 
-    /// `directory` nil keeps everything in memory (tests).
-    init(directory: URL?, maxEvents: Int) {
+    /// `directory` nil keeps everything in memory (tests). With
+    /// `loadImmediately` false the queue file is read by `loadFromDisk()`,
+    /// so `Unilitix.start` does no file I/O on the caller's thread.
+    init(directory: URL?, maxEvents: Int, loadImmediately: Bool = true) {
         self.maxEvents = max(1, maxEvents)
-        if let dir = directory {
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            fileURL = dir.appendingPathComponent("queue.json")
-            load()
-        } else {
-            fileURL = nil
-        }
+        fileURL = directory?.appendingPathComponent("queue.json")
+        loaded = directory == nil
+        if loadImmediately { loadFromDisk() }
     }
 
     static var defaultDirectory: URL? {
@@ -149,20 +154,57 @@ final class EventStore {
 
     /// Consent denied or reset: delete everything.
     func purge() {
-        withLock { sessions.removeAll() }
+        withLock {
+            sessions.removeAll()
+            if !loaded { discardOnLoad = true }
+        }
         saveNow()
     }
 
     // MARK: Persistence
 
     /// Writes synchronously. Used by the crash handler and on backgrounding.
+    /// An event that cannot be encoded (JSON has no NaN or infinity) is
+    /// dropped rather than stopping the whole queue from being saved.
     func saveNow() {
         guard let url = fileURL else { return }
         let data = withLock { () -> Data? in
             saveScheduled = false
-            return try? JSONEncoder().encode(sessions)
+            guard loaded else { return nil }
+            let encoder = JSONEncoder()
+            if let data = try? encoder.encode(sessions) { return data }
+            var dropped = 0
+            for i in sessions.indices {
+                let before = sessions[i].events.count
+                sessions[i].events.removeAll { (try? encoder.encode($0)) == nil }
+                dropped += before - sessions[i].events.count
+            }
+            if dropped > 0 { log("\(dropped) event(s) could not be encoded as JSON; dropped") }
+            return try? encoder.encode(sessions)
         }
         if let data = data { try? data.write(to: url, options: .atomic) }
+    }
+
+    /// Reads the queue file once. Sessions recorded before (only possible
+    /// when loading was deferred) are kept after the stored ones.
+    func loadFromDisk() {
+        guard let url = fileURL else { return }
+        let needsSave = withLock { () -> Bool in
+            guard !loaded else { return false }
+            loaded = true
+            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                     withIntermediateDirectories: true)
+            if discardOnLoad { return true }
+            guard let data = try? Data(contentsOf: url),
+                  let stored = try? JSONDecoder().decode([StoredSession].self, from: data) else {
+                return !sessions.isEmpty
+            }
+            let early = sessions.filter { s in !stored.contains { $0.info.id == s.info.id } }
+            sessions = stored + early
+            trimLocked()
+            return !early.isEmpty
+        }
+        if needsSave { saveNow() }
     }
 
     private func scheduleSave() {
@@ -173,13 +215,6 @@ final class EventStore {
         guard fileURL != nil, !saveScheduled else { return }
         saveScheduled = true
         ioQueue.asyncAfter(deadline: .now() + 1) { [weak self] in self?.saveNow() }
-    }
-
-    private func load() {
-        guard let url = fileURL, let data = try? Data(contentsOf: url),
-              let stored = try? JSONDecoder().decode([StoredSession].self, from: data) else { return }
-        sessions = stored
-        trimLocked()
     }
 
     private func trimLocked() {

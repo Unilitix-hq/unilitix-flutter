@@ -1,4 +1,4 @@
-// VENDORED from UnilitixCore 0.7.0 (ScreenshotCapture.swift) by scripts/sync-ios-core.sh.
+// VENDORED from UnilitixCore 0.7.2 (ScreenshotCapture.swift) by scripts/sync-ios-core.sh.
 // Do not edit here; change UnilitixCore and re-run the script.
 
 #if canImport(UIKit) && os(iOS)
@@ -228,12 +228,34 @@ enum ScreenMasker {
         }
         if view is UILabel { return .text }
         if view is UIImageView { return .image }
+        // isKind(of:) follows the superclass chain, so app subclasses of
+        // WKWebView (whose names need not contain it) are web views too.
+        // The name check stays as a fallback.
+        if let web = webViewClass, view.isKind(of: web) { return .web }
         let name = NSStringFromClass(type(of: view))
         if name.contains("WKWebView") { return .web }
-        if name.contains("HostingView") || name.contains("HostingContentView") { return .swiftUIHost }
+        if isSwiftUIHost(view) { return .swiftUIHost }
         // React Native text: RCTTextView (Paper), RCTParagraphComponentView (Fabric).
         if name.hasPrefix("RCTText") || name.hasPrefix("RCTParagraph") { return .text }
         return .other
+    }
+
+    /// `WKWebView`, when WebKit is loaded (nil otherwise: no web views exist).
+    private static let webViewClass: AnyClass? = NSClassFromString("WKWebView")
+
+    /// SwiftUI hosting views are generic Swift classes (`_UIHostingView<…>`),
+    /// so they cannot be looked up by name: the class and its superclasses
+    /// (up to `UIView`) are matched by name instead, which also covers
+    /// app subclasses of `UIHostingController`'s view.
+    static func isSwiftUIHost(_ view: UIView) -> Bool {
+        var cls: AnyClass? = type(of: view)
+        let stop = ObjectIdentifier(UIView.self)
+        while let c = cls, ObjectIdentifier(c) != stop {
+            let name = NSStringFromClass(c)
+            if name.contains("HostingView") || name.contains("HostingContentView") { return true }
+            cls = class_getSuperclass(c)
+        }
+        return false
     }
 
     private static func add(_ view: UIView, _ window: UIWindow, _ out: inout [CGRect]) {

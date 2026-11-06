@@ -32,7 +32,8 @@ import '../logger/logger.dart';
 /// every cycle returns immediately and data accumulates in the on-device
 /// queue. A permanent rejection (other 4xx) drops that batch: the same bytes
 /// can never succeed and would otherwise be re-sent for a week. A 401/403
-/// pauses uploads until the next launch.
+/// pauses uploads until the next launch. A 402 (plan exhausted) keeps the
+/// queue and pauses uploads for 15 minutes or the server's `Retry-After`.
 ///
 /// A [_flushing] guard prevents concurrent runs.
 class FlushScheduler {
@@ -108,6 +109,18 @@ class FlushScheduler {
           'Captured data stays on-device and is sent once the key is valid.',
         );
       }
+      return r;
+    }
+    if (r.isPaymentRequired) {
+      // Over plan / unpaid: keep everything, pause long. Not counted as a
+      // transient failure, so the exponential window is not disturbed.
+      final ra = r.retryAfterSeconds;
+      final delay = ra != null && ra > 0
+          ? Duration(seconds: ra.clamp(60, 24 * 3600))
+          : ApiResult.paymentBackoff;
+      _backoffUntil = now().add(delay);
+      UnilitixLogger.w('$what: HTTP 402 (payment required) — uploads paused '
+          'for ${delay.inMinutes} min; captured data is kept on-device');
       return r;
     }
     if (r.retryable) {
@@ -507,67 +520,108 @@ class FlushScheduler {
 
   // ── Stage 3: snapshots ─────────────────────────────────────────────────────
 
+  /// Largest estimated JSON body per snapshots request.
+  static const int snapshotChunkBytes = 200 * 1024;
+
+  /// Most snapshots per request.
+  static const int snapshotChunkCount = 50;
+
+  /// Requests per cycle, so a backlog drains over a few cycles rather than
+  /// in one burst on a link that has just come back.
+  static const int snapshotChunksPerCycle = 8;
+
+  /// True while a snapshot upload loop runs; a cycle that starts meanwhile
+  /// leaves the buffer to it, so chunks leave in capture order.
+  bool _snapshotsInFlight = false;
+
   Future<bool> _flushSnapshots() async {
     final buf = snapshotBuffer;
     if (buf == null) return true;
+    if (_snapshotsInFlight) return true;
 
     final id = sessionManager.currentSession?.id ??
         sessionManager.lastEndedSession?.id;
     if (id == null) return false;
 
-    final snapshots = buf.drain();
-    if (snapshots.isEmpty) return true;
-
+    _snapshotsInFlight = true;
     try {
-      final resp = _note(
-        await apiClient.ingestSnapshots({
-          'sessionId': id,
-          'snapshots': snapshots,
-        }),
-        'Snapshots (${snapshots.length})',
-      );
-      if (resp.ok) {
-        UnilitixLogger.d('Flushed ${snapshots.length} snapshots');
-        return true;
-      }
-      if (resp.rejected) return false; // dropped; replay is best-effort
-      for (final s in snapshots) {
-        buf.add(s);
-      }
-      UnilitixLogger.w('Snapshot flush failed — re-queued ${snapshots.length}');
-      return false;
-    } catch (e, stack) {
-      for (final s in snapshots) {
-        buf.add(s);
-      }
-      UnilitixLogger.e(
-          'Snapshot flush failed — re-queued ${snapshots.length}', e, stack);
-      return false;
+      return await _flushSnapshotChunks(buf, id);
+    } finally {
+      _snapshotsInFlight = false;
     }
+  }
+
+  Future<bool> _flushSnapshotChunks(SnapshotBuffer buf, String id) async {
+    for (var sent = 0; sent < snapshotChunksPerCycle; sent++) {
+      if (buf.isEmpty) return true;
+      if (inBackoff || _authRejected) return false;
+      final chunk = buf.takeChunk(
+          maxBytes: snapshotChunkBytes, maxCount: snapshotChunkCount);
+      if (chunk.isEmpty) return true;
+      final approx = chunk.fold<int>(0, (n, e) => n + e.bytes);
+
+      try {
+        final resp = _note(
+          await apiClient.ingestSnapshots({
+            'sessionId': id,
+            'snapshots': chunk.map((e) => e.data).toList(growable: false),
+          }, approxBytes: approx),
+          'Snapshots (${chunk.length})',
+        );
+        if (resp.ok) {
+          UnilitixLogger.d('Flushed ${chunk.length} snapshots');
+          continue;
+        }
+        if (resp.rejected) continue; // dropped; replay is best-effort
+        buf.requeueFront(chunk);
+        UnilitixLogger.w('Snapshot flush failed — re-queued ${chunk.length}');
+        return false;
+      } catch (e, stack) {
+        buf.requeueFront(chunk);
+        UnilitixLogger.e(
+            'Snapshot flush failed — re-queued ${chunk.length}', e, stack);
+        return false;
+      }
+    }
+    return true;
   }
 
   // ── Stage 4: screenshots ───────────────────────────────────────────────────
 
+  /// Screenshots loaded and sent per cycle. Frames of earlier sessions (a
+  /// process killed before its last flush, a session that ended offline) are
+  /// sent too, oldest first; before 2.7.4 only the current session's were,
+  /// and the rest stayed on disk.
+  static const int screenshotsPerCycle = 30;
+
   Future<bool> _uploadScreenshots() async {
+    // Age and size caps first, whatever the network: frames held while off
+    // Wi-Fi or offline must not grow without bound.
+    await database.enforceScreenshotLimits(now: now());
     if (uploadScreenshotsOnWifiOnly && !networkMonitor.isWifi()) return true;
 
-    final id = sessionManager.currentSession?.id ??
-        sessionManager.lastEndedSession?.id;
-    if (id == null) return false;
+    final page =
+        await database.getOldestPendingScreenshots(limit: screenshotsPerCycle);
+    if (page.isEmpty) return true;
 
-    final all = await database.getPendingScreenshots(id);
-    if (all.isEmpty) return true;
-
-    // One init per encoding: the API stores a batch under one format, and
-    // the Dart fallback (PNG) can sit next to native frames (JPEG).
-    final byFormat = <String, List<PendingScreenshot>>{};
-    for (final s in all) {
-      byFormat.putIfAbsent(screenshotFormatOf(s.imageBytes), () => []).add(s);
+    // One init per session and encoding: the API stores a batch under one
+    // format, and the Dart fallback (PNG) can sit next to native frames
+    // (JPEG). Map literals keep insertion order, so the oldest go first.
+    final groups = <(String, String), List<PendingScreenshot>>{};
+    for (final s in page) {
+      if (s.sessionId.isEmpty) {
+        // Captured with no live session: no server session will accept it.
+        await database.deleteScreenshotById(s.id!);
+        continue;
+      }
+      final key = (s.sessionId, screenshotFormatOf(s.imageBytes));
+      groups.putIfAbsent(key, () => []).add(s);
     }
     var ok = true;
-    for (final entry in byFormat.entries) {
+    for (final entry in groups.entries) {
       if (inBackoff || _authRejected) return false;
-      ok = await _uploadScreenshotBatch(id, entry.key, entry.value) && ok;
+      final (sessionId, format) = entry.key;
+      ok = await _uploadScreenshotBatch(sessionId, format, entry.value) && ok;
     }
     return ok;
   }
@@ -718,6 +772,8 @@ class FlushScheduler {
         await database.deleteEventById(rowId);
         return true;
       }
+      // 402 is about the account, not this batch: keep its retry budget.
+      if (resp.isPaymentRequired) return false;
       await database.incrementRetryCount(rowId);
       await database.incrementSyncFailedBatches(rowId);
       return false;

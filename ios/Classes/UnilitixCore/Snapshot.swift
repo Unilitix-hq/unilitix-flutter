@@ -1,4 +1,4 @@
-// VENDORED from UnilitixCore 0.7.0 (Snapshot.swift) by scripts/sync-ios-core.sh.
+// VENDORED from UnilitixCore 0.7.2 (Snapshot.swift) by scripts/sync-ios-core.sh.
 // Do not edit here; change UnilitixCore and re-run the script.
 
 import Foundation
@@ -116,7 +116,9 @@ enum SnapshotBuilder {
                               budget: inout Int) -> SnapshotNode? {
         guard budget > 0, view.isVisible else { return nil }
         let f = view.frame
+        // Int(_:) traps on NaN and out-of-range values: such frames are skipped.
         guard !f.isNull, !f.isInfinite, f.width.isFinite, f.height.isFinite,
+              f.minX.isFinite, f.minY.isFinite,
               f.width >= 0.5, f.height >= 0.5 else { return nil }
         let kids = view.children
         if !f.intersects(viewport) && (view.clipsToBounds || kids.isEmpty) { return nil }
@@ -184,8 +186,18 @@ enum SnapshotBuilder {
     }
 
     static func bounds(_ r: CGRect) -> SnapshotBounds {
-        SnapshotBounds(x: Int(r.minX.rounded()), y: Int(r.minY.rounded()),
-                       w: Int(r.width.rounded()), h: Int(r.height.rounded()))
+        SnapshotBounds(x: clampedInt(r.minX), y: clampedInt(r.minY),
+                       w: clampedInt(r.width), h: clampedInt(r.height))
+    }
+
+    /// Bounds far beyond any screen are clamped here.
+    nonisolated static let maxCoordinate: CGFloat = 1_000_000
+
+    /// `v` rounded, clamped to ±`maxCoordinate`; 0 for NaN. Never traps,
+    /// unlike `Int(_:)` on NaN or huge values.
+    nonisolated static func clampedInt(_ v: CGFloat) -> Int {
+        guard !v.isNaN else { return 0 }
+        return Int(min(max(v, -maxCoordinate), maxCoordinate).rounded())
     }
 }
 

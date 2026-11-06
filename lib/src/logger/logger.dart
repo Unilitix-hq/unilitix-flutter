@@ -16,8 +16,11 @@ class UnilitixLogger {
     if (enabled) debugPrint('[Unilitix] ⚠️  $message');
   }
 
-  /// Always prints an error message.
+  /// Prints an error when [enabled] is true or in a debug build. Release
+  /// builds of apps that leave `debug` off print nothing: before 2.7.4 every
+  /// SDK error (and its stack trace) went to the device log in production.
   static void e(String message, [Object? error, StackTrace? stack]) {
+    if (!enabled && !kDebugMode) return;
     debugPrint('[Unilitix] ❌ $message');
     if (error != null) debugPrint(error.toString());
     if (stack != null) debugPrint(stack.toString());

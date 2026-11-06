@@ -1,4 +1,4 @@
-// VENDORED from UnilitixCore 0.7.0 (Engine.swift) by scripts/sync-ios-core.sh.
+// VENDORED from UnilitixCore 0.7.2 (Engine.swift) by scripts/sync-ios-core.sh.
 // Do not edit here; change UnilitixCore and re-run the script.
 
 import Foundation
@@ -74,17 +74,19 @@ final class Engine {
     private let sessionLock = NSLock()
     private var crashSessionId: String?
 
-    /// The record `CrashFile`'s signal handlers left in the previous process,
-    /// read (and deleted) at init, before this process installs its own
-    /// handlers, and reported by `start`.
+    /// Where `CrashFile`'s signal handlers write; nil when not used.
+    private let crashFilePath: String?
+    /// The record those handlers left in the previous process, read (and
+    /// deleted) by `loadPersistedState` on `queue` and reported by `start`.
     private var nativeCrash: String?
 
     /// Where the app-hang watchdog keeps the hang in progress
     /// (`AppHangFile`), nil when hangs are not persisted.
     let appHangFilePath: String?
-    /// The hang the previous process did not survive, read (and deleted) at
-    /// init and reported by `start`.
+    /// The hang the previous process did not survive, read (and deleted) by
+    /// `loadPersistedState` and reported by `start`.
     private var pendingAppHang: AppHangRecord?
+    private var persistedStateLoaded = false
 
     init(config: UnilitixConfig, transport: Transport, store: EventStore,
          prefs: Preferences, device: DeviceInfo, consent: UnilitixConsent,
@@ -109,15 +111,31 @@ final class Engine {
         self.log = log
         // A decision persisted from a previous launch wins over the argument.
         self.consent = prefs.consent ?? consent
-        if let path = crashFilePath { nativeCrash = CrashFile.consume(path: path) }
+        self.crashFilePath = crashFilePath
         self.appHangFilePath = appHangFilePath
-        if let path = appHangFilePath { pendingAppHang = AppHangFile.consume(path: path) }
+        store.log = log
     }
 
     // MARK: Lifecycle
 
+    /// Reads what earlier launches left on disk, once: the event queue,
+    /// the replay stores' indexes, the previous crash record (with its
+    /// backtrace symbolicated) and an unfinished app hang. Call on `queue`
+    /// (0.7.2: no longer at init, so `Unilitix.start` does no file I/O on
+    /// the caller's thread). `start` calls it first.
+    func loadPersistedState() {
+        guard !persistedStateLoaded else { return }
+        persistedStateLoaded = true
+        store.loadFromDisk()
+        screenshots.loadFromDisk(now: now())
+        snapshots.loadFromDisk(now: now())
+        if let path = crashFilePath { nativeCrash = CrashFile.consume(path: path) }
+        if let path = appHangFilePath { pendingAppHang = AppHangFile.consume(path: path) }
+    }
+
     /// Starts the first session and the flush timer. Call on `queue`.
     func start() {
+        loadPersistedState()
         // Before the new session: the crash (or hang) belongs to the one that died.
         let unattributed = reportNativeCrash()
         let unattributedHang = reportPendingAppHang()
@@ -147,6 +165,17 @@ final class Engine {
         touchSession()
         flush()
         store.saveNow()
+    }
+
+    /// Calls `done` on `queue` once no upload is in flight, or after
+    /// `timeout` seconds. Call on `queue`.
+    func whenUploadsIdle(timeout: TimeInterval, _ done: @escaping () -> Void) {
+        guard inFlight, timeout > 0 else { done(); return }
+        let step = 0.25
+        queue.asyncAfter(deadline: .now() + step) { [weak self] in
+            guard let self = self else { done(); return }
+            self.whenUploadsIdle(timeout: timeout - step, done)
+        }
     }
 
     func willEnterForeground() {
@@ -270,9 +299,11 @@ final class Engine {
 
     /// Crash path: runs on the crashing thread, never touches `queue`, and
     /// waits at most the contract's fatal budget for the store. Returns false
-    /// only when the store could not take the report in time (or has no
-    /// record of the session); a report dropped on purpose (consent denied,
-    /// no session yet) returns true.
+    /// when the store could not take the report in time, has no record of
+    /// the session, or no session started yet (0.7.2: the queue is still
+    /// loading at launch), so `CrashReporter` keeps it in the crash file for
+    /// the next launch; a report dropped on purpose (consent denied) returns
+    /// true.
     /// `debugImages` as for `recordError`: `CrashReporter` passes the images
     /// of the exception's return addresses.
     @discardableResult
@@ -281,7 +312,8 @@ final class Engine {
         sessionLock.lock()
         let sid = crashSessionId
         sessionLock.unlock()
-        guard let sessionId = sid, consent != .denied else { return true }
+        guard consent != .denied else { return true }
+        guard let sessionId = sid else { return false }
         guard let e = errorEvent(type: type, message: message, stack: stack, fatal: true, checkCaps: false,
                                  platform: "ios", debugImages: debugImages) else {
             return true
@@ -513,6 +545,9 @@ final class Engine {
         var e = event
         e.seq = seq
         seq += 1
+        // JSON has no NaN or infinity (JSONEncoder throws on them).
+        if let x = e.x, !x.isFinite { e.x = nil }
+        if let y = e.y, !y.isFinite { e.y = nil }
         store.append(e, sessionId: s.id)
         if store.eventCount >= config.flushBatchSize { flush() }
     }
@@ -619,6 +654,9 @@ final class Engine {
             store.purge()
             screenshots.purge()
             snapshots.purge()
+            // The user id identify() stored goes with the data; a later
+            // grant starts unidentified until the app calls identify again.
+            prefs.customUserId = nil
             session = nil
             sessionLock.lock(); crashSessionId = nil; sessionLock.unlock()
             if let path = appHangFilePath { AppHangFile.remove(path: path) }
@@ -657,7 +695,20 @@ final class Engine {
             events = Array(events.prefix(events.count / 2))
             body = encode(batch.session, events)
         }
-        guard let data = body else { return }
+        guard let data = body else {
+            // An event JSON cannot represent must not stall the queue: drop
+            // the events that fail on their own and try again.
+            let encoder = JSONEncoder()
+            let bad = events.filter { (try? encoder.encode($0)) == nil }
+            guard !bad.isEmpty else {
+                log("batch for session \(batch.session.id) could not be encoded; kept")
+                return
+            }
+            for e in bad { store.drop(eventId: e.eventId, sessionId: batch.session.id) }
+            log("\(bad.count) event(s) could not be encoded as JSON; dropped")
+            flush()
+            return
+        }
         if data.count > SdkContract.maxRequestBytes, let only = events.first {
             log("event \(only.eventId) is larger than the API accepts; dropped")
             store.drop(eventId: only.eventId, sessionId: batch.session.id)
@@ -895,7 +946,7 @@ final class Engine {
             putScreenshot(index + 1, pass, uploaded: uploaded + [frame])
             return
         }
-        if let s = status, (400..<500).contains(s), s != 429 {
+        if let s = status, (400..<500).contains(s), s != 408, s != 429 {
             // Storage refused this request (expired or malformed URL). Never
             // a reason to pause the API key.
             let dropped = screenshots.recordFailedUpload(frame)

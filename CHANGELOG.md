@@ -1,3 +1,54 @@
+## 2.7.4
+
+Performance and safety fixes for host apps, from a go-live audit. No API
+changes; `setConsent` now also works before `init`.
+
+### Changed
+- **iOS core updated to UnilitixCore 0.7.2** (from 0.7.0): events with NaN or
+  infinite numbers no longer block uploads, subclassed WKWebViews are masked
+  in screenshots, saved data is loaded off the main thread at launch, the API
+  connection ignores cookies, and the privacy manifest marks collected data as
+  linked to the user (it is, once you call `identify`). Update your App Store
+  privacy answers to "linked" if they said otherwise.
+
+### Fixed
+- **Wireframe capture no longer stalls the UI.** The once-a-second walk of
+  the widget tree ran on the UI thread in large chunks. It now runs in slices
+  of at most 4 ms and gives the frame back in between, skips the walk
+  entirely when nothing has been drawn since the last one, and starts over if
+  the screen changes halfway. Widget types are looked up once per type
+  instead of once per widget.
+- **No more giant wireframe uploads after time offline.** Wireframes waiting
+  to be sent are capped at about 1.5 MB (oldest dropped first) and are sent
+  in requests of at most about 200 KB or 50 wireframes. Large requests are
+  compressed off the UI thread.
+- **Screenshots from earlier sessions are sent, and old ones are cleaned
+  up.** Frames left over from a session that ended offline or was killed
+  were never uploaded and stayed on disk. They are now sent oldest first, a
+  few at a time, and stored frames are deleted after 7 days or once they
+  pass 30 MB.
+- **Screenshots are dropped if the screen moved while they were taken.**
+  Masks are checked again once the pixels are back; if any mask moved (a
+  scroll, a page transition), the frame is thrown away instead of risking
+  text next to its mask. Every mask is also 2 px larger.
+- **`Unilitix.init()` can no longer throw or run twice.** Calls made while
+  init is running wait for it, and any failure during setup (storage,
+  platform channels) is logged in debug and leaves the SDK switched off
+  instead of reaching your `main()`.
+- **Consent given before `init` is kept.** `setConsent`, `optOut` and
+  `optIn` called before `init` used to be ignored; the decision is now saved
+  immediately and `init` starts in it.
+- **Taps inside `UnilitixPrivate` areas are recorded without their
+  position.**
+- **A 402 (plan limit reached) no longer deletes data.** The SDK keeps what
+  it captured and pauses uploads for 15 minutes (or the server's
+  `Retry-After`) instead of dropping each batch.
+- **Release builds stay quiet.** SDK errors are printed only in debug builds
+  or with `debug: true`.
+- **iOS privacy manifest declares replay content** (Other User Content,
+  linked to the user once you call `identify()`). Review your App Store
+  privacy label if you use session replay.
+
 ## 2.7.3
 
 Crash grouping and replay privacy fixes from the 24 October 2026 audit. No

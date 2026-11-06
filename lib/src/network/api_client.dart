@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'dart:io' show IOException, GZipCodec;
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show compute, kIsWeb;
 import 'package:http/http.dart' as http;
 
 import 'retry_policy.dart';
@@ -61,13 +61,24 @@ class ApiResult {
   /// Transient failure: no response, 5xx or 429.
   bool get retryable => !ok && RetryPolicy.isRetryable(status);
 
-  /// Permanent client-side rejection (4xx other than 401/403/429): the
+  /// 402: the workspace is over its plan or unpaid. Nothing is wrong with the
+  /// payload and the account can be topped up at any time, so the data is
+  /// kept and uploads pause for a long window ([paymentBackoff], or the
+  /// server's `Retry-After`). Before 2.7.4 this counted as [rejected] and
+  /// every batch sent during the lapse was dropped.
+  bool get isPaymentRequired => status == 402;
+
+  /// Upload pause after a 402 when the server sends no `Retry-After`.
+  static const Duration paymentBackoff = Duration(minutes: 15);
+
+  /// Permanent client-side rejection (4xx other than 401/402/403/429): the
   /// payload is malformed for this server and must not be retried.
   bool get rejected =>
       status != null &&
       status! >= 400 &&
       status! < 500 &&
       status != 429 &&
+      !isPaymentRequired &&
       !isAuthFailure;
 
   /// Parsed `Retry-After` header (seconds form only), if the server sent one.
@@ -124,16 +135,30 @@ class ApiClient {
     return GZipCodec().encode(bytes);
   }
 
+  /// Request bodies estimated above this many bytes are JSON-encoded and
+  /// gzipped on a background isolate ([compute]) instead of the UI isolate.
+  /// Below it, spawning the isolate costs more than the work.
+  static const int offIsolateEncodeThreshold = 64 * 1024;
+
   /// One attempt, never throws. Every failure mode the HTTP stack can
   /// produce — [TimeoutException], [http.ClientException], and the whole
   /// [IOException] family (SocketException, HttpException,
   /// HandshakeException, "Connection closed before full header") — is turned
   /// into an [ApiResult] with a null status so the scheduler can back off
   /// instead of the error surfacing in the host app as a crash.
-  Future<ApiResult> _post(String path, Map<String, dynamic> body) async {
+  ///
+  /// [approxBytes] is the caller's estimate of the encoded size; large
+  /// bodies are encoded off the UI isolate (see [offIsolateEncodeThreshold]).
+  Future<ApiResult> _post(String path, Map<String, dynamic> body,
+      {int approxBytes = 0}) async {
     final url = Uri.parse('$apiUrl$path');
     try {
-      final bodyBytes = _gzip(utf8.encode(jsonEncode(body)));
+      final List<int> bodyBytes;
+      if (!kIsWeb && approxBytes > offIsolateEncodeThreshold) {
+        bodyBytes = await compute(encodeGzipJson, body);
+      } else {
+        bodyBytes = _gzip(utf8.encode(jsonEncode(body)));
+      }
       final resp = await _client
           .post(url, headers: _headers, body: bodyBytes)
           .timeout(requestTimeout);
@@ -172,8 +197,9 @@ class ApiClient {
         'events': events,
       });
 
-  Future<ApiResult> ingestSnapshots(Map<String, dynamic> payload) =>
-      _post('/v1/ingest/snapshots', payload);
+  Future<ApiResult> ingestSnapshots(Map<String, dynamic> payload,
+          {int approxBytes = 0}) =>
+      _post('/v1/ingest/snapshots', payload, approxBytes: approxBytes);
 
   /// Reserves upload slots for one batch. [format] is the encoding of every
   /// frame in the batch (see [screenshotFormatOf]); the API stores the frames
@@ -278,6 +304,11 @@ class ApiClient {
 
   void dispose() => _client.close();
 }
+
+/// JSON-encodes and gzips [body]. Top level so [compute] can run it on a
+/// background isolate. Native platforms only (uses `dart:io`).
+List<int> encodeGzipJson(Map<String, dynamic> body) =>
+    GZipCodec().encode(utf8.encode(jsonEncode(body)));
 
 /// The encoding of a captured frame, from its leading bytes: `jpeg` (native
 /// capture on Android and iOS), `png` (the Dart fallback on web, desktop and

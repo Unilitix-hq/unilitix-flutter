@@ -1,4 +1,4 @@
-// VENDORED from UnilitixCore 0.7.0 (ScreenshotStore.swift) by scripts/sync-ios-core.sh.
+// VENDORED from UnilitixCore 0.7.2 (ScreenshotStore.swift) by scripts/sync-ios-core.sh.
 // Do not edit here; change UnilitixCore and re-run the script.
 
 import Foundation
@@ -39,12 +39,25 @@ final class ScreenshotStore {
     private var totalBytes = 0
     /// JPEG data when there is no directory (tests).
     private var memory: [String: Data] = [:]
+    private var loaded = false
 
-    /// `directory` nil keeps everything in memory (tests).
-    init(directory: URL?, maxBytes: Int = ScreenshotStore.defaultMaxBytes, now: Date = Date()) {
+    /// `directory` nil keeps everything in memory (tests). With
+    /// `loadImmediately` false the directory is scanned by `loadFromDisk()`,
+    /// so `Unilitix.start` does no file I/O on the caller's thread.
+    init(directory: URL?, maxBytes: Int = ScreenshotStore.defaultMaxBytes, now: Date = Date(),
+         loadImmediately: Bool = true) {
         self.maxBytes = max(1, maxBytes)
         root = directory
-        if let dir = directory {
+        if loadImmediately { loadFromDisk(now: now) }
+    }
+
+    /// Prepares the directory and indexes the frames left by earlier
+    /// launches, once. Frames added before are kept.
+    func loadFromDisk(now: Date = Date()) {
+        withLock {
+            guard !loaded else { return }
+            loaded = true
+            guard let dir = root else { return }
             try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
             var url = dir
             var values = URLResourceValues()
@@ -210,10 +223,12 @@ final class ScreenshotStore {
         }
     }
 
+    /// Call with the lock held.
     private func load(now: Date) {
         guard let dir = root,
               let sessions = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
-        var loaded: [PendingScreenshot] = []
+        let early = frames  // added before loading (also on disk)
+        var found: [PendingScreenshot] = []
         for sessionDir in sessions {
             guard ScreenshotStore.isSafe(sessionDir.lastPathComponent),
                   let files = try? fm.contentsOfDirectory(at: sessionDir, includingPropertiesForKeys: nil) else {
@@ -232,7 +247,7 @@ final class ScreenshotStore {
                     continue
                 }
                 images.remove(name)
-                loaded.append(meta)
+                found.append(meta)
             }
             // Images without metadata are incomplete writes or expired frames.
             for name in images {
@@ -242,7 +257,9 @@ final class ScreenshotStore {
                 try? fm.removeItem(at: sessionDir)
             }
         }
-        frames = loaded.sorted {
+        var merged = found.filter { f in !early.contains { $0.sessionId == f.sessionId && $0.ordinal == f.ordinal } }
+        merged.append(contentsOf: early)
+        frames = merged.sorted {
             $0.capturedAt == $1.capturedAt ? $0.ordinal < $1.ordinal : $0.capturedAt < $1.capturedAt
         }
         recountLocked()

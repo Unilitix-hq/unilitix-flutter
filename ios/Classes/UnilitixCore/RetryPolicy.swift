@@ -1,4 +1,4 @@
-// VENDORED from UnilitixCore 0.7.0 (RetryPolicy.swift) by scripts/sync-ios-core.sh.
+// VENDORED from UnilitixCore 0.7.2 (RetryPolicy.swift) by scripts/sync-ios-core.sh.
 // Do not edit here; change UnilitixCore and re-run the script.
 
 import Foundation
@@ -9,7 +9,7 @@ import Foundation
 enum UploadOutcome: Equatable {
     /// 2xx (and 409, a duplicate the server already has): delete the batch.
     case accepted
-    /// No response, 429 or 5xx: keep the data and back off.
+    /// No response, 408 (request timeout), 429 or 5xx: keep the data and back off.
     case retry(after: TimeInterval)
     /// 401/403: the key is wrong. Keep the data, pause uploads until restart.
     case authFailure
@@ -45,7 +45,7 @@ enum RetryPolicy {
             return .accepted
         case 401, 403:
             return .authFailure
-        case 429, 500...:
+        case 408, 429, 500...:
             return .retry(after: delay(attempt: attempt, retryAfterSeconds: retryAfter(headers)))
         case 400..<500:
             return .rejected

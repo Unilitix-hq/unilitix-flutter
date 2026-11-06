@@ -14,7 +14,28 @@ import '../privacy/privacy_mask.dart';
 /// Widgets that match none of these fall back to their runtime type name,
 /// which is right for unobfuscated builds and harmless (not renderable) for
 /// obfuscated ones.
+///
+/// Every test is an `is` check, which depends only on the widget's runtime
+/// type, so the answer is cached per [Type]: the wireframe walk visits
+/// thousands of elements a second and most share a few hundred types.
 String widgetKind(Widget w) {
+  final type = w.runtimeType;
+  final cached = _kindCache[type];
+  if (cached != null) return cached;
+  final kind = _computeKind(w);
+  // Bounded so an app that generates types without limit (generic widgets
+  // instantiated over many type arguments) cannot grow it forever.
+  if (_kindCache.length < _kKindCacheMax) _kindCache[type] = kind;
+  return kind;
+}
+
+const int _kKindCacheMax = 4096;
+final Map<Type, String> _kindCache = <Type, String>{};
+
+/// Number of cached widget types; for tests.
+int get widgetKindCacheSize => _kindCache.length;
+
+String _computeKind(Widget w) {
   for (final k in _kinds) {
     if (k.test(w)) return k.name;
   }
