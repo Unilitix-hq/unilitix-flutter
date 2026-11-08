@@ -1,4 +1,4 @@
-// VENDORED from UnilitixCore 0.7.2 (Engine.swift) by scripts/sync-ios-core.sh.
+// VENDORED from UnilitixCore 0.8.0 (Engine.swift) by scripts/sync-ios-core.sh.
 // Do not edit here; change UnilitixCore and re-run the script.
 
 import Foundation
@@ -22,11 +22,38 @@ final class Engine {
     private let log: (String) -> Void
 
     private(set) var consent: UnilitixConsent
-    private var session: SessionInfo?
+    private var session: SessionInfo? {
+        // Published for `currentSessionId` (any thread).
+        didSet {
+            let id = session?.id
+            sessionLock.lock(); publishedSessionId = id; sessionLock.unlock()
+        }
+    }
     private var backgroundedAt: Date?
     private var screen = ""
     private let rageTaps = RageTapDetector()
     private var seq = 0
+    /// Identify requests not yet acknowledged (persisted in `prefs`), sent
+    /// in order, one at a time.
+    private var identifyInFlight = false
+    /// Event batches sent in the current flush cycle (the cycle drains the
+    /// queue while each request succeeds).
+    private var batchPasses = 0
+    /// The network was offline at the last change (`networkChanged`).
+    private var wasOffline = false
+    /// This flush cycle also sends session records without events.
+    private var sendRecordUpdates = false
+    static let maxBatchesPerCycle = 50
+    /// Infers out-of-memory and watchdog terminations of the previous run
+    /// (nil: off, e.g. in tests and app extensions).
+    let terminationTracker: TerminationTracker?
+    /// Frames from `addExternalScreenshot` in the last minute
+    /// (`maxScreenshotsPerMinute` also applies to wrapper frames).
+    private var externalFrameTimes: [Date] = []
+    /// Largest wrapper-supplied frame or snapshot accepted.
+    static let maxExternalFrameBytes = 4 * 1024 * 1024
+    static let maxExternalSnapshotBytes = 1024 * 1024
+    private let queueKey = DispatchSpecificKey<Bool>()
 
     // Upload state (contract: one request per cycle, backoff window, auth latch).
     // `inFlight` covers event batches and screenshot passes alike.
@@ -43,7 +70,13 @@ final class Engine {
     // Session replay. `replaySampled`, `screenshotCount` and `snapshotCount`
     // belong to the current session; the gates are what the main-thread
     // capturers read. One sampling decision covers screenshots and snapshots.
-    private var replaySampled = false
+    private var replaySampled = false {
+        didSet { let v = replaySampled; replayLock.lock(); publishedReplaySampled = v; replayLock.unlock() }
+    }
+    private var publishedReplaySampled = false
+    /// A wrapper supplies the frames (`setExternalScreenCapture`): the UIKit
+    /// capturer stays idle. Under `replayLock`.
+    private var externalScreenCapture = false
     private var screenshotCount = 0
     private var snapshotCount = 0
     private let replayLock = NSLock()
@@ -73,6 +106,8 @@ final class Engine {
     /// Read by the crash handler without going through `queue`.
     private let sessionLock = NSLock()
     private var crashSessionId: String?
+    /// `session?.id`, for `currentSessionId` on any thread.
+    private var publishedSessionId: String?
 
     /// Where `CrashFile`'s signal handlers write; nil when not used.
     private let crashFilePath: String?
@@ -97,6 +132,7 @@ final class Engine {
          now: @escaping () -> Date = Date.init,
          crashFilePath: String? = nil,
          appHangFilePath: String? = nil,
+         terminationTracker: TerminationTracker? = nil,
          log: @escaping (String) -> Void = { _ in }) {
         self.config = config
         self.transport = transport
@@ -113,8 +149,13 @@ final class Engine {
         self.consent = prefs.consent ?? consent
         self.crashFilePath = crashFilePath
         self.appHangFilePath = appHangFilePath
+        self.terminationTracker = terminationTracker
         store.log = log
+        queue.setSpecific(key: queueKey, value: true)
     }
+
+    /// True on `queue`.
+    var isOnQueue: Bool { DispatchQueue.getSpecific(key: queueKey) == true }
 
     // MARK: Lifecycle
 
@@ -134,11 +175,24 @@ final class Engine {
     }
 
     /// Starts the first session and the flush timer. Call on `queue`.
+    ///
+    /// Uploads happen on the contract's triggers only (the flush interval,
+    /// `flushBatchSize` queued events, entering the background, `flush()`),
+    /// plus once here when an earlier launch left data on the device (a
+    /// crash report should not wait for the first interval). 0.7.x always
+    /// flushed here.
     func start() {
         loadPersistedState()
         // Before the new session: the crash (or hang) belongs to the one that died.
+        let hadHang = pendingAppHang != nil
+        let hadCrash = nativeCrash != nil
         let unattributed = reportNativeCrash()
         let unattributedHang = reportPendingAppHang()
+        let termination = reportPreviousTermination(crashed: hadCrash, hung: hadHang)
+        // Events from earlier launches (including reports just filed against
+        // their sessions) are sent right away.
+        let backlog = store.nextBatch(limit: 1, includeRecordOnly: false) != nil
+            || unattributed != nil || unattributedHang != nil || termination != nil
         if consent != .denied { startSession() }
         if let e = unattributed, var s = session {
             s.crashed = true
@@ -146,13 +200,27 @@ final class Engine {
             emit(e)
         }
         if let e = unattributedHang, session != nil { emit(e) }
+        if let e = termination, session != nil { emit(e) }
+        terminationTracker?.setSession(session?.id)
+        wasOffline = reachability.isOffline
+        reachability.setChangeHandler { [weak self] in
+            guard let self = self else { return }
+            self.queue.async { self.networkChanged() }
+        }
         let t = DispatchSource.makeTimerSource(queue: queue)
         let interval = DispatchTimeInterval.seconds(max(1, config.flushIntervalSeconds))
         t.schedule(deadline: .now() + interval, repeating: interval)
         t.setEventHandler { [weak self] in self?.flush() }
         t.resume()
         timer = t
-        flush()
+        if backlog { flush() }
+    }
+
+    /// Back online: send what was held. Call on `queue`.
+    func networkChanged() {
+        let offline = reachability.isOffline
+        defer { wasOffline = offline }
+        if wasOffline && !offline { flush() }
     }
 
     func stop() {
@@ -162,15 +230,23 @@ final class Engine {
 
     func didEnterBackground() {
         backgroundedAt = now()
+        terminationTracker?.setForeground(false)
         touchSession()
-        flush()
+        flush(recordUpdates: true)
+        store.saveNow()
+    }
+
+    /// The app is about to be terminated normally: persist the queue now,
+    /// on the calling thread (the main thread has a few seconds).
+    func willTerminate() {
+        terminationTracker?.markCleanExit()
         store.saveNow()
     }
 
     /// Calls `done` on `queue` once no upload is in flight, or after
     /// `timeout` seconds. Call on `queue`.
     func whenUploadsIdle(timeout: TimeInterval, _ done: @escaping () -> Void) {
-        guard inFlight, timeout > 0 else { done(); return }
+        guard inFlight || identifyInFlight, timeout > 0 else { done(); return }
         let step = 0.25
         queue.asyncAfter(deadline: .now() + step) { [weak self] in
             guard let self = self else { done(); return }
@@ -180,9 +256,12 @@ final class Engine {
 
     func willEnterForeground() {
         let t = now()
+        terminationTracker?.setForeground(true)
+        // Contract: more than `sessionTimeoutSeconds` in the background.
         if let bg = backgroundedAt,
-           t.timeIntervalSince(bg) >= TimeInterval(config.sessionTimeoutSeconds) {
+           t.timeIntervalSince(bg) > TimeInterval(config.sessionTimeoutSeconds) {
             startSession()
+            terminationTracker?.setSession(session?.id)
         }
         backgroundedAt = nil
         flush()
@@ -190,14 +269,39 @@ final class Engine {
 
     var sessionId: String? { session?.id }
 
+    /// The current session id, from any thread (nil before the first
+    /// session, after `endSession` and with consent denied).
+    var currentSessionId: String? {
+        sessionLock.lock(); defer { sessionLock.unlock() }
+        return publishedSessionId
+    }
+
+    /// Whether the current session records replay (screenshots and
+    /// snapshots), from any thread. False without a session.
+    var isReplaySampled: Bool {
+        guard currentSessionId != nil else { return false }
+        replayLock.lock(); defer { replayLock.unlock() }
+        return publishedReplaySampled
+    }
+
+    // Read on `queue` by tests (the behaviour-fixture runner's state hook).
+    var currentScreen: String { screen }
+    var replaySampledNow: Bool { replaySampled }
+    var anonymousIdNow: String { prefs.anonymousId }
+    var userIdNow: String? { prefs.customUserId }
+
     /// Starts a new session now. Also used when the app returns after the timeout.
     func startSession() {
         guard consent != .denied else { return }
         let t = now()
         let info = SessionInfo(id: UUID().uuidString.lowercased(), startedAt: t, lastActivityAt: t,
-                               crashed: false, customUserId: prefs.customUserId)
+                               crashed: false, customUserId: prefs.customUserId,
+                               anonymousId: prefs.anonymousId)
         session = info
         seq = 0
+        // Contract: a new session starts with no screen.
+        screen = ""
+        externalFrameTimes = []
         seenFingerprints = [:]
         errorReports = 0
         screenshotCount = 0
@@ -216,7 +320,7 @@ final class Engine {
     /// Ends the current session and uploads it; the next event starts a new one.
     func endSession() {
         touchSession()
-        flush()
+        flush(recordUpdates: true)
         store.saveNow()
         session = nil
         publishReplayGate()
@@ -231,21 +335,29 @@ final class Engine {
 
     // MARK: Capture
 
+    /// A CUSTOM event. The name and properties are normalised to the
+    /// contract's limits (`PropertyNormalizer`).
     func track(_ name: String, properties: [String: Any]) {
+        let n = PropertyNormalizer.string(name)
         var e = IngestEvent(type: "CUSTOM", screen: screen, at: now())
-        e.metadata = ["name": .string(name)]
-        if !properties.isEmpty { e.properties = JSONValue.objectMap(from: properties) }
-        breadcrumbs.add(type: "CUSTOM", screen: screen, message: name)
+        e.metadata = ["name": .string(n)]
+        if !properties.isEmpty { e.properties = PropertyNormalizer.properties(properties) }
+        breadcrumbs.add(type: "CUSTOM", screen: screen, message: n)
         emit(e)
     }
 
-    /// `automatic` views (from view controllers) skip a repeat of the current
-    /// screen, e.g. a child appearing again after a modal is dismissed.
+    /// A NAVIGATE event, unless `name` is already the session's current
+    /// screen (contract 1.4.0: consecutive duplicates are dropped, manual
+    /// calls included; 0.7.x deduplicated automatic views only). A new
+    /// session starts with no screen, so its first view always counts.
+    /// `automatic` is kept for callers; both kinds dedupe.
     func screenView(_ name: String, automatic: Bool = false) {
-        if automatic && name == screen { return }
-        screen = name
-        breadcrumbs.add(type: "NAVIGATE", screen: name)
-        emit(IngestEvent(type: "NAVIGATE", screen: name, at: now()))
+        let n = PropertyNormalizer.string(name)
+        if session == nil && consent != .denied { startSession() }  // after endSession()
+        if n == screen { return }
+        screen = n
+        breadcrumbs.add(type: "NAVIGATE", screen: n)
+        emit(IngestEvent(type: "NAVIGATE", screen: n, at: now()))
         publishReplayGate()
     }
 
@@ -292,6 +404,7 @@ final class Engine {
         }
         emit(e)
         if fatal {
+            terminationTracker?.markCrashed()
             store.saveNow()
             flush()
         }
@@ -313,6 +426,7 @@ final class Engine {
         let sid = crashSessionId
         sessionLock.unlock()
         guard consent != .denied else { return true }
+        terminationTracker?.markCrashed()
         guard let sessionId = sid else { return false }
         guard let e = errorEvent(type: type, message: message, stack: stack, fatal: true, checkCaps: false,
                                  platform: "ios", debugImages: debugImages) else {
@@ -406,8 +520,9 @@ final class Engine {
     }
 
     private func errorEvent(type: String, message: String, stack: String?, fatal: Bool,
-                            checkCaps: Bool, platform: String, debugImages: [DebugImage]?) -> IngestEvent? {
-        let fp = Fingerprint.of(type, stack: stack)
+                            checkCaps: Bool, platform: String, debugImages: [DebugImage]?,
+                            fingerprint: String? = nil) -> IngestEvent? {
+        let fp = fingerprint ?? Fingerprint.of(type, stack: stack)
         if checkCaps, !passesErrorCaps(fp) { return nil }
         var e = IngestEvent(type: fatal ? "CRASH" : "EXCEPTION", screen: breadcrumbs.lastScreen, at: now())
         e.fatal = fatal
@@ -545,6 +660,10 @@ final class Engine {
         var e = event
         e.seq = seq
         seq += 1
+        // Contract 1.4.0: the network when the event was captured.
+        let network = reachability.networkType
+        if e.networkAtCapture == nil { e.networkAtCapture = network }
+        if e.capturedOffline == nil { e.capturedOffline = network == NetworkType.offline }
         // JSON has no NaN or infinity (JSONEncoder throws on them).
         if let x = e.x, !x.isFinite { e.x = nil }
         if let y = e.y, !y.isFinite { e.y = nil }
@@ -628,20 +747,231 @@ final class Engine {
         return ordinal
     }
 
+    // MARK: Wrapper SDKs (Flutter, React Native)
+    //
+    // Engine-level entry points for plugins that vendor these sources and
+    // drive the engine directly; the public `Unilitix` facade forwards to
+    // them. See README "Wrapper SDKs".
+
+    /// Names the SDK that embeds this engine (e.g. "flutter", "3.0.0"): the
+    /// session's `sdkVersion` and the User-Agent carry the wrapper's version,
+    /// `sessionData` both versions. Any thread; call before `start`.
+    static func setWrapper(name: String, version: String) {
+        UnilitixVersion.setWrapper(name: name, version: version)
+    }
+
+    /// A wrapper supplies replay frames (`addExternalScreenshot`): with
+    /// `enabled`, the UIKit capturer takes no screenshots. Any thread.
+    func setExternalScreenCapture(_ enabled: Bool) {
+        replayLock.lock(); externalScreenCapture = enabled; replayLock.unlock()
+    }
+
+    /// Any thread.
+    var isExternalScreenCaptureEnabled: Bool {
+        replayLock.lock(); defer { replayLock.unlock() }
+        return externalScreenCapture
+    }
+
+    /// A handled error (or, with `fatal`, a crash) raised in the wrapper's
+    /// runtime (Dart, JavaScript): as `recordError`, plus the wrapper's own
+    /// `fingerprint` (else computed from type and stack) and `metadata`
+    /// (normalised; e.g. React Native's `jsBundleId`, `release`, `dist`).
+    /// `fingerprint` and `platform` in `metadata` are ignored: the
+    /// arguments win. Call on `queue`.
+    func recordExternalError(type: String, message: String, stackTrace: String?, fatal: Bool, platform: String,
+                             fingerprint: String? = nil, metadata: [String: Any]? = nil) {
+        let fp = fingerprint.flatMap { $0.isEmpty ? nil : PropertyNormalizer.string($0) }
+        let extra = metadata.map { PropertyNormalizer.properties($0) }
+        guard var e = errorEvent(type: type, message: message, stack: stackTrace, fatal: fatal, checkCaps: true,
+                                 platform: platform, debugImages: nil, fingerprint: fp) else { return }
+        if let extra = extra, !extra.isEmpty {
+            var m = extra
+            for (k, v) in e.metadata ?? [:] { m[k] = v }
+            e.metadata = m
+        }
+        if fatal, var s = session {
+            s.crashed = true
+            session = s
+        }
+        emit(e)
+        if fatal {
+            terminationTracker?.markCrashed()
+            store.saveNow()
+            flush()
+        }
+    }
+
+    /// A replay frame the wrapper drew and masked itself (JPEG), through the
+    /// normal pipeline: only when `captureScreenshots` is on, consent is not
+    /// denied and the session is sampled, within `maxScreenshotsPerSession`
+    /// and `maxScreenshotsPerMinute`; uploaded like native frames (Wi-Fi
+    /// only by default). `width`/`height` are the viewport in points;
+    /// `screen` nil uses the current screen. Returns the frame's ordinal, or
+    /// nil when it was not kept. Call on `queue`.
+    @discardableResult
+    func addExternalScreenshot(_ jpeg: Data, width: Int, height: Int, capturedAt: Date,
+                               screen frameScreen: String?) -> Int? {
+        guard !jpeg.isEmpty, jpeg.count <= Engine.maxExternalFrameBytes,
+              config.captureScreenshots, consent != .denied, replaySampled, let s = session else { return nil }
+        let t = now()
+        externalFrameTimes.removeAll { t.timeIntervalSince($0) >= 60 || $0 > t }
+        guard externalFrameTimes.count < max(1, config.maxScreenshotsPerMinute) else {
+            log("wrapper frame dropped (maxScreenshotsPerMinute)")
+            return nil
+        }
+        let name = frameScreen.map { PropertyNormalizer.string($0) } ?? screen
+        guard let ordinal = addScreenshot(jpeg, sessionId: s.id, screen: name, capturedAt: capturedAt,
+                                          viewportWidth: max(0, width), viewportHeight: max(0, height)) else {
+            return nil
+        }
+        externalFrameTimes.append(t)
+        return ordinal
+    }
+
+    /// A view-tree snapshot the wrapper built (and masked) itself, as JSON:
+    /// either the snapshot, `{"hierarchy": {…}, "screenName"?: "…",
+    /// "viewportWidth"?: n, "viewportHeight"?: n, "capturedAt"?: "<RFC 3339>"
+    /// | "timestampMs"?: n}`, or the bare hierarchy (its `bounds.w`/`bounds.h`
+    /// give the viewport). The hierarchy is sent as given. Same gates as
+    /// native snapshots. Returns the ordinal, or nil when it was not kept.
+    /// Call on `queue`.
+    @discardableResult
+    func addExternalSnapshot(json: String) -> Int? {
+        guard config.captureSnapshots, consent != .denied, replaySampled, let s = session,
+              snapshotCount < config.maxSnapshotsPerSession else { return nil }
+        let data = Data(json.utf8)
+        guard data.count <= Engine.maxExternalSnapshotBytes,
+              let parsed = try? JSONDecoder().decode(JSONValue.self, from: data),
+              case .object(let root) = parsed else {
+            log("wrapper snapshot is not a JSON object; dropped")
+            return nil
+        }
+        let hierarchy: [String: JSONValue]
+        if case .object(let h)? = root["hierarchy"] { hierarchy = h } else { hierarchy = root }
+        func int(_ v: JSONValue?) -> Int? {
+            switch v {
+            case .int(let n)?: return Int(clamping: n)
+            case .number(let d)? where d.isFinite && abs(d) < 1e9: return Int(d)
+            default: return nil
+            }
+        }
+        var bounds: [String: JSONValue] = [:]
+        if case .object(let b)? = hierarchy["bounds"] { bounds = b }
+        let width = int(root["viewportWidth"]) ?? int(bounds["w"]) ?? 0
+        let height = int(root["viewportHeight"]) ?? int(bounds["h"]) ?? 0
+        var capturedAt = now()
+        if case .string(let iso)? = root["capturedAt"], let d = ISO8601.date(from: iso) { capturedAt = d }
+        if let ms = int(root["timestampMs"]) ?? int(root["timestamp"]) {
+            capturedAt = Date(timeIntervalSince1970: Double(ms) / 1000)
+        }
+        var name = screen
+        if case .string(let n)? = root["screenName"] ?? root["screen"] { name = PropertyNormalizer.string(n) }
+        let ordinal = snapshotCount
+        snapshotCount += 1
+        var snap = PendingSnapshot(sessionId: s.id, ordinal: ordinal, screenName: name, capturedAt: capturedAt,
+                                   viewportWidth: max(0, width), viewportHeight: max(0, height),
+                                   hierarchy: SnapshotNode(type: "External",
+                                                           bounds: SnapshotBounds(x: 0, y: 0, w: width, h: height)))
+        snap.rawHierarchy = .object(hierarchy)
+        if !snapshots.add(snap) { log("snapshot \(ordinal) could not be stored") }
+        if snapshotCount >= config.maxSnapshotsPerSession { publishReplayGate() }
+        return ordinal
+    }
+
+    // MARK: Out-of-memory and watchdog terminations
+
+    /// The previous run ended in the foreground without a crash record, a
+    /// clean exit, an app or OS update, a reboot or a debugger
+    /// (`TerminationTracker`): reported as a non-fatal `EXCEPTION`, type
+    /// `OutOfMemory` (or `WatchdogTermination` when MetricKit points that
+    /// way), `metadata.inferredTermination`. The contract has no event type
+    /// for it yet. A hang the app did not survive is already reported as an
+    /// `ANR` with `appTerminated`, so it is not reported twice. Goes to the
+    /// session that was running when it is still stored; otherwise returned
+    /// for `start` to emit in the new session. Call on `queue`, before the
+    /// new session starts.
+    private func reportPreviousTermination(crashed: Bool, hung: Bool) -> IngestEvent? {
+        guard let tracker = terminationTracker else { return nil }
+        guard let t = tracker.begin(crashRecordFound: crashed, hangRecordFound: hung) else { return nil }
+        guard consent != .denied else { return nil }
+        let e = Engine.terminationEvent(t)
+        guard let id = t.sessionId, store.append(e, sessionId: id) else { return e }
+        store.saveNow()
+        log("\(t.kind.rawValue) termination of the previous run reported against session \(id)")
+        return nil
+    }
+
+    static func terminationEvent(_ t: InferredTermination) -> IngestEvent {
+        let type = t.kind == .watchdog ? "WatchdogTermination" : "OutOfMemory"
+        let message = t.kind == .watchdog
+            ? "The system terminated the app in the foreground (watchdog), inferred on the next launch"
+            : "The system terminated the app in the foreground, most likely for using too much memory; inferred on the next launch"
+        var e = IngestEvent(type: "EXCEPTION", screen: t.screen ?? "", at: t.lastSeenAt)
+        e.fatal = false
+        e.title = "\(type): \(message)"
+        e.exceptionType = type
+        e.exceptionMessage = message
+        var metadata: [String: JSONValue] = [
+            "fingerprint": .string(Fingerprint.of(type, stack: nil)),
+            "platform": .string("ios"),
+            "inferredTermination": .string(t.kind.rawValue),
+            "appTerminated": .bool(true),
+        ]
+        if t.memoryWarning { metadata["memoryWarning"] = .bool(true) }
+        if let mk = t.metricKit { metadata["metricKitForegroundExits"] = .object(mk) }
+        e.metadata = metadata
+        return e
+    }
+
     // MARK: Identity and consent
 
+    /// Links the anonymous id to `userId` (normalised, like `traits`):
+    /// `POST /v1/ingest/identify`, once. The request is kept on the device
+    /// (`Preferences.pendingIdentifies`) until the API answers it: held while
+    /// consent is pending, offline, paused or backing off, resent after a
+    /// retryable failure, dropped with consent denied.
     func identify(_ userId: String, traits: [String: Any]) {
-        prefs.customUserId = userId
+        guard consent != .denied else { return }
+        let uid = PropertyNormalizer.string(userId)
+        prefs.customUserId = uid
         if var s = session {
-            s.customUserId = userId
+            s.customUserId = uid
             session = s
             store.upsertSession(s)
         }
-        guard consent == .granted, !authRejected else { return }
-        let body = IdentifyRequest(anonymousId: prefs.anonymousId, customUserId: userId,
-                                   traits: traits.isEmpty ? nil : JSONValue.objectMap(from: traits))
-        if let data = try? JSONEncoder().encode(body) {
-            transport.post("/v1/ingest/identify", body: data) { _, _ in }
+        let body = IdentifyRequest(anonymousId: prefs.anonymousId, customUserId: uid,
+                                   traits: traits.isEmpty ? nil : PropertyNormalizer.properties(traits))
+        var pending = prefs.pendingIdentifies
+        pending.append(body)
+        // Bounded: the latest links matter most.
+        if pending.count > Engine.maxPendingIdentifies { pending.removeFirst(pending.count - Engine.maxPendingIdentifies) }
+        prefs.pendingIdentifies = pending
+        sendPendingIdentifies()
+    }
+
+    static let maxPendingIdentifies = 20
+
+    /// Sends the oldest held identify request, then the next once it is
+    /// answered. Same gates as event uploads. Call on `queue`.
+    private func sendPendingIdentifies() {
+        guard !identifyInFlight, canUpload(now()), let next = prefs.pendingIdentifies.first,
+              let data = try? JSONEncoder().encode(next) else { return }
+        identifyInFlight = true
+        transport.post("/v1/ingest/identify", body: data) { [weak self] status, headers in
+            self?.queue.async { self?.handleIdentify(status: status, headers: headers, sent: next) }
+        }
+    }
+
+    private func handleIdentify(status: Int?, headers: [String: String], sent: IdentifyRequest) {
+        identifyInFlight = false
+        switch note(status: status, headers: headers, what: "identify") {
+        case .accepted, .rejected:
+            var pending = prefs.pendingIdentifies
+            if let i = pending.firstIndex(of: sent) { pending.remove(at: i) }
+            prefs.pendingIdentifies = pending
+            sendPendingIdentifies()
+        case .retry, .paused, .authFailure:
+            break  // kept for the next flush
         }
     }
 
@@ -654,6 +984,7 @@ final class Engine {
             store.purge()
             screenshots.purge()
             snapshots.purge()
+            prefs.pendingIdentifies = []
             // The user id identify() stored goes with the data; a later
             // grant starts unidentified until the app calls identify again.
             prefs.customUserId = nil
@@ -669,22 +1000,51 @@ final class Engine {
         publishReplayGate()
     }
 
-    /// New anonymous identity and a new session (e.g. on logout).
+    /// New anonymous identity and a new session (e.g. on logout). Events
+    /// already captured keep their session and ids (each stored session
+    /// carries the anonymous and user id it started with).
     func reset() {
         prefs.customUserId = nil
         prefs.anonymousId = UUID().uuidString.lowercased()
         startSession()
+        terminationTracker?.setSession(session?.id)
     }
 
     // MARK: Upload
 
-    func flush() {
-        guard consent == .granted, !authRejected, !inFlight else { return }
-        if let until = backoffUntil, now() < until { return }
+    /// Contract gates for any upload: consent granted, not paused by
+    /// 401/403, online (unknown counts as online), outside the backoff
+    /// window (402 pauses use it too).
+    private func canUpload(_ t: Date) -> Bool {
+        guard consent == .granted, !authRejected, !reachability.isOffline else { return false }
+        if let until = backoffUntil, t < until { return false }
+        return true
+    }
+
+    /// One upload cycle: held identify requests, then the event queue
+    /// (drained batch by batch while each request succeeds), then
+    /// snapshots and screenshots.
+    ///
+    /// A session request carries events: a change to a session record alone
+    /// (its duration, the user id) rides with the next events, and is sent
+    /// on its own only with `recordUpdates` (entering the background,
+    /// `endSession`), as in the contract's reference model.
+    func flush(recordUpdates: Bool = false) {
+        guard canUpload(now()) else { return }
+        sendPendingIdentifies()
+        guard !inFlight else { return }
         screenshotPasses = 0
         snapshotPasses = 0
+        batchPasses = 0
+        sendRecordUpdates = recordUpdates
         touchSession()
-        guard let batch = store.nextBatch(limit: config.flushBatchSize) else {
+        uploadNextBatch()
+    }
+
+    private func uploadNextBatch() {
+        guard !inFlight, canUpload(now()) else { return }
+        guard batchPasses < Engine.maxBatchesPerCycle,
+              let batch = store.nextBatch(limit: config.flushBatchSize, includeRecordOnly: sendRecordUpdates) else {
             uploadSnapshots()
             return
         }
@@ -706,7 +1066,7 @@ final class Engine {
             }
             for e in bad { store.drop(eventId: e.eventId, sessionId: batch.session.id) }
             log("\(bad.count) event(s) could not be encoded as JSON; dropped")
-            flush()
+            uploadNextBatch()
             return
         }
         if data.count > SdkContract.maxRequestBytes, let only = events.first {
@@ -715,6 +1075,7 @@ final class Engine {
             return
         }
 
+        batchPasses += 1
         inFlight = true
         let sent = Batch(batch: batch, events: events)
         transport.post("/v1/ingest/session", body: data) { [weak self] status, headers in
@@ -732,16 +1093,13 @@ final class Engine {
         switch note(status: status, headers: headers, what: "upload") {
         case .accepted:
             store.acknowledge(sent.batch, eventIds: Set(sent.events.map { $0.eventId }), keep: session?.id)
-            if store.nextBatch(limit: 1) != nil, store.eventCount >= config.flushBatchSize {
-                flush()
-            } else {
-                uploadSnapshots()
-            }
-        case .retry, .authFailure:
+            uploadNextBatch()  // the rest of the queue, then replay
+        case .retry, .paused, .authFailure:
             break
         case .rejected:
             log("batch rejected by the API (\(status ?? 0)); dropped")
             store.acknowledge(sent.batch, eventIds: Set(sent.events.map { $0.eventId }), keep: session?.id)
+            uploadNextBatch()
         }
     }
 
@@ -756,6 +1114,10 @@ final class Engine {
             failures += 1
             backoffUntil = now().addingTimeInterval(after)
             log("\(what) failed (\(status.map { "HTTP \($0)" } ?? "no response")); retrying in \(Int(after))s")
+        case .paused(let after):
+            // 402: the data stays; uploads pause. Not counted as a failure.
+            backoffUntil = now().addingTimeInterval(after)
+            log("\(what): HTTP 402 (quota); uploads paused for \(Int(after))s")
         case .authFailure:
             authRejected = true
             log("API key rejected (\(status ?? 0)). Uploads paused until the app restarts; data stays on the device.")
@@ -768,7 +1130,7 @@ final class Engine {
     private func encode(_ s: SessionInfo, _ events: [IngestEvent]) -> Data? {
         let req = IngestSessionRequest(
             sessionId: s.id,
-            anonymousId: prefs.anonymousId,
+            anonymousId: s.anonymousId ?? prefs.anonymousId,
             installId: prefs.installId,
             customUserId: s.customUserId,
             sdkVersion: UnilitixVersion.reported,
@@ -788,6 +1150,7 @@ final class Engine {
             startedAt: ISO8601.string(from: s.startedAt),
             durationMs: Int64(max(0, s.lastActivityAt.timeIntervalSince(s.startedAt)) * 1000),
             crashed: s.crashed,
+            sessionData: UnilitixVersion.sessionData,
             events: events)
         return try? JSONEncoder().encode(req)
     }
@@ -802,8 +1165,7 @@ final class Engine {
     // for Wi-Fi.
 
     func uploadSnapshots() {
-        guard consent == .granted, !authRejected, !inFlight else { return }
-        if let until = backoffUntil, now() < until { return }
+        guard !inFlight, canUpload(now()) else { return }
         guard snapshotPasses < Engine.maxSnapshotPassesPerCycle,
               let next = snapshots.nextUpload(limit: Engine.snapshotsPerRequest) else {
             uploadScreenshots()
@@ -849,7 +1211,7 @@ final class Engine {
             log("snapshots rejected by the API (\(status ?? 0)); \(sent.count) dropped")
             snapshots.remove(sent)
             uploadSnapshots()
-        case .retry, .authFailure:
+        case .retry, .paused, .authFailure:
             break  // kept for the next flush
         }
     }
@@ -870,16 +1232,17 @@ final class Engine {
     }
 
     func uploadScreenshots() {
-        guard consent == .granted, !authRejected, !inFlight else { return }
         let t = now()
-        if let until = backoffUntil, t < until { return }
+        guard !inFlight, canUpload(t) else { return }
         if let until = screenshotBackoffUntil, t < until { return }
         if config.uploadScreenshotsOnWifiOnly && !reachability.isOnUnmeteredNetwork { return }
         guard screenshotPasses < Engine.maxScreenshotPassesPerCycle,
               let next = screenshots.nextUpload(limit: Engine.screenshotsPerPass) else { return }
+        // `sizes` (0.8.0): the API signs each PUT's Content-Length.
         let req = ScreenshotInitRequest(sessionId: next.sessionId, count: next.frames.count,
                                         ordinals: next.frames.map { $0.ordinal },
-                                        format: Engine.screenshotFormat)
+                                        format: Engine.screenshotFormat,
+                                        sizes: next.frames.map { $0.bytes })
         guard let body = try? JSONEncoder().encode(req) else { return }
         screenshotPasses += 1
         inFlight = true
@@ -904,7 +1267,7 @@ final class Engine {
                 if let url = URL(string: slot.presignedUrl) { p.urls[slot.ordinal] = url }
             }
             putScreenshot(0, p, uploaded: [])
-        case .retry, .authFailure:
+        case .retry, .paused, .authFailure:
             inFlight = false
         case .rejected:
             log("screenshots rejected by the API (\(status ?? 0)); \(pass.frames.count) dropped")
@@ -992,7 +1355,7 @@ final class Engine {
         case .rejected:
             log("screenshot confirm rejected by the API (\(status ?? 0)); \(uploaded.count) dropped")
             screenshots.remove(uploaded)
-        case .retry, .authFailure:
+        case .retry, .paused, .authFailure:
             break  // kept; uploaded and confirmed again next time
         }
     }

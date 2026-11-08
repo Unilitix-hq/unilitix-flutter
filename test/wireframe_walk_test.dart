@@ -2,7 +2,6 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:unilitix/src/capture/snapshot_buffer.dart';
 import 'package:unilitix/src/capture/snapshot_capture.dart';
 import 'package:unilitix/src/capture/widget_kind.dart';
 import 'package:unilitix/src/privacy/privacy_mask.dart';
@@ -40,7 +39,7 @@ void main() {
       );
 
   SnapshotCapture capture(Duration budget) => SnapshotCapture(
-        buffer: SnapshotBuffer(capacity: 10),
+        onSnapshot: (_, __) {},
         intervalMs: 1000,
         maskInputs: true,
         // Real text in the output, so the private and zero-size checks

@@ -1,0 +1,47 @@
+{
+  "kind": "index",
+  "contractVersion": "1.4.0",
+  "schemaVersion": 1,
+  "files": [
+    "consent.json",
+    "crashes.json",
+    "identity.json",
+    "lifecycle.json",
+    "network.json",
+    "properties.json",
+    "queue.json",
+    "retry.json",
+    "screens.json",
+    "sessions.json"
+  ],
+  "harness": {
+    "apiKey": "ul_test_behaviour",
+    "apiUrl": "https://ingest.behaviour.test",
+    "config": {
+      "debug": false,
+      "autoTrackScreens": false,
+      "autoTrackTaps": false,
+      "autoTrackCrashes": false,
+      "autoTrackRageTaps": false,
+      "captureSnapshots": false,
+      "captureScreenshots": false,
+      "flushIntervalSeconds": 3600
+    },
+    "device": {
+      "network": {
+        "type": "wifi",
+        "online": true
+      },
+      "randomRolls": []
+    },
+    "clock": "2026-01-05T09:00:00.000Z",
+    "defaultResponse": {
+      "status": 202
+    },
+    "ignoredPaths": [
+      "/v1/ingest/snapshots",
+      "/v1/ingest/screenshots/",
+      "/v1/signals/power"
+    ]
+  }
+}

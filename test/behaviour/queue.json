@@ -1,0 +1,85 @@
+{
+  "kind": "behaviour",
+  "area": "queue",
+  "description": "The on-device queue: cap with oldest-first drop.",
+  "cases": [
+    {
+      "id": "queue.cap-drops-oldest",
+      "description": "At most maxOfflineEvents events are kept on the device; the oldest (SESSION_START included) are dropped first.",
+      "contract": [
+        "options.maxOfflineEvents"
+      ],
+      "config": {
+        "maxOfflineEvents": 5
+      },
+      "device": {
+        "network": {
+          "type": "none",
+          "online": false
+        }
+      },
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "repeat": {
+            "times": 8,
+            "steps": [
+              {
+                "track": {
+                  "name": "e${i}"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "expectState": {
+            "queueLength": 5
+          }
+        },
+        {
+          "setNetwork": {
+            "type": "wifi",
+            "online": true
+          }
+        },
+        {
+          "advanceTime": {
+            "ms": 301000
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectEvents": {
+            "mode": "exact",
+            "events": [
+              {
+                "$each": {
+                  "from": 3,
+                  "to": 7,
+                  "match": {
+                    "type": "CUSTOM",
+                    "metadata": {
+                      "name": "e${i}"
+                    },
+                    "capturedOffline": true,
+                    "networkAtCapture": "OFFLINE"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "expectState": {
+            "queueLength": 0
+          }
+        }
+      ]
+    }
+  ]
+}

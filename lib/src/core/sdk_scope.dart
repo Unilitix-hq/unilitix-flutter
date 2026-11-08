@@ -13,15 +13,24 @@ class SdkScope {
   /// tap is never counted twice.
   static bool widgetHandlesTaps = false;
 
-  /// The repaint boundary key shared between [ScreenshotCapture] and the
-  /// widget wrappers ([UnilitixWidget], [UnilitixMaterialApp]).
+  /// The repaint boundary key the widget wrapper ([UnilitixWidget]) puts
+  /// around the app.
   static final GlobalKey repaintKey = GlobalKey();
 
   static void Function(String screen)? onScreenChange;
   static void Function(String screen, double x, double y)? onTap;
-  static void Function(String screen, double dx, double dy)? onScroll;
 
   /// Called when the observer receives its first navigation event.
-  /// Wired by Unilitix to set [Unilitix._observerConnected].
   static void Function()? onObserverConnected;
+
+  /// Restores the initial state; for tests.
+  static void reset() {
+    observerAttached = false;
+    screenEventReceived = false;
+    currentScreen = null;
+    widgetHandlesTaps = false;
+    onScreenChange = null;
+    onTap = null;
+    onObserverConnected = null;
+  }
 }

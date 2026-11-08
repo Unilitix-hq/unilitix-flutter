@@ -9,7 +9,7 @@ void main() async {
       String.fromEnvironment('UNILITIX_API_KEY', defaultValue: 'YOUR_API_KEY');
   await Unilitix.init(apiKey,
       config: const UnilitixConfig(apiKey: apiKey, debug: true));
-  Unilitix.runApp(const UnilitixWidget(child: MyApp()));
+  Unilitix.runApp(const MyApp());
 }
 
 class MyApp extends StatelessWidget {
@@ -19,7 +19,9 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       navigatorObservers: [Unilitix.observer],
-      home: const UnilitixGestureDetector(child: HomeScreen()),
+      // Session replay and taps: wrap the app content, inside MaterialApp.
+      builder: (context, child) => UnilitixWidget(child: child!),
+      home: const HomeScreen(),
     );
   }
 }
@@ -64,6 +66,20 @@ class HomeScreen extends StatelessWidget {
               onPressed: () => Unilitix.reset(),
               child: const Text('Reset (logout)'),
             ),
+            const SizedBox(height: 12),
+            ElevatedButton(
+              onPressed: () {
+                try {
+                  throw StateError('example handled error');
+                } catch (e, st) {
+                  Unilitix.captureException(e, stackTrace: st);
+                }
+              },
+              child: const Text('Report handled error'),
+            ),
+            const SizedBox(height: 24),
+            // Never in a screenshot or a wireframe.
+            const UnilitixPrivate(child: Text('Balance: NGN 120,000')),
           ],
         ),
       ),

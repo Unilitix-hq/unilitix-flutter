@@ -1,0 +1,141 @@
+{
+  "kind": "behaviour",
+  "area": "screens",
+  "description": "Screen tracking: consecutive duplicates are dropped; events carry the current screen.",
+  "cases": [
+    {
+      "id": "screens.consecutive-duplicates-dropped",
+      "description": "screen(name) emits NAVIGATE only when name differs from the current screen of the session (manual and automatic calls alike).",
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "screen": {
+            "name": "Home"
+          }
+        },
+        {
+          "screen": {
+            "name": "Home"
+          }
+        },
+        {
+          "screen": {
+            "name": "Cart"
+          }
+        },
+        {
+          "screen": {
+            "name": "Home"
+          }
+        },
+        {
+          "track": {
+            "name": "a"
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectEvents": {
+            "mode": "exact",
+            "events": [
+              {
+                "type": "SESSION_START"
+              },
+              {
+                "type": "NAVIGATE",
+                "screen": "Home"
+              },
+              {
+                "type": "NAVIGATE",
+                "screen": "Cart"
+              },
+              {
+                "type": "NAVIGATE",
+                "screen": "Home"
+              },
+              {
+                "type": "CUSTOM",
+                "metadata": {
+                  "name": "a"
+                },
+                "screen": "Home"
+              }
+            ]
+          }
+        },
+        {
+          "expectState": {
+            "screen": "Home"
+          }
+        }
+      ]
+    },
+    {
+      "id": "screens.new-session-emits-again",
+      "description": "The first screen() of a new session is always emitted, even if it equals the last screen of the previous session.",
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "screen": {
+            "name": "Home"
+          }
+        },
+        {
+          "reset": {}
+        },
+        {
+          "screen": {
+            "name": "Home"
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/session",
+              "body": {
+                "sessionId": {
+                  "$capture": "s1"
+                },
+                "events": [
+                  {
+                    "type": "SESSION_START"
+                  },
+                  {
+                    "type": "NAVIGATE",
+                    "screen": "Home"
+                  }
+                ]
+              }
+            },
+            {
+              "path": "/v1/ingest/session",
+              "body": {
+                "sessionId": {
+                  "$ne": "s1"
+                },
+                "events": [
+                  {
+                    "type": "SESSION_START"
+                  },
+                  {
+                    "type": "NAVIGATE",
+                    "screen": "Home"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -4,12 +4,14 @@
 #
 #   scripts/sync-ios-core.sh [path/to/UnilitixCore]   (default ../unilitix-ios/UnilitixCore)
 #
-# The plugin uses CrashFile (native crash capture), ScreenshotCapture.render /
-# encode (frame drawing and JPEG encoding), DeviceInfo, and for app hangs
-# AppHangTracker, AppHangRecord, ThreadSampler and Engine.appHangEvent
-# (ios/Classes/UnilitixAppHangMonitor.swift); the rest compiles but is
-# unused. The public facade (Unilitix.swift) is left out, as in the
-# React Native SDK: UnilitixFlutterPlugin.swift plays that role here.
+# Since 3.0.0 the plugin is a thin wrapper over UnilitixCore's public facade
+# (Unilitix.swift: start, track, screen, identify, setConsent, setWrapper,
+# recordExternalError, addExternalSnapshot, captureExternalScreenshot,
+# setExternalScreenCapture, currentSessionId, isReplaySampled, ...), so the
+# facade is vendored too (needs UnilitixCore 0.8.0+). The plugin also uses
+# ScreenshotCapture.captureWindow / render / encode to draw Dart-masked
+# frames. Everything else (sessions, queue, uploads, crashes, app hangs) is
+# the engine's.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 SRC="${1:-../unilitix-ios/UnilitixCore}/Sources/UnilitixCore"
@@ -19,12 +21,13 @@ VERSION=$(sed -n 's/.*public static let current = "\(.*\)".*/\1/p' "$SRC/Transpo
 rm -rf "$DEST"
 mkdir -p "$DEST/Generated"
 for f in "$SRC"/*.swift "$SRC"/Generated/*.swift; do
-  name=$(basename "$f")
-  [ "$name" = "Unilitix.swift" ] && continue
   rel=${f#"$SRC"/}
   { echo "// VENDORED from UnilitixCore $VERSION ($rel) by scripts/sync-ios-core.sh."
     echo "// Do not edit here; change UnilitixCore and re-run the script."
     echo
     cat "$f"; } > "$DEST/$rel"
 done
+case "$VERSION" in
+  0.[0-7].*) echo "warning: UnilitixCore $VERSION predates 0.8.0; the plugin needs 0.8.0's facade API" >&2 ;;
+esac
 echo "Synced UnilitixCore $VERSION into $DEST"

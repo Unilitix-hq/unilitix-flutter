@@ -3,7 +3,7 @@
 
 /// The Unilitix SDK contract (see sdk-contract.md in the api repo).
 abstract final class SdkContract {
-  static const String version = '1.3.0';
+  static const String version = '1.4.0';
   static const List<String> eventTypes = [
     'SESSION_START',
     'TAP',
@@ -16,7 +16,178 @@ abstract final class SdkContract {
     'ANR'
   ];
   static const Map<String, String> eventTypeAliases = {'NAV': 'NAVIGATE'};
-  static const List<String> networkTypes = ['WIFI', '4G', '3G', '2G'];
+  static const List<String> networkTypes = [
+    'WIFI',
+    'ETHERNET',
+    '5G',
+    '4G',
+    '3G',
+    '2G',
+    'CELLULAR',
+    'OFFLINE',
+    'UNKNOWN'
+  ];
+  static const Map<String, String> networkTypeRules = {
+    '*/*/offline': 'OFFLINE',
+    'cellular/2g/online': '2G',
+    'cellular/3g/online': '3G',
+    'cellular/4g/online': '4G',
+    'cellular/5g/online': '5G',
+    'cellular/unknown/online': 'CELLULAR',
+    'ethernet/*/online': 'ETHERNET',
+    'none/*/online': 'OFFLINE',
+    'other/*/online': 'UNKNOWN',
+    'wifi/*/online': 'WIFI'
+  };
+  static const List<String> nativeSystemImages = [
+    'libc.so',
+    'libm.so',
+    'libdl.so',
+    'liblog.so',
+    'libutils.so',
+    'libcutils.so',
+    'libbinder.so',
+    'libandroid.so',
+    'libandroid_runtime.so',
+    'libart.so',
+    'libartbase.so',
+    'libart-compiler.so',
+    'libnativebridge.so',
+    'libnativeloader.so',
+    'libhwui.so',
+    'libgui.so',
+    'libui.so',
+    'libEGL.so',
+    'libGLESv1_CM.so',
+    'libGLESv2.so',
+    'libGLESv3.so',
+    'libvulkan.so',
+    'libmediandk.so',
+    'libcamera2ndk.so',
+    'libsqlite.so',
+    'libjavacore.so',
+    'libopenjdk.so',
+    'libopenjdkjvm.so',
+    'linker',
+    'linker64',
+    'app_process32',
+    'app_process64',
+    'boot.oat',
+    'boot-framework.oat',
+    'boot.art',
+    'base.odex',
+    'base.vdex',
+    'libc++.so',
+    'libc++_shared.so',
+    'libunwind.so',
+    'libunwindstack.so',
+    'libbacktrace.so',
+    'libsystem_*',
+    'libdyld.dylib',
+    'dyld',
+    'libobjc.A.dylib',
+    'libdispatch.dylib',
+    'libc++.1.dylib',
+    'libc++abi.dylib',
+    'libswiftCore.dylib',
+    'libswift_*',
+    'libswiftFoundation.dylib',
+    'libxpc.dylib',
+    'CoreFoundation',
+    'Foundation',
+    'UIKitCore',
+    'UIKit',
+    'SwiftUI',
+    'SwiftUICore',
+    'GraphicsServices',
+    'QuartzCore',
+    'CoreGraphics',
+    'CoreText',
+    'WebKit',
+    'JavaScriptCore',
+    'AppKit',
+    'Combine',
+    'FrontBoardServices',
+    'BackBoardServices',
+    'RunningBoardServices',
+    'CFNetwork',
+    'Security',
+    'libflutter.so',
+    'Flutter',
+    'FlutterMacOS',
+    'libhermes.so',
+    'libhermes_executor.so',
+    'libhermestooling.so',
+    'hermes',
+    'libjsc.so',
+    'libjscexecutor.so',
+    'libreactnativejni.so',
+    'libreactnative.so',
+    'libreact_*',
+    'libjsi.so',
+    'libjsinspector.so',
+    'libfbjni.so',
+    'libfolly_runtime.so',
+    'libfolly_json.so',
+    'libglog.so',
+    'libyoga.so',
+    'libturbomodulejsijni.so',
+    'libfabricjni.so',
+    'librrc_*',
+    'React',
+    'React_*',
+    'ReactCommon',
+    'RCT*',
+    'yoga',
+    'folly',
+    'libunilitix-native.so',
+    'libunilitix_native.so',
+    'UnilitixCore',
+    'Unilitix',
+    'unilitix_flutter'
+  ];
+  static const List<String> nativeSystemPathPrefixes = [
+    '/system/',
+    '/apex/',
+    '/vendor/',
+    '/product/',
+    '/system_ext/',
+    '/odm/',
+    '/data/dalvik-cache/',
+    '/data/misc/',
+    '/dev/',
+    '/memfd:',
+    '[',
+    '<anonymous',
+    '/usr/lib/',
+    '/System/Library/',
+    '/Library/',
+    '/private/preboot/Cryptexes/'
+  ];
+  static const Map<String, String> retryStatusOutcomes = {
+    '0': 'retry',
+    '200': 'sent',
+    '202': 'sent',
+    '204': 'sent',
+    '400': 'drop',
+    '401': 'auth',
+    '402': 'payment',
+    '403': 'auth',
+    '404': 'drop',
+    '408': 'retry',
+    '409': 'drop',
+    '413': 'drop',
+    '422': 'drop',
+    '429': 'retry',
+    '500': 'retry',
+    '502': 'retry',
+    '503': 'retry',
+    '504': 'retry'
+  };
+  static const String metadataJsBundleId = 'jsBundleId';
+  static const String metadataRelease = 'release';
+  static const String metadataDist = 'dist';
+  static const String truncatedMarker = '[Truncated]';
   static const List<String> consentStates = ['granted', 'pending', 'denied'];
   static const String defaultConsent = 'granted';
   static const String apiKeyHeader = 'x-unilitix-key';
@@ -30,11 +201,16 @@ abstract final class SdkContract {
   static const int rageTapWindowMs = 1000;
   static const int rageTapRadius = 100;
   static const int preInitBufferSize = 200;
+  static const int maxPropertyDepth = 5;
+  static const int maxPropertyKeys = 100;
+  static const int maxStringLength = 1024;
   static const int retryBaseDelayMs = 1000;
   static const int retryMaxDelayMs = 300000;
   static const int retryAfterMinSeconds = 1;
   static const int retryAfterMaxSeconds = 60;
   static const int requestTimeoutSeconds = 40;
+  static const int paymentBackoffMs = 900000;
+  static const int paymentRetryAfterMaxSeconds = 3600;
   static const int fingerprintFrames = 3;
 
   /// Default for each UnilitixConfig field, by its Dart name.
@@ -102,6 +278,73 @@ abstract final class SdkContract {
       'Ошибка',
       '#0      Café.naïve (package:é/ü.dart:1:2)',
       '64b3189790c14476'
+    ),
+    ('signal, no stack', 'SIGNAL:11', null, '8f1fc15bfa06be00'),
+    (
+      'android tombstone',
+      'SIGNAL:11',
+      '#00 pc 000000000009a1b8  /apex/com.android.runtime/lib64/bionic/libc.so (memcpy+120) (BuildId: 1f2e3d4c)\n#01 pc 000000000001a2b4  /data/app/~~Xy==/com.shop-Ab==/lib/arm64/libshop.so (cart::total(Cart const&)+52) (BuildId: 9f2c4a1b)\n#02 pc 000000000001a1f0  /data/app/~~Xy==/com.shop-Ab==/lib/arm64/libshop.so (Java_com_shop_Native_pay+40) (BuildId: 9f2c4a1b)\n#03 pc 0000000000356f20  /apex/com.android.art/lib64/libart.so (art_quick_generic_jni_trampoline+144) (BuildId: 5e6f7a8b)\n#04 pc 0000000000012340  /data/app/~~Xy==/com.shop-Ab==/lib/arm64/libshop.so (cart::run()+8) (BuildId: 9f2c4a1b)',
+      'eb6e2f4e722f310f'
+    ),
+    (
+      'android tombstone, other device',
+      'SIGNAL:11',
+      '#00 pc 00000000000a0c44  /apex/com.android.runtime/lib64/bionic/libc.so (memcpy+96) (BuildId: 77aa88bb)\n#01 pc 000000000001a2b4  /data/app/~~Qz==/com.shop-Kp==/lib/arm64/libshop.so (cart::total(Cart const&)+52) (BuildId: 9f2c4a1b)\n#02 pc 000000000001a1f0  /data/app/~~Qz==/com.shop-Kp==/lib/arm64/libshop.so (Java_com_shop_Native_pay+40) (BuildId: 9f2c4a1b)\n#03 pc 0000000000361a10  /apex/com.android.art/lib64/libart.so (art_quick_generic_jni_trampoline+148) (BuildId: 0c0d0e0f)\n#04 pc 0000000000012340  /data/app/~~Qz==/com.shop-Kp==/lib/arm64/libshop.so (cart::run()+8) (BuildId: 9f2c4a1b)',
+      'eb6e2f4e722f310f'
+    ),
+    (
+      'android tombstone, no symbols',
+      'SIGNAL:6',
+      '#00 pc 0000000000089abc  /apex/com.android.runtime/lib64/bionic/libc.so (abort+164) (BuildId: 1f2e3d4c)\n#01 pc 000000000001a2b4  /data/app/~~Xy==/com.shop-Ab==/lib/arm64/libshop.so (BuildId: 9f2c4a1b)\n#02 pc 0000000000004000  /data/app/~~Xy==/com.shop-Ab==/base.apk!libpay.so (offset 0x1c000) (BuildId: 3c4d5e6f)\n#03 pc 000000000001a1f0  /data/app/~~Xy==/com.shop-Ab==/lib/arm64/libshop.so (BuildId: 9f2c4a1b)\n#04 pc 000000000001a000  /data/app/~~Xy==/com.shop-Ab==/lib/arm64/libshop.so (BuildId: 9f2c4a1b)',
+      'cccb920c50ca8f17'
+    ),
+    (
+      'android tombstone, anr-dump prefix',
+      'SIGNAL:6',
+      '  native: #00 pc 0000000000089abc  /apex/com.android.runtime/lib64/bionic/libc.so (abort+164) (BuildId: 1f2e3d4c)\n  native: #01 pc 000000000001a2b4  /data/app/~~Xy==/com.shop-Ab==/lib/arm64/libshop.so (BuildId: 9f2c4a1b)\n  native: #02 pc 0000000000004000  /data/app/~~Xy==/com.shop-Ab==/base.apk!libpay.so (offset 0x1c000) (BuildId: 3c4d5e6f)\n  native: #03 pc 000000000001a1f0  /data/app/~~Xy==/com.shop-Ab==/lib/arm64/libshop.so (BuildId: 9f2c4a1b)',
+      'cccb920c50ca8f17'
+    ),
+    (
+      'android tombstone, only system frames',
+      'SIGNAL:11',
+      '#00 pc 000000000009a1b8  /apex/com.android.runtime/lib64/bionic/libc.so (memcpy+120) (BuildId: 1f2e3d4c)\n#01 pc 0000000000356f20  /apex/com.android.art/lib64/libart.so (art_quick_generic_jni_trampoline+144) (BuildId: 5e6f7a8b)\n#02 pc 00000000000c1d2e  /system/lib64/libandroid_runtime.so (android::AndroidRuntime::start+1)\n#03 pc 0000000000001000  [vdso] (__kernel_rt_sigreturn)',
+      '8f1fc15bfa06be00'
+    ),
+    (
+      'react-native android tombstone',
+      'SIGNAL:11',
+      '#00 pc 0000000000123456  /data/app/~~Xy==/com.shop-Ab==/lib/arm64/libhermes.so (hermes::vm::Runtime::throwException+16) (BuildId: aa11)\n#01 pc 0000000000023456  /data/app/~~Xy==/com.shop-Ab==/lib/arm64/libjsi.so (facebook::jsi::Value::Value+4) (BuildId: bb22)\n#02 pc 0000000000003456  /data/app/~~Xy==/com.shop-Ab==/lib/arm64/libreact_nativemodule_core.so (facebook::react::call+8) (BuildId: cc33)\n#03 pc 0000000000000abc  /data/app/~~Xy==/com.shop-Ab==/lib/arm64/libunilitix-native.so (unilitix_handler+12) (BuildId: dd44)\n#04 pc 0000000000004567  /data/app/~~Xy==/com.shop-Ab==/lib/arm64/libshopcrypto.so (sign_payload+20) (BuildId: ee55)\n#05 pc 0000000000123000  /data/app/~~Xy==/com.shop-Ab==/lib/arm64/libflutter.so (BuildId: ff66)',
+      'a54baf09a5e32302'
+    ),
+    (
+      'apple signal, symbolicated',
+      'SIGNAL:6',
+      '0   libsystem_kernel.dylib              0x00000001e2b1a1d8 __pthread_kill + 8\n1   libsystem_pthread.dylib             0x00000001f35b0b10 pthread_kill + 268\n2   libsystem_c.dylib                   0x00000001a7a2bd8c abort + 180\n3   Shop                                0x00000001043a81c4 -[CartViewController pay:] + 52\n4   UIKitCore                           0x0000000184c1e2a0 -[UIApplication sendAction:to:from:forEvent:] + 96\n5   Shop                                0x00000001043a7000 Shop.CheckoutFlow.run() -> () + 120\n6   ShopKit                             0x0000000104e10010 ShopKit.Ledger.post() + 16',
+      '74adda192530d606'
+    ),
+    (
+      'apple signal, symbolicated, other device',
+      'SIGNAL:6',
+      '0   libsystem_kernel.dylib 0x00000001d0a0a1d8 __pthread_kill + 8\n1   libsystem_pthread.dylib 0x00000001e1b2c3d4 pthread_kill + 268\n2   libsystem_c.dylib 0x0000000195a6b7c8 abort + 180\n3   Shop 0x0000000102e481c4 -[CartViewController pay:] + 52\n4   UIKitCore 0x0000000183a0b2c0 -[UIApplication sendAction:to:from:forEvent:] + 96\n5   Shop 0x0000000102e47000 Shop.CheckoutFlow.run() -> () + 120\n6   ShopKit 0x0000000103a10010 ShopKit.Ledger.post() + 16',
+      '74adda192530d606'
+    ),
+    (
+      'apple signal, unsymbolicated',
+      'SIGNAL:11',
+      '0   libswiftCore.dylib                  0x00000001a0b1c2d4 0x1a0a00000 + 1164500\n1   Shop                                0x00000001043a81c4 Shop + 70084\n2   Flutter                             0x0000000105a00000 Flutter + 4096\n3   UnilitixCore                        0x0000000104f00100 UnilitixCore + 256\n4   Shop                                0x00000001043a8000 Shop + 69632',
+      '6ed4578eaea7b5c5'
+    ),
+    (
+      'apple signal, only system frames',
+      'SIGNAL:6',
+      '0   libsystem_kernel.dylib              0x00000001e2b1a1d8 __pthread_kill + 8\n1   libsystem_pthread.dylib             0x00000001f35b0b10 pthread_kill + 268\n2   CoreFoundation                      0x00000001804ab0f8 __CFRunLoopRun + 164\n3   GraphicsServices                    0x00000001a1b2c3d4 GSEventRunModal + 164\n4   UIKitCore                           0x0000000184c1e2a0 UIApplicationMain + 340\n5   dyld                                0x00000001a0000000 start + 2240',
+      'c90a492df58d0bc4'
+    ),
+    (
+      'signal, unknown number',
+      'SIGNAL',
+      '#00 pc 000000000001a2b4  /data/app/~~Xy==/com.shop-Ab==/lib/arm64/libshop.so (cart::total(Cart const&)+52) (BuildId: 9f2c4a1b)',
+      '93aaf682c4e4a5db'
     ),
   ];
 }

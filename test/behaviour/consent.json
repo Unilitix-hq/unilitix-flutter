@@ -1,0 +1,276 @@
+{
+  "kind": "behaviour",
+  "area": "consent",
+  "description": "Consent states: pending holds, granted releases, denied purges; the decision persists.",
+  "cases": [
+    {
+      "id": "consent.pending-holds-until-granted",
+      "description": "With consent pending, events and identify are captured on the device but nothing is uploaded; granting uploads what was held.",
+      "config": {
+        "consent": "pending"
+      },
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "identify": {
+            "userId": "u1"
+          }
+        },
+        {
+          "track": {
+            "name": "a"
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": []
+        },
+        {
+          "expectState": {
+            "consent": "pending",
+            "queueLength": 2
+          }
+        },
+        {
+          "setConsent": {
+            "state": "granted"
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/identify",
+              "body": {
+                "customUserId": "u1"
+              }
+            },
+            {
+              "path": "/v1/ingest/session",
+              "body": {
+                "customUserId": "u1",
+                "events": [
+                  {
+                    "type": "SESSION_START"
+                  },
+                  {
+                    "type": "CUSTOM",
+                    "metadata": {
+                      "name": "a"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "expectState": {
+            "consent": "granted",
+            "queueLength": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "consent.denied-purges-queue",
+      "description": "Denying deletes everything queued on the device and sends nothing, now or later; calls while denied capture nothing.",
+      "config": {
+        "consent": "pending"
+      },
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "track": {
+            "name": "a"
+          }
+        },
+        {
+          "track": {
+            "name": "b"
+          }
+        },
+        {
+          "identify": {
+            "userId": "u1"
+          }
+        },
+        {
+          "setConsent": {
+            "state": "denied"
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": []
+        },
+        {
+          "expectState": {
+            "consent": "denied",
+            "queueLength": 0
+          }
+        },
+        {
+          "track": {
+            "name": "c"
+          }
+        },
+        {
+          "screen": {
+            "name": "Home"
+          }
+        },
+        {
+          "advanceTime": {
+            "ms": 3600000
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": []
+        },
+        {
+          "expectState": {
+            "queueLength": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "consent.granted-to-denied-drops-unsent",
+      "description": "Switching from granted to denied drops events not yet uploaded.",
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "track": {
+            "name": "a"
+          }
+        },
+        {
+          "setConsent": {
+            "state": "denied"
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": []
+        },
+        {
+          "expectState": {
+            "queueLength": 0,
+            "consent": "denied"
+          }
+        }
+      ]
+    },
+    {
+      "id": "consent.decision-persists-across-restart",
+      "description": "A decision made with setConsent wins over the consent passed to a later init.",
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "setConsent": {
+            "state": "denied"
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": []
+        },
+        {
+          "restart": {}
+        },
+        {
+          "init": {}
+        },
+        {
+          "expectState": {
+            "consent": "denied"
+          }
+        },
+        {
+          "track": {
+            "name": "x"
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": []
+        }
+      ]
+    },
+    {
+      "id": "consent.denied-then-granted-captures-again",
+      "description": "After denied then granted, new calls are captured and uploaded; calls made while denied are not.",
+      "config": {
+        "consent": "denied"
+      },
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "track": {
+            "name": "while-denied"
+          }
+        },
+        {
+          "setConsent": {
+            "state": "granted"
+          }
+        },
+        {
+          "track": {
+            "name": "after-grant"
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectEvents": {
+            "mode": "contains",
+            "events": [
+              {
+                "type": "CUSTOM",
+                "metadata": {
+                  "name": "after-grant"
+                }
+              }
+            ],
+            "absent": [
+              {
+                "type": "CUSTOM",
+                "metadata": {
+                  "name": "while-denied"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

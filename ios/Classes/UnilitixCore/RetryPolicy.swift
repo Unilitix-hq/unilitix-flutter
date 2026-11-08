@@ -1,4 +1,4 @@
-// VENDORED from UnilitixCore 0.7.2 (RetryPolicy.swift) by scripts/sync-ios-core.sh.
+// VENDORED from UnilitixCore 0.8.0 (RetryPolicy.swift) by scripts/sync-ios-core.sh.
 // Do not edit here; change UnilitixCore and re-run the script.
 
 import Foundation
@@ -7,13 +7,17 @@ import Foundation
 /// One request per flush cycle; a retryable failure keeps the data queued and
 /// opens a backoff window during which flush cycles are skipped.
 enum UploadOutcome: Equatable {
-    /// 2xx (and 409, a duplicate the server already has): delete the batch.
+    /// 2xx: delete the batch.
     case accepted
     /// No response, 408 (request timeout), 429 or 5xx: keep the data and back off.
     case retry(after: TimeInterval)
+    /// 402 (quota or plan exhausted): keep the data and pause uploads for
+    /// `after` seconds. Not a failure: the backoff count is unchanged.
+    case paused(after: TimeInterval)
     /// 401/403: the key is wrong. Keep the data, pause uploads until restart.
     case authFailure
-    /// Any other 4xx: the payload can never succeed. Drop the batch.
+    /// Any other 4xx (409 included, contract 1.4.0): the payload can never
+    /// succeed. Drop the batch.
     case rejected
 }
 
@@ -41,10 +45,12 @@ enum RetryPolicy {
             return .retry(after: delay(attempt: attempt))
         }
         switch status {
-        case 200..<300, 409:
+        case 200..<300:
             return .accepted
         case 401, 403:
             return .authFailure
+        case 402:
+            return .paused(after: paymentDelay(retryAfterSeconds: retryAfter(headers)))
         case 408, 429, 500...:
             return .retry(after: delay(attempt: attempt, retryAfterSeconds: retryAfter(headers)))
         case 400..<500:
@@ -52,6 +58,15 @@ enum RetryPolicy {
         default:
             return .retry(after: delay(attempt: attempt))
         }
+    }
+
+    /// The pause after a 402: `Retry-After` clamped to 1…3600 s
+    /// (`paymentRetryAfterMaxSeconds`), else `paymentBackoffMs` (15 min).
+    static func paymentDelay(retryAfterSeconds: Int?) -> TimeInterval {
+        if let ra = retryAfterSeconds {
+            return TimeInterval(min(max(ra, SdkContract.retryAfterMinSeconds), SdkContract.paymentRetryAfterMaxSeconds))
+        }
+        return TimeInterval(SdkContract.paymentBackoffMs) / 1000
     }
 
     /// `Retry-After` in its seconds form; the HTTP-date form is ignored.

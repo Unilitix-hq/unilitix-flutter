@@ -1,4 +1,4 @@
-// VENDORED from UnilitixCore 0.7.2 (ScreenshotCapture.swift) by scripts/sync-ios-core.sh.
+// VENDORED from UnilitixCore 0.8.0 (ScreenshotCapture.swift) by scripts/sync-ios-core.sh.
 // Do not edit here; change UnilitixCore and re-run the script.
 
 #if canImport(UIKit) && os(iOS)
@@ -57,7 +57,9 @@ enum ScreenshotCapture {
 
     fileprivate static func tick() {
         guard let e = engine, !encoding else { return }
-        let active = UIApplication.shared.applicationState == .active
+        // A wrapper supplies the frames (Unilitix.setExternalScreenCapture).
+        guard !e.isExternalScreenCaptureEnabled else { return }
+        let active = AppContext.application?.applicationState == .active
         defer { wasActive = active }
         guard active else { return }
         if !wasActive { scheduler.markDirty() }  // back from the background
@@ -133,7 +135,8 @@ enum ScreenshotCapture {
     /// is a system window (keyboard, text effects): such frames are skipped.
     /// Also used by `SnapshotCapture`.
     static func captureWindow() -> UIWindow? {
-        let windows = UIApplication.shared.connectedScenes
+        let scenes: Set<UIScene> = AppContext.application?.connectedScenes ?? []
+        let windows = scenes
             .compactMap { $0 as? UIWindowScene }
             .filter { $0.activationState == .foregroundActive }
             .flatMap { $0.windows }
@@ -258,9 +261,31 @@ enum ScreenMasker {
         return false
     }
 
+    /// The view's frame in window coordinates where it is drawn now and
+    /// where it is going: during an animation the frame drawn
+    /// (`drawHierarchy(afterScreenUpdates: false)` renders the presentation
+    /// tree) is the presentation layer's, while `convert(_:to:)` gives the
+    /// model's (final) frame. The mask covers both (0.8.0), so a sliding or
+    /// scaling view is never drawn outside its mask.
     private static func add(_ view: UIView, _ window: UIWindow, _ out: inout [CGRect]) {
-        let r = view.convert(view.bounds, to: window)
+        var r = view.convert(view.bounds, to: window)
+        if let shown = presentationFrame(of: view, in: window) {
+            r = r.isNull || r.isInfinite ? shown : r.union(shown)
+        }
         if !r.isNull, !r.isInfinite, r.width > 0, r.height > 0 { out.append(r) }
+    }
+
+    /// The view's bounds as currently on screen, in window coordinates, from
+    /// the presentation layers; nil when no animation is in flight (no
+    /// presentation layer) or the result is unusable.
+    static func presentationFrame(of view: UIView, in window: UIWindow) -> CGRect? {
+        // Both from the presentation tree: converting between a presentation
+        // layer and a model layer is not defined.
+        guard let layer = view.layer.presentation(), let windowLayer = window.layer.presentation() else { return nil }
+        let r = layer.convert(layer.bounds, to: windowLayer)
+        guard !r.isNull, !r.isInfinite, r.width.isFinite, r.height.isFinite,
+              r.minX.isFinite, r.minY.isFinite else { return nil }
+        return r
     }
 }
 #endif

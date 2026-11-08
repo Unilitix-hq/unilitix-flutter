@@ -4,23 +4,24 @@
 //
 // Keys listed in SdkContract.divergences are known gaps with a planned fix
 // and are skipped; removing one from the contract turns its check back on.
+//
+// Since 3.0.0 most of the contract (retry, queue, sessions, identity, native
+// crash grouping) is implemented by the native SDKs and tested there; this
+// file checks what the Dart layer still owns: the option defaults, the
+// consent states, and the fingerprint of Dart errors.
 import 'package:flutter_test/flutter_test.dart';
 import 'package:unilitix/src/config.dart';
+import 'package:unilitix/src/consent.dart';
 import 'package:unilitix/src/crash/crash_tracker.dart';
-import 'package:unilitix/src/events/event_types.dart';
 import 'package:unilitix/src/generated/sdk_contract.dart';
-import 'package:unilitix/src/network/retry_policy.dart';
-import 'package:unilitix/src/privacy/opt_manager.dart';
-import 'package:unilitix/src/storage/event_database.dart';
 
 bool _skipped(String key) => SdkContract.divergences.contains(key);
 
 /// The contract's vectors for the other platforms' stacks (JVM, JavaScript,
 /// Apple, Android ANR main thread), from sdk-contract.md / fingerprint.go in
-/// the api repo (contract 1.3.0). The generated Dart constants carry only
-/// the Flutter vectors; [CrashTracker.contractFingerprint] must match these
-/// too, so an ANR record without the plugin's fingerprint groups with the
-/// Android SDK's.
+/// the api repo. [CrashTracker.contractFingerprint] must match these too, so
+/// an error reported with `Unilitix.recordException` from another runtime
+/// groups with the native SDKs' reports.
 const _otherPlatformVectors = <(String, String, String?, String)>[
   (
     'jvm',
@@ -78,8 +79,21 @@ const _otherPlatformVectors = <(String, String, String?, String)>[
   ),
 ];
 
+/// Vectors of the native crash rule (1.4.0: `SIGNAL:<n>` + first app frames
+/// of a tombstone or an Apple crash report). Native crashes are grouped by
+/// the native SDKs since 3.0.0, so the Dart layer does not run them.
+bool _nativeVector(String name, String? stack) =>
+    stack != null &&
+    (name.contains('tombstone') ||
+        name.startsWith('apple signal') ||
+        name == 'signal, unknown number');
+
 void main() {
   group('SdkContract', () {
+    test('the generated constants are contract 1.4.0', () {
+      expect(SdkContract.version, '1.4.0');
+    });
+
     test('every config default matches the contract', () {
       const c = UnilitixConfig(apiKey: 'k');
       final actual = <String, Object>{
@@ -123,80 +137,38 @@ void main() {
           reason: 'options the contract does not list');
     });
 
-    test('event types are canonical', () {
-      const sent = [
-        EventTypes.tap,
-        EventTypes.navigate,
-        EventTypes.rageTap,
-        EventTypes.crash,
-        EventTypes.exception,
-        EventTypes.custom,
-        EventTypes.sessionStart,
-        EventTypes.scroll,
-        EventTypes.anr,
-      ];
-      for (final t in sent) {
-        expect(SdkContract.eventTypes, contains(t));
-      }
-    });
-
     test('consent states match', () {
       expect(UnilitixConsent.values.map((c) => c.name).toSet(),
           SdkContract.consentStates.toSet());
+      expect(SdkContract.defaultConsent, UnilitixConsent.granted.name);
     });
 
-    test('crash caps and retry policy come from the contract', () {
-      final t = CrashTracker(
-        onCrashEvent: (_) {},
-        breadcrumbs: const [],
-        database:
-            EventDatabase(maxOfflineEvents: 1, maxScreenshotsPerSession: 1),
-      );
-      expect(t.maxPerFingerprint, SdkContract.maxReportsPerFingerprint);
-      expect(t.maxPerSession, SdkContract.maxErrorReportsPerSession);
-      expect(RetryPolicy.maxDelayMs, SdkContract.retryMaxDelayMs);
-      expect(RetryPolicy.delayFor(0, retryAfterSeconds: 3600).inSeconds,
-          SdkContract.retryAfterMaxSeconds);
-      expect(RetryPolicy.delayFor(0, retryAfterSeconds: 0).inSeconds,
-          SdkContract.retryAfterMinSeconds);
-    });
-
-    test('fingerprint matches every contract vector', () {
-      expect(SdkContract.fingerprintVectors, isNotEmpty);
-      for (final (name, type, stack, want) in SdkContract.fingerprintVectors) {
+    test('Dart errors: both rule sets match every Dart vector', () {
+      final dart = SdkContract.fingerprintVectors
+          .where((v) => !_nativeVector(v.$1, v.$3))
+          .toList();
+      expect(dart, isNotEmpty);
+      for (final (name, type, stack, want) in dart) {
         expect(CrashTracker.fingerprint(type, stack), want, reason: name);
-      }
-    });
-
-    test('contract fingerprint matches every vector of every platform', () {
-      final all = [...SdkContract.fingerprintVectors, ..._otherPlatformVectors];
-      expect(all.where((v) => v.$2 == EventTypes.anr), hasLength(2));
-      for (final (name, type, stack, want) in all) {
         expect(CrashTracker.contractFingerprint(type, stack), want,
             reason: name);
       }
     });
 
-    test('an ANR main thread groups by its first three at frames', () {
-      expect(
-          CrashTracker.contractFingerprint(
-              EventTypes.anr, _otherPlatformVectors.last.$3),
-          'ff80a5189f547c4d');
-      // Thread header, native frames and lock lines are not frames.
+    test('contract fingerprint matches every other platform\'s vector', () {
+      for (final (name, type, stack, want) in _otherPlatformVectors) {
+        expect(CrashTracker.contractFingerprint(type, stack), want,
+            reason: name);
+      }
+    });
+
+    test('lines that are not frames are skipped', () {
       expect(CrashTracker.normaliseFrame('"main" prio=5 tid=1 Native'), isNull);
-      expect(
-          CrashTracker.normaliseFrame(
-              '  native: #00 pc 000000000009a1b8  /apex/x/libc.so (read+8)'),
-          isNull);
       expect(
           CrashTracker.normaliseFrame(
               '  - locked <0x0b1c2d3e> (a android.database.sqlite.SQLiteConnection)'),
           isNull);
-      expect(
-          CrashTracker.normaliseFrame(
-              '  at com.shop.cart.CartRepository.load(CartRepository.kt:88)'),
-          // Same as the Go reference: the JS frame pattern matches first.
-          'com.shop.cart.CartRepository.load (CartRepository.kt)');
+      expect(CrashTracker.normaliseFrame('<asynchronous suspension>'), isNull);
     });
   });
 }

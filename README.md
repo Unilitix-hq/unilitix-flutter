@@ -1,8 +1,17 @@
 # Unilitix Flutter SDK
 
-**Version:** 2.7.4 · [pub.dev](https://pub.dev/packages/unilitix) · [GitHub](https://github.com/unilitix/unilitix-flutter)
+**Version:** 3.0.0 · [pub.dev](https://pub.dev/packages/unilitix) · [GitHub](https://github.com/unilitix/unilitix-flutter)
 
 Unilitix is a mobile analytics SDK built for African markets. It captures session replays, screen flows, custom events, and user identity — with offline-first data delivery and Africa-specific context (network type, carrier, power outage correlation).
+
+**3.0.0 is a thin wrapper over the native Unilitix SDKs** (Android
+`com.unilitix:unilitix-android`, iOS UnilitixCore), the way Sentry and Datadog
+ship Flutter: sessions, identity, consent, the offline queue, uploads and
+retries, device and network context, native crashes, ANRs and app hangs run
+in the native SDK, so a Flutter app behaves exactly like a native one. The
+Dart side keeps what only Dart can see — Dart/Flutter errors, route names,
+and masked replay of the widget tree. Upgrading from 2.x? Read
+[MIGRATION.md](MIGRATION.md).
 
 ---
 
@@ -12,8 +21,18 @@ Unilitix is a mobile analytics SDK built for African markets. It captures sessio
 |---|---|---|
 | Flutter | 3.10+ | 3.22+ |
 | Dart | 3.0+ | — |
-| Android | API 21+ | API 26+ (full session replay) |
+| Android | API 21+ | API 26+ (screenshots in session replay) |
 | iOS | 13.0+ | — |
+| Web, desktop | not supported since 3.0.0 (the SDK does nothing there) | — |
+
+### Native SDK versions
+
+| unilitix (Flutter) | Android SDK (Maven Central) | iOS (UnilitixCore, vendored in the pod) |
+|---|---|---|
+| 3.0.0 | `com.unilitix:unilitix-android:1.11.1` | 0.8.0 |
+
+The Android SDK comes from Maven Central through Gradle; nothing to add if
+your project already lists `mavenCentral()` (Flutter's template does).
 
 ---
 
@@ -27,7 +46,7 @@ Or add manually to `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  unilitix: ^2.7.4
+  unilitix: ^3.0.0
 ```
 
 Then run:
@@ -83,8 +102,7 @@ class MyApp extends StatelessWidget {
 Run your app in debug mode. Within 5 seconds you should see:
 
 ```
-[Unilitix] SDK initialized ✅ v2.7.4
-[Unilitix] Session started ✅ abc123…
+[Unilitix] SDK initialized  ✅  v3.0.0 (native session abc123…, consent granted)
 [Unilitix] Screen → /home
 ```
 
@@ -165,155 +183,61 @@ Unilitix.track("loan_applied", {
 
 Event names should be `snake_case`. Property values can be `String`, `int`, `double`, or `bool`.
 
-Events are written to the on-device queue immediately and uploaded in batches
+Events go to the native SDK's on-device queue and are uploaded in batches
 (every `flushIntervalSeconds`, default 30 s, or as soon as `flushBatchSize`
 events are waiting). Call `Unilitix.flush()` when an event must leave the
 device now — for example right before the user signs out.
 
+Calls made before `init()` completes are kept (up to 200, oldest dropped)
+and sent in order right after it.
+
 ### Delivery and offline behaviour
 
-- Every request is made once per cycle. If the API is unreachable or returns
-  5xx/429 the SDK backs off (exponentially, or as `Retry-After` says) and keeps
-  everything on-device; one success clears the backoff.
-- The queue is bounded: 1,000 events (`maxOfflineEvents`), 5 MB, 7 days.
-  Oldest batches are dropped first.
-- A payload the API rejects with another 4xx is dropped and logged; a 401/403
-  pauses uploads until the next launch.
-- Errors inside the SDK are logged, never thrown into your app, and never
-  recorded as crashes.
+Delivery is the native SDK's and follows the Unilitix SDK contract, the same
+on every platform: one request per cycle; no response, 408, 429 and 5xx back
+off (exponentially, or as `Retry-After` says) and keep the data; 401/403
+pause uploads until the next launch; 402 keeps the data and pauses for
+`Retry-After` (1 s–1 h) or 15 minutes; other 4xx drop that batch. The queue
+holds `maxOfflineEvents` (1,000) events, oldest dropped first. Errors inside
+the SDK are logged, never thrown into your app, and never recorded as
+crashes.
 
 ---
 
 ## Crashes and Errors
 
-Crash reporting is on by default (`autoTrackCrashes`). Errors are recorded
-the way Crashlytics and Sentry classify them, and ANRs (Android) and app
-hangs (iOS) on their own:
+Crash reporting is on by default (`autoTrackCrashes`). The Dart side reports
+what only Dart can see; everything native is the native SDK's:
 
-| Type | Source | Marks session crashed |
-|---|---|---|
-| `EXCEPTION` (non-fatal) | `FlutterError.onError` — errors the framework caught (overflow, build errors) and `captureException` | No |
-| `CRASH` (fatal: false) | `PlatformDispatcher.onError` — an uncaught Dart error | Yes |
-| `CRASH` (fatal: true) | Native: JVM uncaught exception, `NSException`, fatal signal — recorded by the plugin and reported on the next launch against the session that was running | Yes |
-| `ANR` | Android 11+: the app stopped responding and the system killed it — reported on the next launch against the session that was running | No |
-| `ANR` | iOS: the main thread was blocked for `appHangTimeoutMs` (2 s) — reported when it recovers, or on the next launch if the app did not survive | No |
+| Type | Source | Reported by | Marks session crashed |
+|---|---|---|---|
+| `EXCEPTION` | `FlutterError.onError` (errors the framework caught: overflow, build errors) and `captureException` | Dart → native `recordExternalError(platform: "dart")` | No |
+| `CRASH` | `PlatformDispatcher.onError` (an uncaught Dart error), or `captureException(fatal: true)` | Dart → native `recordExternalError` | Yes |
+| `CRASH` | JVM uncaught exception, `NSException`, fatal signals in native code (engine, plugins) | Native SDK, on the next launch | Yes |
+| `ANR` | Android: the system's ANR records (API 30+) | Native Android SDK | No |
+| `ANR` | iOS: main thread blocked for `appHangTimeoutMs` (2 s; 0 turns it off) | UnilitixCore | No |
 
-Native fatal signals (SIGSEGV, SIGABRT, SIGBUS, SIGILL, SIGFPE, SIGTRAP) —
-a crash in C/C++ code, the Flutter engine or a plugin's native library — are
-captured on both platforms. On Android 11+ (API 30+) they are read from the
-system's record of how earlier processes ended (`ApplicationExitInfo`; no
-native code runs); on Android 5–10 a small signal handler
-(`libunilitix-flutter-native.so`, a few KB per ABI) records them. Each is
-reported once, on the next launch, as `SIGNAL: Fatal signal 11 (SIGSEGV)`.
-On Android 11+ the first launch with 2.4.0 starts from that moment: exits
-recorded before it are not reported.
+Every Dart report carries the SDK contract fingerprint (type + first three
+frames, line numbers ignored), so one bug is one issue across devices and
+platforms; the native SDK applies the per-session caps (3 per fingerprint,
+50 in total). A framework error that repeats every frame is sent at most 3
+times per session. Handlers the app or another SDK installed before `init()`
+still run. If your app runs in its own zone, pass the zone's errors on (and
+initialise inside the zone, or Flutter reports a zone mismatch):
 
-**Apps that also ship the Unilitix Android SDK** (`com.unilitix:unilitix-android`):
-from Android SDK 1.8.0 and plugin 2.5.0, a native crash is reported once, by
-the Android SDK, against its own session. The plugin finds the SDK at runtime
-(no dependency between the two) and, when it captures native crashes
-(`Unilitix.nativeCrashCaptureActive()`), installs no signal handler and sends
-none of the system's exit records. Initialize the Android SDK in
-`Application.onCreate`, before any Flutter engine starts. With an Android SDK
-older than 1.8.0 both still report native crashes. JVM crashes and sessions
-are recorded by each SDK separately.
+```dart
+void main() {
+  runZonedGuarded(() async {
+    WidgetsFlutterBinding.ensureInitialized();
+    await Unilitix.init('YOUR_API_KEY');
+    Unilitix.runApp(MyApp());
+  }, (e, st) => Unilitix.captureException(e, stackTrace: st, fatal: true));
+}
+```
 
-### ANRs (Android 11+)
-
-From 2.6.0, when Android kills the app because it stopped responding (an
-ANR: input not handled for 5 seconds, so the system showed the "isn't
-responding" dialog and the user closed the app, or killed a background app
-outright), the next launch reports an `ANR` event (SDK contract 1.3.0)
-against the session that was running. On by default with
-`autoTrackCrashes`; no configuration.
-
-- Read from the same `ApplicationExitInfo` scan as native crashes, with the
-  same watermark, so each exit is reported once; at most 5 ANRs per launch
-  (the newest). Upgrading from 2.4.0/2.5.0 keeps the watermark, so an ANR of
-  the last process before the upgrade is reported and older ones are not; a
-  new install starts from its first launch.
-- The event carries the system's description (`Input dispatching timed out
-  …`) as the message and the **main thread's stack** from the ANR thread
-  dump as `stackTrace` (thread properties dropped, capped at 16 KB), plus
-  `metadata.fingerprint` (type `ANR` over the main thread, so ANRs group by
-  where the main thread was stuck), `platform`, `importance` and
-  `foreground`.
-- An ANR is **not a crash**: the session is not marked crashed, and
-  crash-free rates are unchanged. Consent works as for crashes (pending
-  holds it on the device, denied drops it).
-
-Limitations:
-- Android 11+ (API 30+) only: older versions keep no exit record. iOS
-  reports app hangs instead ([below](#app-hangs-ios)).
-- Only ANRs the system or the user ended by killing the app are reported. An
-  ANR the app recovered from (the user chose "Wait") leaves no record; there
-  is no in-process watchdog.
-- The stack is the Android main thread (Flutter's platform thread). Dart
-  code that blocks it (where the UI and platform threads are merged) shows
-  up as native `libflutter.so` / `libapp.so` frames, not Dart frames; the
-  fingerprint counts only the Java `at` frames, so such ANRs group by those.
-- **With the Unilitix Android SDK in the same app:** when it captures crashes
-  (`Unilitix.nativeCrashCaptureActive()`), ANRs are left to it like native
-  crashes. Android SDK 1.9.0+ reports them; **1.8.x does not, and the plugin
-  cannot tell 1.8.x from 1.9.x at runtime in a minified release build, so
-  with 1.8.x no ANRs are reported — update the Android SDK to 1.9.0.** With
-  an Android SDK older than 1.8.0, or one without `autoTrackCrashes`, the
-  plugin reports them.
-- Needs the Unilitix API with contract 1.3.0; an older API drops the unknown
-  `ANR` type.
-
-### App hangs (iOS)
-
-From 2.7.0, the iOS plugin watches the main thread and reports an `ANR`
-event when it does not respond for `appHangTimeoutMs` (default 2000 ms)
-while the app is in the foreground. On by default with `autoTrackCrashes`;
-`appHangTimeoutMs: 0` turns it off. It uses the same watchdog and stack
-sampler as the native iOS SDK (UnilitixCore 0.6.0).
-
-**What counts.** In a Flutter app the iOS main thread is the *platform
-thread*: it runs UIKit, platform-channel handlers and plugins' native code,
-and delivers touches to Flutter. Hangs reported are those that block it: a
-slow synchronous platform-channel handler (yours or a plugin's), main-thread
-file or database I/O, a deadlock or a blocking wait in native code. **Pure
-Dart jank is not reported:** Dart runs on the UI thread, so a long build or
-a busy `main` isolate drops frames without blocking the main thread (see
-the performance metrics for that).
-
-- **Recovered hangs** are reported when the main thread answers again, in
-  the current session, on the current screen with the current breadcrumbs:
-  message `The main thread was blocked for 3200 ms`.
-- **Hangs the app did not survive** (the system watchdog or the user killed
-  it while it was blocked) are written to a file as soon as they are
-  detected and reported on the next launch against the session that was
-  running, with `appTerminated: true` and the duration measured so far
-  (`…blocked for at least 2000 ms; the app was terminated before it
-  recovered`).
-- The event: `exceptionType` `ANR`, the **main thread's stack** at
-  detection as `stackTrace` (`callStackSymbols` format), timestamped when
-  the hang began, and `metadata` with `fingerprint` (contract fingerprint of
-  type `ANR` over that stack, so hangs group by where the main thread was
-  stuck), `platform`, `hangDurationMs`, `appHangTimeoutMs`, `appTerminated`
-  (when terminated) and `debugImages` (the binaries in the stack, with their
-  UUIDs and load addresses, so the server can symbolicate the frames
-  against the matching dSYMs).
-- One hang is reported once, however long it lasts. Each is delivered
-  exactly once: the plugin deletes its copy only after Dart has taken it,
-  and the hang's id is the event id, so the server keeps one event.
-- An app hang is **not a crash**: the session is not marked crashed. The
-  same per-session caps as errors apply (3 per fingerprint, 50 in total).
-  Consent as for crashes: pending holds the event on the device; while
-  consent is denied hangs are not even recorded.
-- Not reported while a debugger is attached (a thread paused at a
-  breakpoint is not a hang), so `flutter run` debug sessions report none;
-  test with a profile or release build started from the home screen.
-- **With the Unilitix iOS SDK in the same app**, each SDK watches the main
-  thread and reports its own hangs against its own sessions; set
-  `appHangTimeoutMs: 0` here (or `appHangTimeoutMs = 0` there) to keep one.
-
-Handlers the app or another SDK installed before `init()` still run. Every
-report carries a stable fingerprint (type + top frames, line numbers
-ignored) so one bug is counted once across devices; the same fingerprint is
-reported at most 3 times per session, and 50 reports per session in total.
+How native crashes, ANRs and app hangs are captured, symbolicated and
+grouped is described in the native SDKs' documentation; a Flutter app gets
+exactly that behaviour.
 
 ```dart
 // Report an error you handled yourself
@@ -322,6 +246,9 @@ try {
 } catch (e, st) {
   Unilitix.captureException(e, stackTrace: st);
 }
+
+// An error described by its parts (a WebView message, another runtime)
+Unilitix.recordException('PaymentDeclined', 'card expired', stackTrace: trace);
 
 // Leave a trail for the next crash report (last 50 kept)
 Unilitix.addBreadcrumb('checkout started', category: 'flow', data: {'items': 3});
@@ -341,12 +268,18 @@ UNILITIX_API_KEY=ul_live_… dart run unilitix:unilitix_symbols upload build/sym
 
 ## Session Replay
 
-Session replay is **enabled by default**. The SDK captures screenshots and widget tree snapshots and uploads them incrementally every 30 seconds.
+Session replay is **enabled by default**. The Dart side decides what to hide
+(it knows the widget tree) and when to take a frame (navigation, taps,
+layout changes, a heartbeat on static screens); the native SDK samples
+sessions (`replaySampleRate`), caps, stores and uploads.
 
-**Android:** Uses native `PixelCopy` (API 26+) as the primary capture method, with automatic fallback to Dart-based capture for API 21–25. No configuration needed.
-
-**iOS:** Uses `UIView.drawHierarchy` via the Flutter platform channel, through
-the same capture code as the native iOS and React Native SDKs (UnilitixCore).
+- **Wireframe snapshots** are walked from the widget tree in short slices
+  (never more than a few milliseconds of UI time at once) and handed to the
+  native SDK.
+- **Screenshots** are drawn natively with the masks painted in the same
+  pass — `PixelCopy` on Android (API 26+; no screenshots on Android 5–7.1,
+  wireframes only), `drawHierarchy` on iOS — and handed to the native SDK
+  without crossing back to Dart.
 
 To disable:
 
@@ -375,9 +308,9 @@ await Unilitix.init(
 | Device make/model, OS version, screen size, locale, timezone | yes | — |
 | App version, build number, package name | yes | — |
 | Network type and transitions, carrier name, battery level | yes | — |
-| Screen names, tap and scroll coordinates | yes | `autoTrackTaps` |
+| Screen names, tap coordinates | yes | `autoTrackTaps` |
 | Crash and handled-exception stack traces, last 50 breadcrumbs | yes | `autoTrackCrashes` |
-| Memory and frame-drop metrics | yes | — |
+| Performance metrics the native SDK collects | yes | — |
 | Wireframe snapshots (layout only, text redacted) | yes | `captureSnapshots`, `replaySampleRate` |
 | Pixel screenshots (text and inputs painted over) | yes | `captureScreenshots`, `replaySampleRate` |
 | Plug/unplug events with an H3 cell (~5 km²) and a daily device hash | only if you opt in | `powerOutageContribution` (see below) |
@@ -407,6 +340,10 @@ UnilitixUnmasked(child: Text('Checkout'))
 UnilitixPrivate(child: BalanceChart())
 ```
 
+- **Taps inside `UnilitixPrivate`** are recorded without their position on
+  Android. On iOS taps are recorded by UnilitixCore, which cannot see Flutter
+  widgets: use `autoTrackTaps: false` on screens where tap positions are
+  sensitive (PIN pads), or keep such input in a native view.
 - **Images** can be blacked out with `maskImages: true` (off by default).
 - If the SDK cannot compute the mask regions for a frame, the frame is dropped
   rather than sent unmasked.
@@ -438,12 +375,12 @@ await Unilitix.setConsent(UnilitixConsent.granted); // sends everything held
 await Unilitix.setConsent(UnilitixConsent.denied);  // deletes everything held
 ```
 
-The decision is persisted; on later launches it overrides the `consent:`
-argument. `optOut()` / `optIn()` are shortcuts for `denied` / `granted`.
-`setConsent` (and `optOut()` / `optIn()`) may be called before `init`: the
-decision is saved at once and `init` starts in it.
-`denied` stops capture, clears memory buffers, purges the whole on-device
-queue including crash reports and session stubs, and gates every upload path.
+The decision is persisted by the native SDK; on later launches it overrides
+the `consent:` argument. `optOut()` / `optIn()` are shortcuts for `denied` /
+`granted`. `setConsent` may be called before `init`: it is sent right after
+the native SDK starts, before any other call. A decision stored by 2.x is
+carried over on the first 3.0.0 launch. `denied` stops capture and deletes
+everything queued on the device.
 
 The anonymous id is a random UUID stored on the device — it is never derived
 from the advertising id, IMEI or any hardware identifier — and `Unilitix.reset()`
@@ -618,24 +555,22 @@ Unilitix.reset();
 ## Android Setup
 
 No additional setup required (see [Power outage contribution](#power-outage-contribution)
-for the one opt-in feature that needs a permission). Ensure your
-`android/app/build.gradle` has:
+for the one opt-in feature that needs a permission). The plugin depends on
+`com.unilitix:unilitix-android` from Maven Central; keep `mavenCentral()` in
+your repositories. Ensure your `android/app/build.gradle` has:
 
 ```groovy
 compileSdk 35
 minSdk 21
 ```
 
-The plugin compiles a little C (native crash capture) with the NDK your app
-build uses; an NDK is installed automatically by the Android Gradle Plugin
-when missing. To pin the version (Flutter's default is `flutter.ndkVersion`):
+The plugin has no native code of its own since 3.0.0 (native crash capture
+is the Android SDK's).
 
-```kotlin
-// android/app/build.gradle.kts
-android {
-  ndkVersion = "27.0.12077973"
-}
-```
+**Apps that also use the Unilitix Android SDK directly** (add-to-app, native
+screens): there is one SDK instance per process. Initialise it from Flutter
+(`Unilitix.init`) or natively, not both: the second `init` is ignored, so the
+first one's API key and options apply to native and Flutter screens alike.
 
 ---
 
@@ -654,7 +589,8 @@ cd ios && pod install
 ```
 
 No additional `Info.plist` entries are required, unless you enable
-[power outage contribution](#power-outage-contribution).
+[power outage contribution](#power-outage-contribution). UnilitixCore is
+compiled into the plugin's pod (no separate dependency).
 
 ---
 
@@ -665,7 +601,7 @@ No additional `Info.plist` entries are required, unless you enable
 Ensure your app meets these requirements:
 - `compileSdk 35` or higher
 - Flutter 3.22+ for full Impeller compatibility
-- SDK v2.0.66 or above
+- Android 8.0 (API 26) or later on the device (screenshots use `PixelCopy`)
 
 ### Sessions showing as incomplete
 
@@ -681,14 +617,18 @@ This warning fires during SDK init before `MaterialApp` is built. It clears auto
 
 ### Anonymous ID changes after app update
 
-If upgrading from v2.0.70 or earlier to v2.0.74, users will receive a new anonymous ID on first launch. This is a one-time break — anonymous IDs are now stable across all future app updates.
+Upgrading from 2.x to 3.0.0 gives every install a new anonymous ID on its
+first launch (identity moved from Dart storage to the native SDK) and forgets
+the user ID: call `identify()` again after login, as most apps already do on
+every launch. See [MIGRATION.md](MIGRATION.md). (Upgrading from v2.0.70 or
+earlier to v2.0.74 was a similar one-time break.)
 
 ### Events returning 402
 
 Your workspace has reached its event limit. Upgrade your plan or contact support to increase your limit.
-Since 2.7.4 the SDK keeps what it has captured (within its on-device caps)
-and pauses uploads for 15 minutes (or the server's `Retry-After`) at a time,
-so nothing is lost while the plan is topped up.
+The SDK keeps what it has captured (within its on-device caps) and pauses
+uploads for 15 minutes (or the server's `Retry-After`) at a time, so nothing
+is lost while the plan is topped up.
 
 ---
 

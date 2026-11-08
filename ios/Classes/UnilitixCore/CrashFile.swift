@@ -1,7 +1,10 @@
-// VENDORED from UnilitixCore 0.7.2 (CrashFile.swift) by scripts/sync-ios-core.sh.
+// VENDORED from UnilitixCore 0.8.0 (CrashFile.swift) by scripts/sync-ios-core.sh.
 // Do not edit here; change UnilitixCore and re-run the script.
 
 import Foundation
+#if canImport(os)
+import os
+#endif
 
 /// A native crash written to a file by the dying process, for the SDK to
 /// report on the next launch: uncaught Objective-C exceptions and fatal
@@ -125,15 +128,20 @@ enum CrashFile {
         }
     }
 
-    /// The crash's `Fingerprint`: the exception type and stack, or, for a
-    /// signal, the key `SIGNAL:<n>` alone so each signal is its own group.
-    /// The Dart SDK keys native records the same way. A signal's backtrace
-    /// (0.7.0) is left out on purpose: signals grouped without a stack
-    /// before, and symbolication must not change grouping.
+    /// The crash's `Fingerprint`: the exception type and stack (an uncaught
+    /// exception, unchanged), or, for a signal (contract 1.4.0 native
+    /// grouping), `SIGNAL:<n>` plus the first app frames of its
+    /// `stackTrace` (`Fingerprint.native`): frames of system, runtime and
+    /// engine images (`SdkContract.nativeSystemImages`) are skipped, and a
+    /// stack without app frames gives the 1.3 value, `SIGNAL:<n>` alone.
+    /// The API applies the same rule on ingest.
     static func fingerprint(of record: [String: Any]) -> String {
         let type = record["exceptionType"] as? String ?? "NativeCrash"
-        if let signal = intValue(record["signal"]) {
-            return Fingerprint.of("\(type):\(signal)", stack: nil)
+        let signal = intValue(record["signal"])
+        if signal != nil || Fingerprint.isSignalType(type) {
+            let key = Fingerprint.signalFingerprintType(Fingerprint.isSignalType(type) ? type : "SIGNAL",
+                                                        signal: signal)
+            return Fingerprint.native(key, stack: record["stackTrace"] as? String)
         }
         return Fingerprint.of(type, stack: record["stackTrace"] as? String)
     }
@@ -369,9 +377,24 @@ enum CrashFile {
     private static var exceptionHandlerInstalled = false
     private static var path = ""
     private static var previousHandler: (@convention(c) (NSException) -> Void)?
-    /// Previous `sigaction` per signal, restored and chained from the handler.
-    /// Never mutated after `installSignalHandlers`.
-    private static var previousActions: [Int32: sigaction] = [:]
+    /// Previous `sigaction` per signal number, restored and chained from the
+    /// handler: a fixed C array (0.8.0; was a Swift Dictionary, whose
+    /// lookup is not async-signal-safe), allocated once at install and
+    /// never freed or mutated afterwards. `hasPreviousAction[n]` is 1 when
+    /// slot n holds one.
+    private static let maxSignal = 32
+    private static var previousActions: UnsafeMutablePointer<sigaction>?
+    private static var hasPreviousAction: UnsafeMutablePointer<Int32>?
+    /// One crashing thread writes the record (0.8.0). Two threads that
+    /// crash at once used to interleave their writes into one file; now the
+    /// first one to take this lock writes, and the others wait (up to
+    /// `writerWaitIterations` × 10 ms) for it to finish, then skip writing
+    /// and chain. `os_unfair_lock_trylock` is a single atomic
+    /// compare-and-swap, so it is safe in a signal handler.
+    private static var writerLock: UnsafeMutablePointer<os_unfair_lock>?
+    /// Set (under `writerLock`) once a record was written.
+    private static var recordWritten: UnsafeMutablePointer<Int32>?
+    private static let writerWaitIterations = 300
     /// Resolved at install so the signal handler never touches Foundation.
     private static var pathCString: UnsafeMutablePointer<CChar>?
     private static var altStack: UnsafeMutableRawPointer?
@@ -402,6 +425,19 @@ enum CrashFile {
     /// recorded too. Signal handlers run on an alternate stack (installed for
     /// the calling thread, normally main) so a stack overflow can still be
     /// recorded.
+    ///
+    /// Why signals and not a Mach exception server: a Mach exception port
+    /// (`task_set_exception_ports` for `EXC_BAD_ACCESS`/`EXC_CRASH`, served
+    /// by a dedicated thread) would also catch stack overflows on threads
+    /// without an alternate stack, but it takes the port from the debugger
+    /// and from other crash reporters (Crashlytics, Sentry) that apps embed
+    /// next to this SDK, must forward to them by hand, and cannot be chained
+    /// as reliably as `sigaction`. Since `sigaltstack` is per thread, a
+    /// stack overflow on a thread other than the installing one (normally
+    /// main) is not recorded: the kernel cannot run the handler on the
+    /// overflowed stack, and the process dies with the default action.
+    /// Every other fatal signal on any thread is recorded. This trade-off is
+    /// documented in README "Crashes".
     static func installSignalHandlers(path: String) {
         guard !signalsInstalled else { return }
         signalsInstalled = true
@@ -411,6 +447,18 @@ enum CrashFile {
         CrashFile.path = path
         exceptionRecorded = false
         pathCString = strdup(path)
+        let actions = UnsafeMutablePointer<sigaction>.allocate(capacity: maxSignal)
+        actions.initialize(repeating: sigaction(), count: maxSignal)
+        previousActions = actions
+        let has = UnsafeMutablePointer<Int32>.allocate(capacity: maxSignal)
+        has.initialize(repeating: 0, count: maxSignal)
+        hasPreviousAction = has
+        let lock = UnsafeMutablePointer<os_unfair_lock>.allocate(capacity: 1)
+        lock.initialize(to: os_unfair_lock())
+        writerLock = lock
+        let written = UnsafeMutablePointer<Int32>.allocate(capacity: 1)
+        written.initialize(to: 0)
+        recordWritten = written
 
         // A stack-overflow SIGSEGV cannot run a handler on the stack that overflowed.
         let size = max(Int(SIGSTKSZ), 64 * 1024)
@@ -426,8 +474,9 @@ enum CrashFile {
             action.sa_flags = SA_SIGINFO | SA_ONSTACK
             sigemptyset(&action.sa_mask)
             var previous = sigaction()
-            if sigaction(sig, &action, &previous) == 0 {
-                previousActions[sig] = previous
+            if sigaction(sig, &action, &previous) == 0, sig > 0, Int(sig) < maxSignal {
+                actions[Int(sig)] = previous
+                has[Int(sig)] = 1
             }
         }
     }
@@ -475,6 +524,30 @@ enum CrashFile {
     static func recordSignal(_ s: Int32, to path: UnsafePointer<CChar>,
                              context: UnsafeMutableRawPointer? = nil) -> Bool {
         guard !exceptionRecorded else { return false }
+        // Single writer: without the lock (handlers not installed, tests),
+        // write directly as before.
+        guard let lock = writerLock, let written = recordWritten else {
+            return writeRecordFile(s, to: path, context: context)
+        }
+        var acquired = false
+        for _ in 0..<writerWaitIterations {
+            if os_unfair_lock_trylock(lock) { acquired = true; break }
+            var pause = timespec(tv_sec: 0, tv_nsec: 10_000_000)
+            nanosleep(&pause, nil)
+        }
+        guard acquired else { return false }
+        var wrote = false
+        if written.pointee == 0 {
+            wrote = writeRecordFile(s, to: path, context: context)
+            if wrote { written.pointee = 1 }
+        }
+        os_unfair_lock_unlock(lock)
+        return wrote
+    }
+
+    /// open/write/close of one signal record. Async-signal-safe.
+    private static func writeRecordFile(_ s: Int32, to path: UnsafePointer<CChar>,
+                                        context: UnsafeMutableRawPointer?) -> Bool {
         let fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0o644)
         guard fd >= 0 else { return false }
         CrashFile.writeSignalRecord(fd: fd, signal: s, seconds: Int(time(nil)), context: context)
@@ -491,10 +564,11 @@ enum CrashFile {
     }
 
     /// Runs the handler installed before ours, or restores the default action
-    /// and re-raises. Reading the dictionary is not strictly
-    /// async-signal-safe, but it is never mutated after `install`.
+    /// and re-raises. Reads the fixed C array only (async-signal-safe).
     private static func chain(_ s: Int32, _ info: UnsafeMutablePointer<siginfo_t>?, _ context: UnsafeMutableRawPointer?) {
-        if var previous = previousActions[s] {
+        if s > 0, Int(s) < maxSignal, let actions = previousActions, let has = hasPreviousAction,
+           has[Int(s)] != 0 {
+            var previous = actions[Int(s)]
             if previous.sa_flags & SA_SIGINFO != 0 {
                 if let handler = previous.__sigaction_u.__sa_sigaction {
                     // Reinstall theirs first so a crash inside it cannot loop back here.

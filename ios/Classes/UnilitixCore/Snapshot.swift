@@ -1,4 +1,4 @@
-// VENDORED from UnilitixCore 0.7.2 (Snapshot.swift) by scripts/sync-ios-core.sh.
+// VENDORED from UnilitixCore 0.8.0 (Snapshot.swift) by scripts/sync-ios-core.sh.
 // Do not edit here; change UnilitixCore and re-run the script.
 
 import Foundation
@@ -284,6 +284,9 @@ struct PendingSnapshot: Codable, Equatable {
     var viewportWidth: Int
     var viewportHeight: Int
     var hierarchy: SnapshotNode
+    /// A wrapper's own hierarchy (`Engine.addExternalSnapshot`), sent
+    /// instead of `hierarchy` exactly as the wrapper built it (0.8.0).
+    var rawHierarchy: JSONValue? = nil
 }
 
 /// `SnapshotPayload` in the API (internal/model/types.go).
@@ -294,6 +297,7 @@ struct SnapshotPayload: Encodable {
     var viewportWidth: Int
     var viewportHeight: Int
     var hierarchy: SnapshotNode
+    var rawHierarchy: JSONValue?
 
     init(_ s: PendingSnapshot) {
         capturedAt = ISO8601.string(from: s.capturedAt)
@@ -302,6 +306,25 @@ struct SnapshotPayload: Encodable {
         viewportWidth = s.viewportWidth
         viewportHeight = s.viewportHeight
         hierarchy = s.hierarchy
+        rawHierarchy = s.rawHierarchy
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case capturedAt, ordinal, screenName, viewportWidth, viewportHeight, hierarchy
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(capturedAt, forKey: .capturedAt)
+        try c.encode(ordinal, forKey: .ordinal)
+        try c.encode(screenName, forKey: .screenName)
+        try c.encode(viewportWidth, forKey: .viewportWidth)
+        try c.encode(viewportHeight, forKey: .viewportHeight)
+        if let raw = rawHierarchy {
+            try c.encode(raw, forKey: .hierarchy)
+        } else {
+            try c.encode(hierarchy, forKey: .hierarchy)
+        }
     }
 }
 

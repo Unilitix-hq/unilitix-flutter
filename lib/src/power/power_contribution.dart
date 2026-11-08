@@ -6,11 +6,11 @@ import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../logger/logger.dart';
-import '../network/api_client.dart';
-import '../privacy/opt_manager.dart';
+import '../consent.dart';
 import '../util/ids.dart';
 import 'h3.dart';
 import 'power_signals.dart';
+import 'power_transport.dart';
 
 /// Which implementation runs on this platform.
 enum PowerPlatformKind { android, ios, unsupported }
@@ -123,7 +123,7 @@ class PowerContribution with WidgetsBindingObserver {
   final String apiKey;
   final String apiUrl;
   final String sdkVersion;
-  final Future<ApiResult> Function(Map<String, dynamic> body) post;
+  final Future<PowerPostResult> Function(Map<String, dynamic> body) post;
   final PowerChannel channel;
   final PowerPlatformKind platform;
   final DateTime Function() _clock;

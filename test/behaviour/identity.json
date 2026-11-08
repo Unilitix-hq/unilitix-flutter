@@ -1,0 +1,389 @@
+{
+  "kind": "behaviour",
+  "area": "identity",
+  "description": "identify, persistence of the user across restarts, and reset.",
+  "cases": [
+    {
+      "id": "identity.identify-links-anonymous-id",
+      "description": "identify POSTs /v1/ingest/identify {anonymousId, customUserId, traits} and later session uploads carry customUserId.",
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "expectState": {
+            "anonymousId": {
+              "$capture": "a1",
+              "$match": "<uuid>"
+            }
+          }
+        },
+        {
+          "identify": {
+            "userId": "u1",
+            "traits": {
+              "plan": "pro"
+            }
+          }
+        },
+        {
+          "track": {
+            "name": "a"
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/identify",
+              "body": {
+                "anonymousId": {
+                  "$eq": "a1"
+                },
+                "customUserId": "u1",
+                "traits": {
+                  "plan": "pro"
+                }
+              }
+            },
+            {
+              "path": "/v1/ingest/session",
+              "body": {
+                "anonymousId": {
+                  "$eq": "a1"
+                },
+                "customUserId": "u1",
+                "events": [
+                  {
+                    "type": "SESSION_START"
+                  },
+                  {
+                    "type": "CUSTOM",
+                    "metadata": {
+                      "name": "a"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "expectState": {
+            "userId": "u1",
+            "anonymousId": {
+              "$eq": "a1"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "identity.identify-persists-across-restart",
+      "description": "The user id and the anonymous id are persisted: after a restart, uploads carry them without a new identify call (identify is not re-sent).",
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "identify": {
+            "userId": "u1"
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/identify",
+              "body": {
+                "customUserId": "u1",
+                "anonymousId": {
+                  "$capture": "a1"
+                }
+              }
+            },
+            {
+              "path": "/v1/ingest/session",
+              "body": {
+                "customUserId": "u1"
+              }
+            }
+          ]
+        },
+        {
+          "restart": {}
+        },
+        {
+          "init": {}
+        },
+        {
+          "expectState": {
+            "userId": "u1",
+            "anonymousId": {
+              "$eq": "a1"
+            }
+          }
+        },
+        {
+          "track": {
+            "name": "after-restart"
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/session",
+              "body": {
+                "anonymousId": {
+                  "$eq": "a1"
+                },
+                "customUserId": "u1",
+                "events": [
+                  {
+                    "type": "SESSION_START"
+                  },
+                  {
+                    "type": "CUSTOM",
+                    "metadata": {
+                      "name": "after-restart"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "identity.reset-rotates-ids",
+      "description": "reset() forgets the user: new anonymous id, new session (SESSION_START), no user id or traits. Events after reset are not linked to the old user; a later identify uses the new anonymous id and does not resend old traits.",
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "identify": {
+            "userId": "u1",
+            "traits": {
+              "plan": "pro"
+            }
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/identify",
+              "body": {
+                "customUserId": "u1",
+                "anonymousId": {
+                  "$capture": "a1"
+                }
+              }
+            },
+            {
+              "path": "/v1/ingest/session",
+              "body": {
+                "sessionId": {
+                  "$capture": "s1"
+                },
+                "customUserId": "u1"
+              }
+            }
+          ]
+        },
+        {
+          "reset": {}
+        },
+        {
+          "expectState": {
+            "anonymousId": {
+              "$ne": "a1",
+              "$match": "<uuid>",
+              "$capture": "a2"
+            },
+            "sessionId": {
+              "$ne": "s1",
+              "$match": "<uuid>",
+              "$capture": "s2"
+            },
+            "userId": null
+          }
+        },
+        {
+          "track": {
+            "name": "after-reset"
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/session",
+              "body": {
+                "sessionId": {
+                  "$eq": "s2"
+                },
+                "anonymousId": {
+                  "$eq": "a2"
+                },
+                "customUserId": "<empty>",
+                "events": [
+                  {
+                    "type": "SESSION_START"
+                  },
+                  {
+                    "type": "CUSTOM",
+                    "metadata": {
+                      "name": "after-reset"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "identify": {
+            "userId": "u2"
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/identify",
+              "body": {
+                "anonymousId": {
+                  "$eq": "a2"
+                },
+                "customUserId": "u2",
+                "traits": {
+                  "$oneOf": [
+                    "<empty>",
+                    {
+                      "$size": 0
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "identity.reset-does-not-relink-queued-events",
+      "description": "Events captured before reset and not yet uploaded keep their original session and anonymous id; events after reset go to the new session.",
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "expectState": {
+            "anonymousId": {
+              "$capture": "a1"
+            },
+            "sessionId": {
+              "$capture": "s1"
+            }
+          }
+        },
+        {
+          "identify": {
+            "userId": "u1"
+          }
+        },
+        {
+          "track": {
+            "name": "before-reset"
+          }
+        },
+        {
+          "reset": {}
+        },
+        {
+          "track": {
+            "name": "after-reset"
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/identify",
+              "body": {
+                "anonymousId": {
+                  "$eq": "a1"
+                },
+                "customUserId": "u1"
+              }
+            },
+            {
+              "path": "/v1/ingest/session",
+              "body": {
+                "sessionId": {
+                  "$eq": "s1"
+                },
+                "anonymousId": {
+                  "$eq": "a1"
+                },
+                "customUserId": "u1",
+                "events": [
+                  {
+                    "type": "SESSION_START"
+                  },
+                  {
+                    "type": "CUSTOM",
+                    "metadata": {
+                      "name": "before-reset"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "path": "/v1/ingest/session",
+              "body": {
+                "sessionId": {
+                  "$ne": "s1"
+                },
+                "anonymousId": {
+                  "$ne": "a1"
+                },
+                "customUserId": "<empty>",
+                "events": [
+                  {
+                    "type": "SESSION_START"
+                  },
+                  {
+                    "type": "CUSTOM",
+                    "metadata": {
+                      "name": "after-reset"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
