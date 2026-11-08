@@ -3,9 +3,15 @@
 /// Pass to [Unilitix.init]:
 /// ```dart
 /// await Unilitix.init(
-///   config: const UnilitixConfig(apiKey: 'your_api_key'),
+///   'your_api_key',
+///   config: const UnilitixConfig(apiKey: 'your_api_key', debug: true),
 /// );
 /// ```
+///
+/// Since 3.0.0 every option except the replay masking ones, the Dart error
+/// hooks and [powerOutageContribution] is applied by the native SDK
+/// (Android `unilitix-android`, iOS UnilitixCore), with that SDK's clamping
+/// of out-of-range values. Option names are the SDK contract's.
 class UnilitixConfig {
   /// Your Unilitix API key. Required.
   final String apiKey;
@@ -13,18 +19,22 @@ class UnilitixConfig {
   /// Unilitix ingest API base URL.
   final String apiUrl;
 
-  /// Automatically track user taps via [UnilitixGestureDetector].
+  /// Automatically track taps (`TAP`). Android: taps reach the SDK through
+  /// [UnilitixWidget] (or [UnilitixGestureDetector]), so a tap inside a
+  /// [UnilitixPrivate] area is sent without its position. iOS: the native
+  /// SDK records taps itself, on the current route name.
   final bool autoTrackTaps;
 
-  /// Automatically capture crash reports. On iOS also turns on app-hang
-  /// (`ANR`) detection; see [appHangTimeoutMs].
+  /// Capture crashes: Dart and Flutter errors (`FlutterError.onError`,
+  /// `PlatformDispatcher.onError`) here, native crashes, ANRs (Android) and
+  /// app hangs (iOS, see [appHangTimeoutMs]) in the native SDK.
   final bool autoTrackCrashes;
 
   /// iOS, with [autoTrackCrashes]: report an app hang (`ANR`) when the main
   /// (platform) thread does not respond for this long, in milliseconds,
   /// while the app is in the foreground. 0 turns hang detection off. Not
-  /// used on Android, where the system's ANRs are reported. Not an SDK
-  /// contract option (the native iOS SDK has the same default).
+  /// used on Android, where the system's ANRs are reported. Passed to the
+  /// native iOS SDK (UnilitixCore `appHangTimeoutMs`, same default).
   final int appHangTimeoutMs;
 
   /// Automatically detect rage taps (3+ taps within 100 px / 1 s).

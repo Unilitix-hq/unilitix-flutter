@@ -1,6 +1,7 @@
 package com.unilitix.unilitix_flutter
 
 import android.app.Activity
+import android.app.Application
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.graphics.Bitmap
@@ -8,143 +9,160 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
-import android.view.PixelCopy
-import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
-import android.net.NetworkRequest
-import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.telephony.TelephonyManager
+import android.view.PixelCopy
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
-import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
-import io.unilitix.flutter.nativecrash.Fingerprint
-import org.json.JSONObject
+import io.unilitix.sdk.Unilitix
+import io.unilitix.sdk.UnilitixConsent
 import java.io.ByteArrayOutputStream
-import java.io.File
-import java.io.PrintWriter
-import java.io.StringWriter
 import java.util.concurrent.Executors
 
-class UnilitixPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandler, ActivityAware {
-    private lateinit var methodChannel: MethodChannel
-    private lateinit var eventChannel: EventChannel
-    private lateinit var screenshotChannel: MethodChannel
+/**
+ * The Android side of the Unilitix Flutter SDK (3.0.0): a thin bridge to
+ * the native Android SDK (`com.unilitix:unilitix-android`), which owns
+ * sessions, identity, consent, the offline queue, uploads, device and
+ * network context, JVM/NDK crashes and ANRs.
+ *
+ * Dart sends what only Dart can see: route names (`screen`), Dart errors
+ * (`recordError` → `recordExternalError(platform = "dart")`), taps with
+ * Flutter's privacy rules (`recordTap`), wireframe snapshots
+ * (`addSnapshot` → `addExternalSnapshot`) and masked screenshots, which
+ * this plugin draws with PixelCopy and hands to `captureExternalScreenshot`.
+ *
+ * Channel `com.unilitix/sdk`. Every handler answers on the main thread and
+ * never throws into Flutter.
+ */
+class UnilitixPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
+    private lateinit var channel: MethodChannel
     private lateinit var context: Context
-    private var eventSink: EventChannel.EventSink? = null
-    private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var activity: Activity? = null
 
-    /** Single background thread for image work so captures never contend with the UI thread. */
-    private val imageExecutor = Executors.newSingleThreadExecutor { r -> Thread(r, "unilitix-image") }
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    /** Power-outage contribution: file, preferences, WorkManager and network work, off the main thread. */
+    /** Image work (scaling, masks, JPEG) and frame hand-off, off the main thread. */
+    private val imageExecutor = Executors.newSingleThreadExecutor { r -> Thread(r, "unilitix-image") }
+
+    /**
+     * Dart errors. A fatal one is persisted synchronously by the native SDK
+     * (bounded by the contract's fatal budget); that wait must not block the
+     * main thread, since a Dart CRASH does not end the process.
+     */
+    private val errorExecutor = Executors.newSingleThreadExecutor { r -> Thread(r, "unilitix-error") }
+
+    /** Power-outage contribution: file, preferences, WorkManager and network work. */
     private val powerExecutor = Executors.newSingleThreadExecutor { r -> Thread(r, "unilitix-power") }
-    /** Native crash records (file reads, the exit-info scan) at startup, off the main thread. */
-    private val crashExecutor = Executors.newSingleThreadExecutor { r -> Thread(r, "unilitix-crash") }
-    /** Runtime power receiver, registered only while the feature is enabled. */
     private var powerReceiver: BroadcastReceiver? = null
+
+    /** Encoded frames waiting for Dart's commit or discard (see captureScreenshot). */
+    private val pendingFrames = PendingFrames()
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         context = binding.applicationContext
-
-        methodChannel = MethodChannel(binding.binaryMessenger, "com.unilitix/sdk")
-        methodChannel.setMethodCallHandler(this)
-
-        eventChannel = EventChannel(binding.binaryMessenger, "com.unilitix/network")
-        eventChannel.setStreamHandler(this)
-
-        screenshotChannel = MethodChannel(binding.binaryMessenger, "unilitix/screenshot")
-        screenshotChannel.setMethodCallHandler { call, result ->
-            if (call.method == "captureScreenshot") {
-                captureScreenshot(call, result)
-            } else {
-                result.notImplemented()
-            }
-        }
-
-        NativeCrashHandler.install(context)
+        channel = MethodChannel(binding.binaryMessenger, CHANNEL)
+        channel.setMethodCallHandler(this)
     }
 
     override fun onMethodCall(call: MethodCall, result: Result) {
+        try {
+            handle(call, result)
+        } catch (t: Throwable) {
+            result.error("UNILITIX_ERROR", "${call.method}: ${t.javaClass.simpleName}: ${t.message}", null)
+        }
+    }
+
+    private fun handle(call: MethodCall, result: Result) {
+        val args = call.arguments as? Map<*, *> ?: emptyMap<String, Any?>()
         when (call.method) {
-            "getBatteryLevel" -> {
-                try {
-                    val bm = context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
-                    val level = bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1
-                    result.success(level.toDouble() / 100.0)
-                } catch (e: Exception) { result.success(-1.0) }
+            "init" -> init(args, result)
+            "track" -> {
+                Unilitix.trackEvent(args.string("name") ?: "", args.mapArg("properties").nonNull())
+                result.success(null)
             }
-            "getCarrierName" -> {
-                try {
-                    val tm = context.getSystemService(Context.TELEPHONY_SERVICE)
-                            as? TelephonyManager
-                    result.success(tm?.networkOperatorName ?: "")
-                } catch (e: Exception) {
-                    result.success("")
-                }
+            "screen" -> {
+                args.string("name")?.let { Unilitix.trackScreen(it) }
+                result.success(null)
             }
-            // Device fields the SDK used to get from device_info_plus. Served
-            // from android.os.Build directly: no extra plugin, no extra dex.
-            "getDeviceInfo" -> {
-                result.success(mapOf(
-                    "manufacturer" to (Build.MANUFACTURER ?: ""),
-                    "model" to (Build.MODEL ?: ""),
-                    "brand" to (Build.BRAND ?: ""),
-                    "osVersion" to (Build.VERSION.RELEASE ?: ""),
-                    "sdkInt" to Build.VERSION.SDK_INT,
-                    "timezone" to java.util.TimeZone.getDefault().id,
-                ))
+            "identify" -> {
+                args.string("userId")?.let { Unilitix.identify(it, args.mapArg("traits").nonNull()) }
+                result.success(null)
             }
-            // App fields the SDK used to get from package_info_plus.
-            "getPackageInfo" -> {
-                try {
-                    val pm = context.packageManager
-                    val pi = pm.getPackageInfo(context.packageName, 0)
-                    val buildNumber = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                        pi.longVersionCode.toString()
-                    } else {
-                        @Suppress("DEPRECATION") pi.versionCode.toString()
-                    }
-                    result.success(mapOf(
-                        "appName" to context.applicationInfo.loadLabel(pm).toString(),
-                        "packageName" to context.packageName,
-                        "version" to (pi.versionName ?: ""),
-                        "buildNumber" to buildNumber,
-                    ))
-                } catch (e: Exception) {
-                    result.success(null)
-                }
+            "reset" -> { Unilitix.reset(); result.success(null) }
+            "flush" -> { Unilitix.flush(); result.success(null) }
+            "startSession" -> { Unilitix.startSession(); result.success(null) }
+            "endSession" -> { Unilitix.endSession(); result.success(null) }
+            "setConsent" -> {
+                UnilitixConsent.fromValue(args.string("consent"))?.let { Unilitix.setConsent(it) }
+                result.success(null)
             }
-            // One crash record of an earlier process (JVM uncaught exception,
-            // fatal signal on API 21-29, native exit on API 30+) or, from
-            // 2.6.0, an ANR exit on API 30+ ("type":"ANR"), oldest first, or
-            // null when there are no more. Each is returned once;
-            // Dart calls this until it gets null. See NativeCrashBridge.
-            "readNativeCrash" -> {
-                crashExecutor.execute {
-                    val record = try {
-                        NativeCrashBridge.next(context)
+            "addBreadcrumb" -> {
+                Unilitix.addBreadcrumb(args.string("message") ?: "", args.string("category") ?: "custom")
+                result.success(null)
+            }
+            "recordError" -> {
+                val type = args.string("type") ?: "Error"
+                val message = args.string("message") ?: ""
+                val stack = args.string("stackTrace")
+                val fatal = args["fatal"] == true
+                val platform = args.string("platform") ?: "dart"
+                val fingerprint = args.string("fingerprint")
+                @Suppress("UNCHECKED_CAST")
+                val metadata = (args["metadata"] as? Map<String, Any?>)?.takeIf { it.isNotEmpty() }
+                errorExecutor.execute {
+                    try {
+                        Unilitix.recordExternalError(type, message, stack, fatal, platform, fingerprint, metadata)
                     } catch (_: Throwable) {
-                        null
                     }
-                    mainHandler.post { result.success(record) }
                 }
+                result.success(null)
             }
-            // Power-outage contribution (opt-in). The Dart SDK sends
+            // Taps come from Dart on Android (see init: the native tracker
+            // would name every Flutter screen after the Activity). `type` is
+            // TAP or RAGE_TAP; x/y are logical pixels, absent inside a
+            // UnilitixPrivate area. The core stamps the current screen (the
+            // last trackScreen).
+            "recordTap" -> {
+                val type = if (args.string("type") == "RAGE_TAP") "RAGE_TAP" else "TAP"
+                Unilitix.recordExternalInteraction(type, args.number("x")?.toDouble(), args.number("y")?.toDouble())
+                result.success(null)
+            }
+            "replayState" -> result.success(state())
+            "addSnapshot" -> {
+                args.string("json")?.let { Unilitix.addExternalSnapshot(it) }
+                result.success(null)
+            }
+            "captureScreenshot" -> captureScreenshot(args, result)
+            "commitScreenshot" -> {
+                val frame = pendingFrames.take(args.number("id")?.toInt() ?: -1)
+                if (frame != null) {
+                    val width = args.number("width")?.toInt() ?: frame.width
+                    val height = args.number("height")?.toInt() ?: frame.height
+                    val ts = args.number("timestampMs")?.toLong() ?: System.currentTimeMillis()
+                    val screen = args.string("screen")
+                    imageExecutor.execute {
+                        try {
+                            Unilitix.captureExternalScreenshot(frame.jpeg, width, height, ts, screen)
+                        } catch (_: Throwable) {
+                        }
+                    }
+                }
+                result.success(null)
+            }
+            "discardScreenshot" -> {
+                pendingFrames.take(args.number("id")?.toInt() ?: -1)
+                result.success(null)
+            }
+            // Power-outage contribution (opt-in, Flutter-only). Dart sends
             // enabled=true only when the app set the config flag and consent
             // is granted; anything else disables and deletes everything.
             "powerConfigure" -> {
-                val args = call.arguments as? Map<*, *> ?: emptyMap<String, Any?>()
                 powerExecutor.execute {
                     try {
                         PowerContribution.configure(context, args)
@@ -156,7 +174,6 @@ class UnilitixPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
                     }
                 }
             }
-            // Foreground trigger: record a charging sample, then upload.
             "powerUploadNow" -> {
                 powerExecutor.execute {
                     val outcome = try {
@@ -173,22 +190,69 @@ class UnilitixPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
     }
 
     // -------------------------------------------------------------------------
+    // Init
+    // -------------------------------------------------------------------------
+
+    private fun init(args: Map<*, *>, result: Result) {
+        val apiKey = args.string("apiKey")
+        if (apiKey.isNullOrEmpty()) {
+            result.error("MISSING_API_KEY", "apiKey is required", null)
+            return
+        }
+        val application = context as? Application ?: context.applicationContext as? Application
+        if (application == null) {
+            result.error("NO_APPLICATION", "the plugin has no Application context", null)
+            return
+        }
+        val consent = UnilitixConsent.fromValue(args.string("consent")) ?: UnilitixConsent.GRANTED
+        val config = args.mapArg("config")
+        val wrapperName = args.string("wrapperName") ?: "flutter"
+        val wrapperVersion = args.string("wrapperVersion") ?: ""
+
+        // Before init, so the first session already reports the wrapper and
+        // the native screenshot/snapshot capturers (which would only see one
+        // FlutterView) never start: Dart supplies the frames.
+        Unilitix.setWrapper(wrapperName, wrapperVersion)
+        Unilitix.setExternalScreenCapture(true)
+        Unilitix.init(application, apiKey, consent) { NativeConfig.apply(this, config) }
+        if (!Unilitix.isInitialized) {
+            result.error("INIT_FAILED", "the native SDK did not start (see the Unilitix log)", null)
+            return
+        }
+        // Idempotent; covers a core that applies them to the live instance only.
+        Unilitix.setWrapper(wrapperName, wrapperVersion)
+        Unilitix.setExternalScreenCapture(true)
+        activity?.let { Unilitix.attachToActivity(it) }
+        result.success(state())
+    }
+
+    /** What Dart needs to drive capture: consent, session, sampling, who reports taps. */
+    private fun state(): Map<String, Any?> = mapOf(
+        "consent" to Unilitix.consent.value,
+        "sessionId" to Unilitix.currentSessionId(),
+        "replaySampled" to Unilitix.isReplaySampled(),
+        "dartTaps" to true,
+    )
+
+    // -------------------------------------------------------------------------
     // Screenshot via PixelCopy (API 26+)
     //
-    // PixelCopy reads from the window compositor — immune to Impeller/Vulkan
-    // DEVICE_LOCAL texture issues. Everything after the copy (downscale,
-    // occlusion boxes, JPEG encode) runs on a background thread, so the main
-    // thread only pays for the copy itself. Arguments from Dart:
+    // PixelCopy reads from the window compositor, so it works with Impeller
+    // and Vulkan. Everything after the copy (downscale, occlusion boxes, JPEG)
+    // runs on a background thread. The encoded frame stays here until Dart
+    // has checked its masks did not move during the capture: Dart then
+    // commits it (handed to the native SDK) or discards it. Arguments:
     //   maxWidth  Int     target width in px (aspect preserved)
     //   quality   Int     JPEG quality 1..100
-    //   scale     Double  logical-px → window-px factor (devicePixelRatio)
-    //   masks     List<List<Double>>  [left, top, right, bottom] in logical px
+    //   scale     Double  logical px -> window px (devicePixelRatio)
+    //   masks     List<List<Double>>  [left, top, right, bottom], logical px
+    // Answers {id, width, height} (pixels of the encoded frame) or null.
     // -------------------------------------------------------------------------
 
     @Suppress("NewApi")
-    private fun captureScreenshot(call: MethodCall, result: MethodChannel.Result) {
+    private fun captureScreenshot(args: Map<*, *>, result: Result) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            result.success(null) // API < 26 — Dart fallback will handle it
+            result.success(null) // no PixelCopy for windows before API 26
             return
         }
         val act = activity ?: run { result.success(null); return }
@@ -198,12 +262,12 @@ class UnilitixPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
             result.success(null)
             return
         }
-
-        val maxWidth = (call.argument<Number>("maxWidth") ?: 480).toInt()
-        val quality = (call.argument<Number>("quality") ?: 30).toInt().coerceIn(1, 100)
-        val scale = (call.argument<Number>("scale") ?: 1.0).toDouble()
-        @Suppress("UNCHECKED_CAST")
-        val masks = (call.argument<List<List<Number>>>("masks") ?: emptyList())
+        val maxWidth = args.number("maxWidth")?.toInt() ?: 480
+        val quality = (args.number("quality")?.toInt() ?: 30).coerceIn(1, 100)
+        val scale = args.number("scale")?.toDouble() ?: 1.0
+        val masks = (args["masks"] as? List<*>)?.mapNotNull { m ->
+            (m as? List<*>)?.mapNotNull { (it as? Number)?.toDouble() }?.takeIf { it.size >= 4 }
+        } ?: emptyList()
 
         val bitmap = Bitmap.createBitmap(decorView.width, decorView.height, Bitmap.Config.ARGB_8888)
         try {
@@ -214,17 +278,21 @@ class UnilitixPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
                     return@request
                 }
                 imageExecutor.execute {
-                    val bytes = try {
+                    val frame = try {
                         processBitmap(bitmap, maxWidth, quality, scale, masks)
-                    } catch (e: Throwable) {
+                    } catch (_: Throwable) {
                         null
                     } finally {
                         bitmap.recycle()
                     }
-                    mainHandler.post { result.success(bytes) }
+                    val answer = frame?.let {
+                        val id = pendingFrames.put(it)
+                        mapOf("id" to id, "width" to it.width, "height" to it.height)
+                    }
+                    mainHandler.post { result.success(answer) }
                 }
             }, mainHandler)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             bitmap.recycle()
             result.success(null)
         }
@@ -232,8 +300,8 @@ class UnilitixPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
 
     /** Downscale, paint occlusion boxes, encode JPEG. Runs off the main thread. */
     private fun processBitmap(
-        src: Bitmap, maxWidth: Int, quality: Int, scale: Double, masks: List<List<Number>>
-    ): ByteArray {
+        src: Bitmap, maxWidth: Int, quality: Int, scale: Double, masks: List<List<Double>>
+    ): EncodedFrame {
         var bmp = src
         var factor = 1.0
         if (maxWidth > 0 && src.width > maxWidth) {
@@ -247,111 +315,29 @@ class UnilitixPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
             val paint = Paint().apply { color = Color.BLACK; style = Paint.Style.FILL }
             val k = scale * factor // logical px -> output px
             for (m in masks) {
-                if (m.size < 4) continue
                 val r = Rect(
-                    ((m[0].toDouble() * k) - 1).toInt().coerceIn(0, bmp.width),
-                    ((m[1].toDouble() * k) - 1).toInt().coerceIn(0, bmp.height),
-                    ((m[2].toDouble() * k) + 1).toInt().coerceIn(0, bmp.width),
-                    ((m[3].toDouble() * k) + 1).toInt().coerceIn(0, bmp.height),
+                    ((m[0] * k) - 1).toInt().coerceIn(0, bmp.width),
+                    ((m[1] * k) - 1).toInt().coerceIn(0, bmp.height),
+                    ((m[2] * k) + 1).toInt().coerceIn(0, bmp.width),
+                    ((m[3] * k) + 1).toInt().coerceIn(0, bmp.height),
                 )
                 if (r.width() > 0 && r.height() > 0) canvas.drawRect(r, paint)
             }
         }
         val out = ByteArrayOutputStream()
         bmp.compress(Bitmap.CompressFormat.JPEG, quality, out)
+        val frame = EncodedFrame(out.toByteArray(), bmp.width, bmp.height)
         if (bmp !== src) bmp.recycle()
-        return out.toByteArray()
+        return frame
     }
 
     // -------------------------------------------------------------------------
-    // Network event channel
-    // -------------------------------------------------------------------------
-
-    override fun onListen(arguments: Any?, sink: EventChannel.EventSink?) {
-        eventSink = sink
-        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-
-        // Flutter only accepts channel messages on the main thread. On API 26+
-        // the callback is registered with mainHandler; below that Android runs
-        // it on its own ConnectivityThread, so every send is posted to main
-        // (sending from that thread crashed the app at launch on Android 5-7.1).
-        val send: (String) -> Unit = { value -> mainHandler.post { sink?.success(value) } }
-        networkCallback = object : ConnectivityManager.NetworkCallback() {
-            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
-                send(getNetworkType(caps))
-            }
-            override fun onAvailable(network: Network) {
-                val caps = cm.getNetworkCapabilities(network)
-                send(if (caps != null) getNetworkType(caps) else "OFFLINE")
-            }
-            override fun onLost(network: Network) {
-                send("OFFLINE")
-            }
-        }
-
-        val request = NetworkRequest.Builder()
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .build()
-
-        if (Build.VERSION.SDK_INT >= 26) {
-            cm.registerNetworkCallback(request, networkCallback!!, mainHandler)
-        } else {
-            cm.registerNetworkCallback(request, networkCallback!!)
-        }
-
-        val active = cm.activeNetwork
-        val caps = active?.let { cm.getNetworkCapabilities(it) }
-        sink?.success(if (caps != null) getNetworkType(caps) else "OFFLINE")
-    }
-
-    override fun onCancel(arguments: Any?) {
-        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        networkCallback?.let { cm.unregisterNetworkCallback(it) }
-        networkCallback = null
-        eventSink = null
-    }
-
-    private fun getNetworkType(caps: NetworkCapabilities): String {
-        return when {
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)     -> "WIFI"
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ETHERNET"
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> resolveCellular()
-            else -> "UNKNOWN"
-        }
-    }
-
-    private fun resolveCellular(): String {
-        return try {
-            val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
-            val networkType = tm?.dataNetworkType
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
-                networkType == TelephonyManager.NETWORK_TYPE_NR) {
-                "5G"
-            } else {
-                when (networkType) {
-                    TelephonyManager.NETWORK_TYPE_LTE   -> "4G"
-                    TelephonyManager.NETWORK_TYPE_HSDPA,
-                    TelephonyManager.NETWORK_TYPE_HSUPA,
-                    TelephonyManager.NETWORK_TYPE_HSPA,
-                    TelephonyManager.NETWORK_TYPE_HSPAP,
-                    TelephonyManager.NETWORK_TYPE_UMTS  -> "3G"
-                    TelephonyManager.NETWORK_TYPE_EDGE,
-                    TelephonyManager.NETWORK_TYPE_GPRS,
-                    TelephonyManager.NETWORK_TYPE_CDMA  -> "2G"
-                    else -> "CELLULAR"
-                }
-            }
-        } catch (_: Exception) {
-            "CELLULAR"
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // ActivityAware — required to access the Window for PixelCopy
+    // ActivityAware — PixelCopy needs the Window; a late init attaches the SDK
     // -------------------------------------------------------------------------
 
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
         activity = binding.activity
+        if (Unilitix.isInitialized) Unilitix.attachToActivity(binding.activity)
     }
 
     override fun onDetachedFromActivityForConfigChanges() {
@@ -360,6 +346,7 @@ class UnilitixPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
 
     override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {
         activity = binding.activity
+        if (Unilitix.isInitialized) Unilitix.attachToActivity(binding.activity)
     }
 
     override fun onDetachedFromActivity() {
@@ -367,16 +354,15 @@ class UnilitixPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
-        methodChannel.setMethodCallHandler(null)
-        eventChannel.setStreamHandler(null)
-        screenshotChannel.setMethodCallHandler(null)
+        channel.setMethodCallHandler(null)
         imageExecutor.shutdown()
+        errorExecutor.shutdown()
         unregisterPowerReceiver()
         powerExecutor.shutdown()
-        crashExecutor.shutdown()
+        pendingFrames.clear()
     }
 
-    /** Main thread. Registers the runtime receiver when enabled, removes it otherwise. */
+    /** Main thread. Registers the runtime power receiver when enabled, removes it otherwise. */
     private fun updatePowerReceiver() {
         if (PowerContribution.isEnabled(context)) {
             if (powerReceiver == null) powerReceiver = PowerContribution.registerRuntimeReceiver(context)
@@ -393,70 +379,60 @@ class UnilitixPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
         } catch (_: Throwable) {
         }
     }
+
+    companion object {
+        const val CHANNEL = "com.unilitix/sdk"
+    }
 }
 
+/** A JPEG ready for the native SDK, with its pixel size. */
+internal class EncodedFrame(val jpeg: ByteArray, val width: Int, val height: Int)
+
 /**
- * Captures JVM-level uncaught exceptions (the ones Dart never sees: native
- * plugin crashes, OOM, platform-thread failures) to a marker file that the
- * SDK reads and reports as a fatal CRASH on the next launch. Chains to the
- * previously installed handler so the process still terminates normally.
- *
- * Also installs native (signal) crash capture on API 21-29
- * ([NativeCrashBridge]); the JVM handler tells it the exception is handled,
- * so a SIGABRT that follows is not reported a second time.
+ * Frames captured but not yet committed or discarded by Dart. At most
+ * [MAX] are kept (Dart has one capture in flight at a time; an orphan from
+ * a lost answer is dropped by the next ones). Thread-safe.
  */
-object NativeCrashHandler {
-    private const val FILE_NAME = "unilitix_native_crash.json"
-    @Volatile private var installed = false
+internal class PendingFrames {
+    private val frames = LinkedHashMap<Int, EncodedFrame>()
+    private var nextId = 1
 
-    fun install(context: Context) {
-        if (installed) return
-        installed = true
-        val previous = Thread.getDefaultUncaughtExceptionHandler()
-        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
-            // First: this exception is the crash, not the signal that may follow it.
-            try {
-                NativeCrashBridge.markExceptionHandled()
-            } catch (_: Throwable) {
-            }
-            try {
-                val sw = StringWriter()
-                throwable.printStackTrace(PrintWriter(sw))
-                val stack = sw.toString().take(16_000)
-                val type = throwable.javaClass.name
-                val json = JSONObject()
-                    .put("platform", "android")
-                    .put("thread", thread.name)
-                    .put("exceptionType", type)
-                    .put("exceptionMessage", throwable.message ?: "")
-                    .put("stackTrace", stack)
-                    // The contract fingerprint (type + first JVM frames), the
-                    // same the Android SDK computes, so one NullPointerException
-                    // site is one issue, not every NPE in the app.
-                    .put("fingerprint", Fingerprint.of(type, stack))
-                    .put("timestamp", System.currentTimeMillis())
-                File(context.filesDir, FILE_NAME).writeText(json.toString())
-            } catch (_: Throwable) {
-                // Never let crash reporting mask the real crash.
-            }
-            previous?.uncaughtException(thread, throwable)
-        }
-        try {
-            NativeCrashBridge.install(context)
-        } catch (_: Throwable) {
-            // Native capture is best effort; the JVM handler is installed.
-        }
+    @Synchronized
+    fun put(frame: EncodedFrame): Int {
+        val id = nextId++
+        frames[id] = frame
+        while (frames.size > MAX) frames.remove(frames.keys.first())
+        return id
     }
 
-    fun consume(context: Context): String? {
-        return try {
-            val f = File(context.filesDir, FILE_NAME)
-            if (!f.exists()) return null
-            val text = f.readText()
-            f.delete()
-            text
-        } catch (_: Throwable) {
-            null
-        }
+    @Synchronized
+    fun take(id: Int): EncodedFrame? = frames.remove(id)
+
+    @Synchronized
+    fun clear() = frames.clear()
+
+    @get:Synchronized
+    val size: Int get() = frames.size
+
+    companion object {
+        const val MAX = 2
     }
+}
+
+internal fun Map<*, *>.string(key: String): String? = this[key] as? String
+
+internal fun Map<*, *>.number(key: String): Number? = this[key] as? Number
+
+internal fun Map<*, *>.mapArg(key: String): Map<*, *> = this[key] as? Map<*, *> ?: emptyMap<String, Any?>()
+
+/**
+ * String-keyed, without null values (the Android SDK takes `Map<String, Any>`;
+ * a null property carries nothing on the wire).
+ */
+internal fun Map<*, *>.nonNull(): Map<String, Any> {
+    val out = LinkedHashMap<String, Any>(size)
+    for ((k, v) in this) {
+        if (k is String && v != null) out[k] = v
+    }
+    return out
 }

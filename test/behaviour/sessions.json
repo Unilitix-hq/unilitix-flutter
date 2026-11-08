@@ -1,0 +1,350 @@
+{
+  "kind": "behaviour",
+  "area": "sessions",
+  "description": "Session timeout after background, and per-session replay sampling.",
+  "cases": [
+    {
+      "id": "sessions.short-background-keeps-session",
+      "description": "Returning to the foreground before sessionTimeoutSeconds keeps the session.",
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "expectState": {
+            "sessionId": {
+              "$capture": "s1"
+            }
+          }
+        },
+        {
+          "background": {}
+        },
+        {
+          "advanceTime": {
+            "ms": 1799000
+          }
+        },
+        {
+          "foreground": {}
+        },
+        {
+          "track": {
+            "name": "a"
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectState": {
+            "sessionId": {
+              "$eq": "s1"
+            }
+          }
+        },
+        {
+          "expectEvents": {
+            "mode": "exact",
+            "events": [
+              {
+                "type": "SESSION_START"
+              },
+              {
+                "type": "CUSTOM",
+                "metadata": {
+                  "name": "a"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "sessions.long-background-starts-new-session",
+      "description": "Returning to the foreground after more than sessionTimeoutSeconds in the background starts a new session (new id, SESSION_START); the anonymous id is unchanged.",
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "expectState": {
+            "sessionId": {
+              "$capture": "s1"
+            },
+            "anonymousId": {
+              "$capture": "a1"
+            }
+          }
+        },
+        {
+          "background": {}
+        },
+        {
+          "advanceTime": {
+            "ms": 1801000
+          }
+        },
+        {
+          "foreground": {}
+        },
+        {
+          "expectState": {
+            "sessionId": {
+              "$ne": "s1",
+              "$match": "<uuid>"
+            },
+            "anonymousId": {
+              "$eq": "a1"
+            }
+          }
+        },
+        {
+          "track": {
+            "name": "a"
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/session",
+              "body": {
+                "sessionId": {
+                  "$eq": "s1"
+                },
+                "events": [
+                  {
+                    "type": "SESSION_START"
+                  }
+                ]
+              }
+            },
+            {
+              "path": "/v1/ingest/session",
+              "body": {
+                "sessionId": {
+                  "$ne": "s1"
+                },
+                "anonymousId": {
+                  "$eq": "a1"
+                },
+                "events": [
+                  {
+                    "type": "SESSION_START"
+                  },
+                  {
+                    "type": "CUSTOM",
+                    "metadata": {
+                      "name": "a"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "sessions.timeout-is-configurable",
+      "description": "sessionTimeoutSeconds is honoured.",
+      "config": {
+        "sessionTimeoutSeconds": 60
+      },
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "expectState": {
+            "sessionId": {
+              "$capture": "s1"
+            }
+          }
+        },
+        {
+          "background": {}
+        },
+        {
+          "advanceTime": {
+            "ms": 59000
+          }
+        },
+        {
+          "foreground": {}
+        },
+        {
+          "expectState": {
+            "sessionId": {
+              "$eq": "s1"
+            }
+          }
+        },
+        {
+          "background": {}
+        },
+        {
+          "advanceTime": {
+            "ms": 61000
+          }
+        },
+        {
+          "foreground": {}
+        },
+        {
+          "expectState": {
+            "sessionId": {
+              "$ne": "s1"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "sessions.replay-sampling-once-per-session",
+      "description": "The replay sampling decision is made once at session start (sampled iff roll < replaySampleRate) and kept for the whole session; a new session rolls again. Events are captured whatever the decision.",
+      "config": {
+        "replaySampleRate": 0.5,
+        "captureSnapshots": true
+      },
+      "device": {
+        "randomRolls": [
+          0.25,
+          0.75,
+          0.1
+        ]
+      },
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "expectState": {
+            "replaySampled": true,
+            "sessionId": {
+              "$capture": "s1"
+            }
+          }
+        },
+        {
+          "background": {}
+        },
+        {
+          "advanceTime": {
+            "ms": 10000
+          }
+        },
+        {
+          "foreground": {}
+        },
+        {
+          "track": {
+            "name": "a"
+          }
+        },
+        {
+          "expectState": {
+            "replaySampled": true,
+            "sessionId": {
+              "$eq": "s1"
+            }
+          }
+        },
+        {
+          "background": {}
+        },
+        {
+          "advanceTime": {
+            "ms": 1801000
+          }
+        },
+        {
+          "foreground": {}
+        },
+        {
+          "expectState": {
+            "replaySampled": false,
+            "sessionId": {
+              "$ne": "s1",
+              "$capture": "s2"
+            }
+          }
+        },
+        {
+          "track": {
+            "name": "unsampled"
+          }
+        },
+        {
+          "screen": {
+            "name": "Home"
+          }
+        },
+        {
+          "reset": {}
+        },
+        {
+          "expectState": {
+            "replaySampled": true,
+            "sessionId": {
+              "$ne": "s2"
+            }
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectEvents": {
+            "mode": "contains",
+            "events": [
+              {
+                "type": "CUSTOM",
+                "metadata": {
+                  "name": "a"
+                }
+              },
+              {
+                "type": "CUSTOM",
+                "metadata": {
+                  "name": "unsampled"
+                }
+              },
+              {
+                "type": "NAVIGATE",
+                "screen": "Home"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "sessions.replay-sample-rate-bounds",
+      "description": "replaySampleRate 0 never samples, 1 always samples (roll < rate).",
+      "config": {
+        "replaySampleRate": 0.0,
+        "captureSnapshots": true
+      },
+      "device": {
+        "randomRolls": [
+          0.0
+        ]
+      },
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "expectState": {
+            "replaySampled": false
+          }
+        }
+      ]
+    }
+  ]
+}

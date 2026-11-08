@@ -1,0 +1,278 @@
+{
+  "kind": "behaviour",
+  "area": "network",
+  "description": "Canonical networkAtCapture values (sdk-contract networkTypeRules) and offline capture.",
+  "cases": [
+    {
+      "id": "network.canonical-types",
+      "description": "Each device network state maps to exactly one canonical networkAtCapture string: WIFI, ETHERNET, 5G, 4G, 3G, 2G, CELLULAR (generation unknown), UNKNOWN (other transports).",
+      "contract": [
+        "networkTypes",
+        "networkTypeRules"
+      ],
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "setNetwork": {
+            "type": "wifi",
+            "online": true
+          }
+        },
+        {
+          "track": {
+            "name": "n-wifi"
+          }
+        },
+        {
+          "setNetwork": {
+            "type": "ethernet",
+            "online": true
+          }
+        },
+        {
+          "track": {
+            "name": "n-ethernet"
+          }
+        },
+        {
+          "setNetwork": {
+            "type": "cellular",
+            "online": true,
+            "generation": "5g"
+          }
+        },
+        {
+          "track": {
+            "name": "n-5g"
+          }
+        },
+        {
+          "setNetwork": {
+            "type": "cellular",
+            "online": true,
+            "generation": "4g"
+          }
+        },
+        {
+          "track": {
+            "name": "n-4g"
+          }
+        },
+        {
+          "setNetwork": {
+            "type": "cellular",
+            "online": true,
+            "generation": "3g"
+          }
+        },
+        {
+          "track": {
+            "name": "n-3g"
+          }
+        },
+        {
+          "setNetwork": {
+            "type": "cellular",
+            "online": true,
+            "generation": "2g"
+          }
+        },
+        {
+          "track": {
+            "name": "n-2g"
+          }
+        },
+        {
+          "setNetwork": {
+            "type": "cellular",
+            "online": true,
+            "generation": "unknown"
+          }
+        },
+        {
+          "track": {
+            "name": "n-cellular"
+          }
+        },
+        {
+          "setNetwork": {
+            "type": "other",
+            "online": true
+          }
+        },
+        {
+          "track": {
+            "name": "n-unknown"
+          }
+        },
+        {
+          "setNetwork": {
+            "type": "wifi",
+            "online": true
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectEvents": {
+            "mode": "exact",
+            "events": [
+              {
+                "type": "SESSION_START",
+                "networkAtCapture": "WIFI",
+                "capturedOffline": false
+              },
+              {
+                "type": "CUSTOM",
+                "metadata": {
+                  "name": "n-wifi"
+                },
+                "networkAtCapture": "WIFI",
+                "capturedOffline": false
+              },
+              {
+                "type": "CUSTOM",
+                "metadata": {
+                  "name": "n-ethernet"
+                },
+                "networkAtCapture": "ETHERNET",
+                "capturedOffline": false
+              },
+              {
+                "type": "CUSTOM",
+                "metadata": {
+                  "name": "n-5g"
+                },
+                "networkAtCapture": "5G",
+                "capturedOffline": false
+              },
+              {
+                "type": "CUSTOM",
+                "metadata": {
+                  "name": "n-4g"
+                },
+                "networkAtCapture": "4G",
+                "capturedOffline": false
+              },
+              {
+                "type": "CUSTOM",
+                "metadata": {
+                  "name": "n-3g"
+                },
+                "networkAtCapture": "3G",
+                "capturedOffline": false
+              },
+              {
+                "type": "CUSTOM",
+                "metadata": {
+                  "name": "n-2g"
+                },
+                "networkAtCapture": "2G",
+                "capturedOffline": false
+              },
+              {
+                "type": "CUSTOM",
+                "metadata": {
+                  "name": "n-cellular"
+                },
+                "networkAtCapture": "CELLULAR",
+                "capturedOffline": false
+              },
+              {
+                "type": "CUSTOM",
+                "metadata": {
+                  "name": "n-unknown"
+                },
+                "networkAtCapture": "UNKNOWN",
+                "capturedOffline": false
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "network.offline-capture",
+      "description": "Events captured with no connectivity are OFFLINE with capturedOffline true, kept, and uploaded once online.",
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "setNetwork": {
+            "type": "wifi",
+            "online": false
+          }
+        },
+        {
+          "track": {
+            "name": "off1"
+          }
+        },
+        {
+          "setNetwork": {
+            "type": "none",
+            "online": false
+          }
+        },
+        {
+          "track": {
+            "name": "off2"
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": []
+        },
+        {
+          "setNetwork": {
+            "type": "cellular",
+            "generation": "4g",
+            "online": true
+          }
+        },
+        {
+          "advanceTime": {
+            "ms": 301000
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectEvents": {
+            "mode": "exact",
+            "events": [
+              {
+                "type": "SESSION_START",
+                "networkAtCapture": "WIFI",
+                "capturedOffline": false
+              },
+              {
+                "type": "CUSTOM",
+                "metadata": {
+                  "name": "off1"
+                },
+                "networkAtCapture": "OFFLINE",
+                "capturedOffline": true
+              },
+              {
+                "type": "CUSTOM",
+                "metadata": {
+                  "name": "off2"
+                },
+                "networkAtCapture": "OFFLINE",
+                "capturedOffline": true
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

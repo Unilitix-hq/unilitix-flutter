@@ -4,4 +4,7 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Debug builds only: integration_test/plugin_integration_test.dart
+         points the SDK at a fake ingest server on http://127.0.0.1. -->
+    <application android:usesCleartextTraffic="true"/>
 </manifest>

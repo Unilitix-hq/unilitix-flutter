@@ -1,4 +1,4 @@
-// VENDORED from UnilitixCore 0.7.2 (EventStore.swift) by scripts/sync-ios-core.sh.
+// VENDORED from UnilitixCore 0.8.0 (EventStore.swift) by scripts/sync-ios-core.sh.
 // Do not edit here; change UnilitixCore and re-run the script.
 
 import Foundation
@@ -104,11 +104,13 @@ final class EventStore {
         withLock { sessions.first(where: { $0.info.id == id })?.info }
     }
 
-    /// The oldest session that has events or an unacknowledged record, with
-    /// up to `limit` of its events.
-    func nextBatch(limit: Int) -> Batch? {
+    /// The oldest session that has events (or, with `includeRecordOnly`, an
+    /// unacknowledged record), with up to `limit` of its events.
+    func nextBatch(limit: Int, includeRecordOnly: Bool = true) -> Batch? {
         withLock { () -> Batch? in
-            guard let s = sessions.first(where: { $0.dirty || !$0.events.isEmpty }) else { return nil }
+            guard let s = sessions.first(where: { (includeRecordOnly && $0.dirty) || !$0.events.isEmpty }) else {
+                return nil
+            }
             return Batch(session: s.info, events: Array(s.events.prefix(max(1, limit))), revision: s.revision)
         }
     }

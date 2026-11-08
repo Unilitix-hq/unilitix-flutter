@@ -1,4 +1,4 @@
-// VENDORED from UnilitixCore 0.7.2 (Models.swift) by scripts/sync-ios-core.sh.
+// VENDORED from UnilitixCore 0.8.0 (Models.swift) by scripts/sync-ios-core.sh.
 // Do not edit here; change UnilitixCore and re-run the script.
 
 import Foundation
@@ -98,7 +98,11 @@ struct IngestEvent: Codable, Equatable {
     var exceptionMessage: String?
     var stackTrace: String?
     var breadcrumbs: [[String: JSONValue]]?
+    /// The contract network type when the event was captured (`WIFI`,
+    /// `ETHERNET`, `5G`, `4G`, `3G`, `2G`, `CELLULAR`, `OFFLINE`, `UNKNOWN`).
     var networkAtCapture: String?
+    /// The device was offline when the event was captured.
+    var capturedOffline: Bool?
 
     init(type: String, screen: String, at date: Date = Date()) {
         eventId = UUID().uuidString.lowercased()
@@ -115,6 +119,10 @@ struct SessionInfo: Codable, Equatable {
     var lastActivityAt: Date
     var crashed: Bool = false
     var customUserId: String?
+    /// The anonymous id when the session started (0.8.0). A session's
+    /// events keep their ids after `reset()`; nil in queues written by
+    /// older versions (the current id is sent then).
+    var anonymousId: String?
 }
 
 /// `IngestSessionRequest` in openapi.sdk.json: the session record plus a batch
@@ -141,11 +149,15 @@ struct IngestSessionRequest: Encodable {
     var startedAt: String
     var durationMs: Int64
     var crashed: Bool
+    /// Free-form; set when a wrapper SDK embeds this engine
+    /// (`UnilitixVersion.sessionData`).
+    var sessionData: [String: JSONValue]?
     var events: [IngestEvent]
 }
 
-/// `IdentifyRequest` in openapi.sdk.json.
-struct IdentifyRequest: Encodable {
+/// `IdentifyRequest` in openapi.sdk.json. Codable: held requests are kept
+/// in `Preferences` until the API answers them.
+struct IdentifyRequest: Codable, Equatable {
     var anonymousId: String
     var customUserId: String
     var traits: [String: JSONValue]?
@@ -159,9 +171,21 @@ enum ISO8601 {
     }()
     private static let lock = NSLock()
 
+    private static let plain: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
     static func string(from date: Date) -> String {
         lock.lock(); defer { lock.unlock() }
         return formatter.string(from: date)
+    }
+
+    /// RFC 3339 with or without fractional seconds.
+    static func date(from s: String) -> Date? {
+        lock.lock(); defer { lock.unlock() }
+        return formatter.date(from: s) ?? plain.date(from: s)
     }
 }
 
@@ -172,6 +196,9 @@ struct ScreenshotInitRequest: Encodable {
     var ordinals: [Int]
     /// "jpeg" for iOS frames; the API defaults to webp when absent.
     var format: String
+    /// Each frame's exact byte size, in `ordinals` order (0.8.0): the API
+    /// then signs Content-Length into each presigned PUT.
+    var sizes: [Int]?
 }
 
 /// `ScreenshotInitResponse` in openapi.sdk.json.
@@ -199,4 +226,61 @@ struct ScreenshotConfirmItem: Encodable {
 struct ScreenshotConfirmRequest: Encodable {
     var sessionId: String
     var screenshots: [ScreenshotConfirmItem]
+}
+
+/// Contract 1.4.0 value limits, applied to everything the app passes in:
+/// event properties, identify traits, names, screen names and user ids.
+///
+/// - strings: at most `SdkContract.maxStringLength` UTF-16 code units,
+///   never splitting a surrogate pair;
+/// - maps: at most `SdkContract.maxPropertyKeys` keys (the first in key
+///   order); lists: at most that many items;
+/// - nesting: the top-level map is level 1; a map or list deeper than
+///   `SdkContract.maxPropertyDepth` becomes `SdkContract.truncatedMarker`;
+/// - NaN and ±infinity become `null`.
+enum PropertyNormalizer {
+    static func string(_ s: String, max: Int = SdkContract.maxStringLength) -> String {
+        let units = s.utf16
+        guard units.count > max, max > 0 else { return max > 0 ? s : "" }
+        var end = units.index(units.startIndex, offsetBy: max)
+        // Never keep half of a surrogate pair.
+        if UTF16.isLeadSurrogate(units[units.index(before: end)]) { end = units.index(before: end) }
+        return String(decoding: Array(units[units.startIndex..<end]), as: UTF16.self)
+    }
+
+    /// A properties or traits map, normalised.
+    static func properties(_ dict: [String: Any]) -> [String: JSONValue] {
+        normalizedObject(JSONValue.objectMap(from: dict), level: 1)
+    }
+
+    /// Already-converted values (metadata from wrappers), normalised.
+    static func properties(_ dict: [String: JSONValue]) -> [String: JSONValue] {
+        normalizedObject(dict, level: 1)
+    }
+
+    private static func normalizedObject(_ o: [String: JSONValue], level: Int) -> [String: JSONValue] {
+        var out: [String: JSONValue] = [:]
+        for key in o.keys.sorted().prefix(SdkContract.maxPropertyKeys) {
+            out[string(key)] = child(o[key] ?? .null, level: level)
+        }
+        return out
+    }
+
+    /// A value inside a container at `level`.
+    private static func child(_ v: JSONValue, level: Int) -> JSONValue {
+        switch v {
+        case .array(let a):
+            guard level + 1 <= SdkContract.maxPropertyDepth else { return .string(SdkContract.truncatedMarker) }
+            return .array(a.prefix(SdkContract.maxPropertyKeys).map { child($0, level: level + 1) })
+        case .object(let o):
+            guard level + 1 <= SdkContract.maxPropertyDepth else { return .string(SdkContract.truncatedMarker) }
+            return .object(normalizedObject(o, level: level + 1))
+        case .string(let s):
+            return .string(string(s))
+        case .number(let d):
+            return d.isFinite ? v : .null
+        default:
+            return v
+        }
+    }
 }

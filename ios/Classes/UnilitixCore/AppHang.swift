@@ -1,4 +1,4 @@
-// VENDORED from UnilitixCore 0.7.2 (AppHang.swift) by scripts/sync-ios-core.sh.
+// VENDORED from UnilitixCore 0.8.0 (AppHang.swift) by scripts/sync-ios-core.sh.
 // Do not edit here; change UnilitixCore and re-run the script.
 
 import Foundation
@@ -410,7 +410,7 @@ extension AppHangWatchdog {
             DispatchQueue.main.async { w?.answer(id, at: AppHangWatchdog.monotonicNow()) }
         }
         #if canImport(UIKit) && os(iOS)
-        w.setForeground(UIApplication.shared.applicationState != .background)
+        w.setForeground(AppContext.isInForeground)
         let nc = NotificationCenter.default
         observers = [
             nc.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: nil) { [weak w] _ in

@@ -1,0 +1,356 @@
+{
+  "kind": "behaviour",
+  "area": "properties",
+  "description": "Normalisation of event properties, traits and names (limits maxPropertyDepth, maxPropertyKeys, maxStringLength).",
+  "cases": [
+    {
+      "id": "properties.normalised",
+      "description": "Non-finite numbers become null; strings are cut at maxStringLength UTF-16 units without splitting a surrogate pair; maps/lists deeper than maxPropertyDepth (top level = 1) become \"[Truncated]\"; at most maxPropertyKeys entries per map or list.",
+      "contract": [
+        "limits.maxPropertyDepth",
+        "limits.maxPropertyKeys",
+        "limits.maxStringLength"
+      ],
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "track": {
+            "name": "p",
+            "properties": {
+              "nan": {
+                "$number": "NaN"
+              },
+              "inf": {
+                "$number": "Infinity"
+              },
+              "ninf": {
+                "$number": "-Infinity"
+              },
+              "ok": 1.5,
+              "int": 42,
+              "neg": -7,
+              "yes": true,
+              "nothing": null,
+              "empty": "",
+              "long": {
+                "$repeat": {
+                  "string": "a",
+                  "count": 1500
+                }
+              },
+              "exact": {
+                "$repeat": {
+                  "string": "b",
+                  "count": 1024
+                }
+              },
+              "surrogate": {
+                "$repeat": {
+                  "string": "c",
+                  "count": 1023
+                }
+              },
+              "deep": {
+                "l2": {
+                  "l3": {
+                    "l4": {
+                      "l5": {
+                        "l6": 1
+                      },
+                      "keep": "x"
+                    }
+                  }
+                }
+              },
+              "deepList": [
+                [
+                  [
+                    [
+                      [
+                        1
+                      ]
+                    ]
+                  ]
+                ]
+              ],
+              "list": [
+                1,
+                {
+                  "$number": "NaN"
+                },
+                "x",
+                null,
+                {
+                  "$number": "Infinity"
+                }
+              ],
+              "manyKeys": {
+                "$keys": {
+                  "count": 150,
+                  "prefix": "k",
+                  "value": 1
+                }
+              },
+              "manyItems": {
+                "$list": {
+                  "count": 150,
+                  "value": 0
+                }
+              },
+              "emoji": "ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd😀"
+            }
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectEvents": {
+            "mode": "exact",
+            "events": [
+              {
+                "type": "SESSION_START"
+              },
+              {
+                "type": "CUSTOM",
+                "metadata": {
+                  "name": "p"
+                },
+                "properties": {
+                  "nan": null,
+                  "inf": null,
+                  "ninf": null,
+                  "ok": 1.5,
+                  "int": 42,
+                  "neg": -7,
+                  "yes": true,
+                  "nothing": null,
+                  "empty": "",
+                  "long": {
+                    "$repeat": {
+                      "string": "a",
+                      "count": 1024
+                    }
+                  },
+                  "exact": {
+                    "$repeat": {
+                      "string": "b",
+                      "count": 1024
+                    }
+                  },
+                  "surrogate": {
+                    "$repeat": {
+                      "string": "c",
+                      "count": 1023
+                    }
+                  },
+                  "deep": {
+                    "l2": {
+                      "l3": {
+                        "l4": {
+                          "l5": "[Truncated]",
+                          "keep": "x"
+                        }
+                      }
+                    }
+                  },
+                  "deepList": [
+                    [
+                      [
+                        [
+                          "[Truncated]"
+                        ]
+                      ]
+                    ]
+                  ],
+                  "list": [
+                    1,
+                    null,
+                    "x",
+                    null,
+                    null
+                  ],
+                  "manyKeys": {
+                    "$size": 100
+                  },
+                  "manyItems": {
+                    "$size": 100
+                  },
+                  "emoji": {
+                    "$repeat": {
+                      "string": "d",
+                      "count": 1023
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "properties.traits-normalised",
+      "description": "Traits follow the same rules as properties.",
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "identify": {
+            "userId": "u1",
+            "traits": {
+              "score": {
+                "$number": "NaN"
+              },
+              "bio": {
+                "$repeat": {
+                  "string": "z",
+                  "count": 2000
+                }
+              },
+              "nested": {
+                "a": {
+                  "b": {
+                    "c": {
+                      "d": {
+                        "e": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/identify",
+              "body": {
+                "customUserId": "u1",
+                "traits": {
+                  "score": null,
+                  "bio": {
+                    "$repeat": {
+                      "string": "z",
+                      "count": 1024
+                    }
+                  },
+                  "nested": {
+                    "a": {
+                      "b": {
+                        "c": {
+                          "d": "[Truncated]"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "path": "/v1/ingest/session",
+              "body": {
+                "events": [
+                  {
+                    "type": "SESSION_START"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "properties.names-truncated",
+      "description": "Event names, screen names and user ids longer than maxStringLength are cut.",
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "track": {
+            "name": {
+              "$repeat": {
+                "string": "n",
+                "count": 1500
+              }
+            }
+          }
+        },
+        {
+          "screen": {
+            "name": {
+              "$repeat": {
+                "string": "s",
+                "count": 1500
+              }
+            }
+          }
+        },
+        {
+          "identify": {
+            "userId": {
+              "$repeat": {
+                "string": "u",
+                "count": 1500
+              }
+            }
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/identify",
+              "body": {
+                "customUserId": {
+                  "$repeat": {
+                    "string": "u",
+                    "count": 1024
+                  }
+                }
+              }
+            },
+            {
+              "path": "/v1/ingest/session",
+              "body": {
+                "events": [
+                  {
+                    "type": "SESSION_START"
+                  },
+                  {
+                    "type": "CUSTOM",
+                    "metadata": {
+                      "name": {
+                        "$length": 1024
+                      }
+                    }
+                  },
+                  {
+                    "type": "NAVIGATE",
+                    "screen": {
+                      "$repeat": {
+                        "string": "s",
+                        "count": 1024
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

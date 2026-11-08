@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/widgets.dart';
 
-import 'snapshot_buffer.dart';
 import 'widget_kind.dart';
 import '../core/sdk_scope.dart';
 import '../privacy/privacy_mask.dart';
@@ -96,8 +95,16 @@ class _Pending {
   const _Pending(this.element, this.output);
 }
 
+/// Walks the widget tree into masked wireframe snapshots for session replay
+/// and hands each one to [onSnapshot] (since 3.0.0 the SDK passes it to the
+/// native SDK's `addExternalSnapshot`, which assigns the ordinal, applies the
+/// session's sampling and caps, stores and uploads it).
 class SnapshotCapture with WidgetsBindingObserver {
-  final SnapshotBuffer buffer;
+  /// Receives each new snapshot: `capturedAt` (RFC 3339), `screenName`,
+  /// `viewportWidth`, `viewportHeight` (logical pixels) and `hierarchy`.
+  /// [approxBytes] is the walk's estimate of its JSON size.
+  final void Function(Map<String, dynamic> snapshot, int approxBytes)
+      onSnapshot;
   final int intervalMs;
   final bool maskInputs;
 
@@ -116,7 +123,6 @@ class SnapshotCapture with WidgetsBindingObserver {
   /// so screenshot capture can take a frame only when the UI actually moved.
   void Function()? onChanged;
 
-  int _ordinal = 0;
   Timer? _timer;
   bool _capturing = false;
   bool _active = false;
@@ -141,7 +147,7 @@ class SnapshotCapture with WidgetsBindingObserver {
   static const int _kMaxAbandoned = 3;
 
   SnapshotCapture({
-    required this.buffer,
+    required this.onSnapshot,
     required this.intervalMs,
     required this.maskInputs,
     this.maskAllText = true,
@@ -164,7 +170,7 @@ class SnapshotCapture with WidgetsBindingObserver {
   static void debugNoteFrame() => _framesDrawn++;
 
   void start() {
-    if (_active) return; // idempotent: consent changes may call this again
+    if (_timer != null) return; // idempotent: consent changes call it again
     _active = true;
     _installFrameCounter();
     WidgetsBinding.instance.addObserver(this);
@@ -180,13 +186,21 @@ class SnapshotCapture with WidgetsBindingObserver {
     _timer = null;
   }
 
-  void resetOrdinal() => _ordinal = 0;
+  /// A new native session started: the first walk is sent even if the
+  /// tree did not change.
+  void resetSession() => _lastHash = 0;
+
+  bool get isActive => _timer != null;
+
+  /// Runs one walk now and delivers it if the tree changed; for tests.
+  @visibleForTesting
+  Future<void> captureNow() => _capture();
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused) {
       _active = false;
-    } else if (state == AppLifecycleState.resumed) {
+    } else if (state == AppLifecycleState.resumed && _timer != null) {
       _active = true;
     }
   }
@@ -223,14 +237,13 @@ class SnapshotCapture with WidgetsBindingObserver {
       final w = (view.physicalSize.width / view.devicePixelRatio).round();
       final h = (view.physicalSize.height / view.devicePixelRatio).round();
 
-      buffer.add({
+      onSnapshot({
         'capturedAt': JsonUtil.toRfc3339(DateTime.now().millisecondsSinceEpoch),
-        'ordinal': _ordinal++,
         'screenName': SdkScope.currentScreen ?? 'unknown',
         'viewportWidth': w,
         'viewportHeight': h,
         'hierarchy': {'type': 'Root', 'w': w, 'h': h, 'children': children},
-      }, approxBytes: result.approxBytes + 200);
+      }, result.approxBytes + 200);
     } catch (e, stack) {
       UnilitixLogger.e('Snapshot capture failed', e, stack);
     } finally {

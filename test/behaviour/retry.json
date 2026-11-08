@@ -1,0 +1,1088 @@
+{
+  "kind": "behaviour",
+  "area": "retry",
+  "description": "Upload outcome classification (sdk-contract retry): retry with backoff, auth pause, payment pause, drop.",
+  "cases": [
+    {
+      "id": "retry.5xx-keeps-batch-and-backs-off",
+      "description": "5xx keeps the batch and opens a backoff window of baseDelayMs (+0-20% jitter) during which flushes, including app-called ones, send nothing; the retry resends the same events (same eventId).",
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "track": {
+            "name": "a"
+          }
+        },
+        {
+          "serverResponds": {
+            "status": 503,
+            "times": 1
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/session",
+              "status": 503,
+              "body": {
+                "events": [
+                  {
+                    "type": "SESSION_START",
+                    "eventId": {
+                      "$capture": "e0"
+                    }
+                  },
+                  {
+                    "type": "CUSTOM",
+                    "eventId": {
+                      "$capture": "e1"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "expectState": {
+            "queueLength": 2
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": []
+        },
+        {
+          "advanceTime": {
+            "ms": 1300
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/session",
+              "status": 202,
+              "body": {
+                "events": [
+                  {
+                    "eventId": {
+                      "$eq": "e0"
+                    }
+                  },
+                  {
+                    "eventId": {
+                      "$eq": "e1"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "expectState": {
+            "queueLength": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "retry.no-response-is-retryable",
+      "description": "No response (connection error, timeout) is retryable like 5xx.",
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "track": {
+            "name": "a"
+          }
+        },
+        {
+          "serverResponds": {
+            "status": 0,
+            "times": 1
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/session",
+              "status": 0,
+              "body": {
+                "events": [
+                  {
+                    "type": "SESSION_START",
+                    "eventId": {
+                      "$capture": "e0"
+                    }
+                  },
+                  {
+                    "type": "CUSTOM",
+                    "eventId": {
+                      "$capture": "e1"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "expectState": {
+            "queueLength": 2
+          }
+        },
+        {
+          "advanceTime": {
+            "ms": 1300
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/session",
+              "status": 202,
+              "body": {
+                "events": [
+                  {
+                    "eventId": {
+                      "$eq": "e0"
+                    }
+                  },
+                  {
+                    "eventId": {
+                      "$eq": "e1"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "retry.408-is-retryable",
+      "description": "408 Request Timeout is retryable (not a rejected 4xx).",
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "track": {
+            "name": "a"
+          }
+        },
+        {
+          "serverResponds": {
+            "status": 408,
+            "times": 1
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/session",
+              "status": 408,
+              "body": {
+                "events": [
+                  {
+                    "type": "SESSION_START",
+                    "eventId": {
+                      "$capture": "e0"
+                    }
+                  },
+                  {
+                    "type": "CUSTOM",
+                    "eventId": {
+                      "$capture": "e1"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "expectState": {
+            "queueLength": 2
+          }
+        },
+        {
+          "advanceTime": {
+            "ms": 1300
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/session",
+              "status": 202,
+              "body": {
+                "events": [
+                  {
+                    "eventId": {
+                      "$eq": "e0"
+                    }
+                  },
+                  {
+                    "eventId": {
+                      "$eq": "e1"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "retry.429-honours-retry-after",
+      "description": "429 with Retry-After (seconds) sets the backoff window to that value (clamped to 1-60 s), replacing the exponential delay.",
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "track": {
+            "name": "a"
+          }
+        },
+        {
+          "serverResponds": {
+            "status": 429,
+            "headers": {
+              "Retry-After": "5"
+            },
+            "times": 1
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/session",
+              "status": 429,
+              "body": {
+                "events": [
+                  {
+                    "type": "SESSION_START",
+                    "eventId": {
+                      "$capture": "e0"
+                    }
+                  },
+                  {
+                    "type": "CUSTOM",
+                    "eventId": {
+                      "$capture": "e1"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "expectState": {
+            "queueLength": 2
+          }
+        },
+        {
+          "advanceTime": {
+            "ms": 4000
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": []
+        },
+        {
+          "advanceTime": {
+            "ms": 1200
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/session",
+              "status": 202,
+              "body": {
+                "events": [
+                  {
+                    "eventId": {
+                      "$eq": "e0"
+                    }
+                  },
+                  {
+                    "eventId": {
+                      "$eq": "e1"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "retry.retry-after-is-clamped",
+      "description": "Retry-After above retryAfterMaxSeconds (60) is clamped to 60 s.",
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "track": {
+            "name": "a"
+          }
+        },
+        {
+          "serverResponds": {
+            "status": 503,
+            "headers": {
+              "Retry-After": "3600"
+            },
+            "times": 1
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/session",
+              "status": 503,
+              "body": {
+                "events": [
+                  {
+                    "type": "SESSION_START",
+                    "eventId": {
+                      "$capture": "e0"
+                    }
+                  },
+                  {
+                    "type": "CUSTOM",
+                    "eventId": {
+                      "$capture": "e1"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "expectState": {
+            "queueLength": 2
+          }
+        },
+        {
+          "advanceTime": {
+            "ms": 59000
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": []
+        },
+        {
+          "advanceTime": {
+            "ms": 2000
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/session",
+              "status": 202,
+              "body": {
+                "events": [
+                  {
+                    "eventId": {
+                      "$eq": "e0"
+                    }
+                  },
+                  {
+                    "eventId": {
+                      "$eq": "e1"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "retry.backoff-grows-exponentially",
+      "description": "The n-th consecutive failure (n from 0) waits min(1000 ms x 2^n, 300000 ms) plus 0-20% jitter.",
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "track": {
+            "name": "a"
+          }
+        },
+        {
+          "serverResponds": {
+            "status": 500,
+            "times": 1
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/session",
+              "status": 500,
+              "body": {
+                "events": [
+                  {
+                    "type": "SESSION_START",
+                    "eventId": {
+                      "$capture": "e0"
+                    }
+                  },
+                  {
+                    "type": "CUSTOM",
+                    "eventId": {
+                      "$capture": "e1"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "expectState": {
+            "queueLength": 2
+          }
+        },
+        {
+          "serverResponds": {
+            "status": 500,
+            "times": 1
+          }
+        },
+        {
+          "advanceTime": {
+            "ms": 1300
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/session",
+              "status": 500
+            }
+          ]
+        },
+        {
+          "advanceTime": {
+            "ms": 1900
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": []
+        },
+        {
+          "advanceTime": {
+            "ms": 600
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/session",
+              "status": 202,
+              "body": {
+                "events": [
+                  {
+                    "eventId": {
+                      "$eq": "e0"
+                    }
+                  },
+                  {
+                    "eventId": {
+                      "$eq": "e1"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "retry.401-pauses-until-next-init",
+      "description": "401 keeps the data and pauses uploads for the life of the process; the next init (after restart) uploads it.",
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "track": {
+            "name": "a"
+          }
+        },
+        {
+          "serverResponds": {
+            "status": 401,
+            "times": 1
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/session",
+              "status": 401,
+              "body": {
+                "events": [
+                  {
+                    "type": "SESSION_START",
+                    "eventId": {
+                      "$capture": "e0"
+                    }
+                  },
+                  {
+                    "type": "CUSTOM",
+                    "eventId": {
+                      "$capture": "e1"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "expectState": {
+            "queueLength": 2
+          }
+        },
+        {
+          "expectState": {
+            "uploadsPaused": true
+          }
+        },
+        {
+          "advanceTime": {
+            "ms": 3600000
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": []
+        },
+        {
+          "expectState": {
+            "queueLength": 2
+          }
+        },
+        {
+          "restart": {}
+        },
+        {
+          "init": {}
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectEvents": {
+            "mode": "contains",
+            "events": [
+              {
+                "eventId": {
+                  "$eq": "e0"
+                }
+              },
+              {
+                "eventId": {
+                  "$eq": "e1"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "expectState": {
+            "uploadsPaused": false
+          }
+        }
+      ]
+    },
+    {
+      "id": "retry.403-pauses-until-next-init",
+      "description": "403 behaves like 401.",
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "track": {
+            "name": "a"
+          }
+        },
+        {
+          "serverResponds": {
+            "status": 403,
+            "times": 1
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/session",
+              "status": 403,
+              "body": {
+                "events": [
+                  {
+                    "type": "SESSION_START",
+                    "eventId": {
+                      "$capture": "e0"
+                    }
+                  },
+                  {
+                    "type": "CUSTOM",
+                    "eventId": {
+                      "$capture": "e1"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "expectState": {
+            "queueLength": 2
+          }
+        },
+        {
+          "expectState": {
+            "uploadsPaused": true
+          }
+        },
+        {
+          "advanceTime": {
+            "ms": 600000
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": []
+        }
+      ]
+    },
+    {
+      "id": "retry.402-pauses-with-default-window",
+      "description": "402 (plan exhausted) keeps the data and pauses uploads for paymentBackoffMs (900 s) when there is no Retry-After. It is not an auth failure.",
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "track": {
+            "name": "a"
+          }
+        },
+        {
+          "serverResponds": {
+            "status": 402,
+            "times": 1
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/session",
+              "status": 402,
+              "body": {
+                "events": [
+                  {
+                    "type": "SESSION_START",
+                    "eventId": {
+                      "$capture": "e0"
+                    }
+                  },
+                  {
+                    "type": "CUSTOM",
+                    "eventId": {
+                      "$capture": "e1"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "expectState": {
+            "queueLength": 2
+          }
+        },
+        {
+          "expectState": {
+            "uploadsPaused": false
+          }
+        },
+        {
+          "advanceTime": {
+            "ms": 899000
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": []
+        },
+        {
+          "advanceTime": {
+            "ms": 2000
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/session",
+              "status": 202,
+              "body": {
+                "events": [
+                  {
+                    "eventId": {
+                      "$eq": "e0"
+                    }
+                  },
+                  {
+                    "eventId": {
+                      "$eq": "e1"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "retry.402-honours-retry-after",
+      "description": "402 with Retry-After pauses for that long (clamped to 1-3600 s).",
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "track": {
+            "name": "a"
+          }
+        },
+        {
+          "serverResponds": {
+            "status": 402,
+            "headers": {
+              "Retry-After": "120"
+            },
+            "times": 1
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/session",
+              "status": 402,
+              "body": {
+                "events": [
+                  {
+                    "type": "SESSION_START",
+                    "eventId": {
+                      "$capture": "e0"
+                    }
+                  },
+                  {
+                    "type": "CUSTOM",
+                    "eventId": {
+                      "$capture": "e1"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "expectState": {
+            "queueLength": 2
+          }
+        },
+        {
+          "advanceTime": {
+            "ms": 119000
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": []
+        },
+        {
+          "advanceTime": {
+            "ms": 2000
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/session",
+              "status": 202,
+              "body": {
+                "events": [
+                  {
+                    "eventId": {
+                      "$eq": "e0"
+                    }
+                  },
+                  {
+                    "eventId": {
+                      "$eq": "e1"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "retry.other-4xx-drops-batch",
+      "description": "Any other 4xx (400, 404, 409, 413, 422) drops that batch with no backoff: the next flush sends only newer events, immediately.",
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "track": {
+            "name": "a"
+          }
+        },
+        {
+          "serverResponds": {
+            "status": 400,
+            "times": 1
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/session",
+              "status": 400,
+              "body": {
+                "events": [
+                  {
+                    "type": "SESSION_START",
+                    "eventId": {
+                      "$capture": "e0"
+                    }
+                  },
+                  {
+                    "type": "CUSTOM",
+                    "eventId": {
+                      "$capture": "e1"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "expectState": {
+            "queueLength": 0
+          }
+        },
+        {
+          "track": {
+            "name": "b"
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/session",
+              "status": 202,
+              "body": {
+                "events": [
+                  {
+                    "type": "CUSTOM",
+                    "metadata": {
+                      "name": "b"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "retry.413-drops-batch",
+      "description": "413 (body too large) is a rejected 4xx.",
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "track": {
+            "name": "a"
+          }
+        },
+        {
+          "serverResponds": {
+            "status": 413,
+            "times": 1
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/session",
+              "status": 413,
+              "body": {
+                "events": [
+                  {
+                    "type": "SESSION_START",
+                    "eventId": {
+                      "$capture": "e0"
+                    }
+                  },
+                  {
+                    "type": "CUSTOM",
+                    "eventId": {
+                      "$capture": "e1"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "expectState": {
+            "queueLength": 0
+          }
+        },
+        {
+          "track": {
+            "name": "b"
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectEvents": {
+            "mode": "exact",
+            "events": [
+              {
+                "type": "CUSTOM",
+                "metadata": {
+                  "name": "b"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

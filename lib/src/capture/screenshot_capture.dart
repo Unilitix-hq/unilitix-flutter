@@ -1,31 +1,49 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
-import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
-import 'image_encode.dart';
-import '../logger/logger.dart';
+import '../core/native_bridge.dart';
 import '../core/sdk_scope.dart';
+import '../logger/logger.dart';
 import '../privacy/privacy_mask.dart';
 
-/// Captures screenshots and encodes them as JPEG.
+/// Takes masked screenshots for session replay and hands them to the native
+/// SDK, which stores, samples, caps and uploads them (3.0.0).
 ///
-/// Capture is change-driven, not timer-driven: a frame is taken when the UI
-/// is marked dirty (navigation, tap, scroll, or the wireframe snapshot's
-/// structural hash changing) and at least [intervalMs] has passed since the
-/// last one. A quiet screen produces no frames; an idle heartbeat
-/// ([heartbeatMs]) keeps long static screens represented in the replay.
+/// Dart decides *when* (change-driven: navigation, taps and wireframe
+/// changes mark the screen dirty; at most one frame per [intervalMs], a
+/// heartbeat every [heartbeatMs] on a static screen, at most [maxPerMinute])
+/// and *what to hide* (the masks: [UnilitixPrivate], text, inputs, images,
+/// platform views — only the widget tree knows them). The plugin does the
+/// pixels: it draws the window with the masks painted in the same pass,
+/// downscales and encodes JPEG off the main thread, and keeps the frame
+/// natively; no image bytes cross the platform channel.
 ///
-/// On Android and iOS the native plugin does the image work (downscale,
-/// occlusion, JPEG, with JPEG encoding off the main thread) and returns JPEG
-/// bytes. Elsewhere
-/// the [RepaintBoundary] fallback draws the frame through `dart:ui` and
-/// returns PNG.
+/// Masks are read before the capture and again once the plugin has the
+/// frame. If they moved (a scroll or transition in between), the frame
+/// could show text beside its mask: it is discarded natively
+/// (`discardScreenshot`) and the screen stays dirty. Otherwise it is
+/// committed (`commitScreenshot`), which hands it to the native SDK's
+/// `captureExternalScreenshot`.
 class ScreenshotCapture with WidgetsBindingObserver {
-  final GlobalKey repaintKey;
+  ScreenshotCapture({
+    required this.bridge,
+    required this.intervalMs,
+    required this.maxWidth,
+    required this.quality,
+    this.maxScreenshots = 1500,
+    this.maxPerMinute = 20,
+    this.heartbeatMs = 10000,
+    this.maskScreenshots = true,
+    this.maskImages = false,
+    this.maskInputs = true,
+    this.maskAllText = true,
+    int Function()? clock,
+  }) : _clock = clock ?? _wallClock;
+
+  final NativeBridge bridge;
   final int intervalMs;
   final int maxScreenshots;
   final int maxPerMinute;
@@ -36,41 +54,25 @@ class ScreenshotCapture with WidgetsBindingObserver {
   final bool maskImages;
   final bool maskInputs;
   final bool maskAllText;
-  final Future<void> Function(
-    Uint8List bytes,
-    String screenName,
-    int ordinal,
-    int viewportWidth,
-    int viewportHeight,
-    int capturedAt,
-  ) onCapture;
+  final int Function() _clock;
 
-  int _ordinal = 0;
+  static int _wallClock() => DateTime.now().millisecondsSinceEpoch;
+
+  int _count = 0;
   bool _isCapturing = false;
   bool _active = false;
-  bool _dirty = true; // first frame of a session is always wanted
+  bool _dirty = true;
   int _lastCaptureMs = 0;
   final List<int> _recentCaptureMs = [];
 
-  static const _nativeChannel = MethodChannel('unilitix/screenshot');
+  /// Frames committed in the current session (the native SDK keeps the
+  /// authoritative count and cap).
+  int get committed => _count;
 
-  ScreenshotCapture({
-    required this.repaintKey,
-    required this.intervalMs,
-    required this.maxScreenshots,
-    required this.maxWidth,
-    required this.quality,
-    required this.onCapture,
-    this.maxPerMinute = 20,
-    this.heartbeatMs = 10000,
-    this.maskScreenshots = true,
-    this.maskImages = false,
-    this.maskInputs = true,
-    this.maskAllText = true,
-  });
+  bool get isActive => _active;
 
   void start() {
-    if (_active) return; // idempotent: consent changes may call this again
+    if (_active) return;
     _active = true;
     _lastCaptureMs = 0;
     _dirty = true;
@@ -83,15 +85,15 @@ class ScreenshotCapture with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
   }
 
-  void resetOrdinal() {
-    _ordinal = 0;
+  /// A new native session started.
+  void resetSession() {
+    _count = 0;
     _recentCaptureMs.clear();
     _dirty = true;
-    // Re-anchor the callback chain — session resets happen on foreground resume.
     if (_active) SchedulerBinding.instance.addPostFrameCallback(_onFrame);
   }
 
-  /// Marks the screen as changed; the next frame after [intervalMs] is captured.
+  /// Marks the screen as changed; the next frame after [intervalMs] is taken.
   void markDirty() => _dirty = true;
 
   @override
@@ -105,20 +107,15 @@ class ScreenshotCapture with WidgetsBindingObserver {
   void _onFrame(Duration _) {
     if (!_active) return;
     SchedulerBinding.instance.addPostFrameCallback(_onFrame);
-
-    final now = DateTime.now().millisecondsSinceEpoch;
+    final now = _clock();
     final since = now - _lastCaptureMs;
     final wanted = (_dirty && since >= intervalMs) || since >= heartbeatMs;
-    if (!wanted) return;
-    if (!_withinBudget(now)) return;
-
+    if (!wanted || !_withinBudget(now)) return;
     _dirty = false;
     _lastCaptureMs = now;
-    _capture(); // not awaited — _isCapturing guards re-entrancy
+    unawaited(captureOnce());
   }
 
-  /// Rolling one-minute budget so a screen that redraws continuously (a
-  /// ticker, an animation) cannot flood the session.
   bool _withinBudget(int now) {
     _recentCaptureMs.removeWhere((t) => now - t > 60000);
     if (_recentCaptureMs.length >= maxPerMinute) return false;
@@ -126,42 +123,53 @@ class ScreenshotCapture with WidgetsBindingObserver {
     return true;
   }
 
-  Future<void> _capture() async {
-    if (_ordinal >= maxScreenshots) return;
-    if (_isCapturing) return;
+  /// Takes one frame now (not waiting for a dirty screen). Returns true
+  /// when a frame was committed to the native SDK.
+  @visibleForTesting
+  Future<bool> captureOnce() async {
+    if (_count >= maxScreenshots || _isCapturing) return false;
     _isCapturing = true;
-
     try {
-      // Masks are read before the pixels and again once they are back. The
-      // native capture is asynchronous, so a scroll, route transition or
-      // animation can move content in between; a frame whose masks moved
-      // could show text beside its mask, and is dropped (the screen stays
-      // dirty, so the next quiet frame is taken instead).
-      final before = _collectMasks();
-      if (before == null) return; // never upload a frame we could not mask
-      final padded = padMasks(before);
+      final before = collectMasks();
+      if (before == null) return false; // never send a frame we could not mask
       final view = SchedulerBinding.instance.platformDispatcher.views.first;
       final dpr = view.devicePixelRatio;
+      final capturedAt = _clock();
+      final screen = SdkScope.currentScreen;
+      final handle = await bridge.query<Map<Object?, Object?>>(
+        'captureScreenshot',
+        {
+          'maxWidth': maxWidth,
+          'quality': quality,
+          'scale': dpr,
+          'masks': [
+            for (final r in padMasks(before)) [r.left, r.top, r.right, r.bottom]
+          ],
+        },
+      );
+      final id = handle?['id'];
+      if (id is! int) return false;
 
-      Uint8List? jpegBytes = await _tryNativeCapture(padded, dpr);
-      jpegBytes ??= await _tryDartCapture(padded);
-      if (jpegBytes == null) return;
-
-      final after = _collectMasks();
+      final after = collectMasks();
       if (after == null || !masksStable(before, after)) {
         _dirty = true;
+        bridge.send('discardScreenshot', {'id': id});
         UnilitixLogger.d('Screen moved during capture — frame dropped');
-        return;
+        return false;
       }
-
-      final ordinal = _ordinal++;
-      final screen = SdkScope.currentScreen ?? 'unknown';
-      final w = (view.physicalSize.width / dpr).round();
-      final h = (view.physicalSize.height / dpr).round();
-      await onCapture(jpegBytes, screen, ordinal, w, h,
-          DateTime.now().millisecondsSinceEpoch);
+      bridge.send('commitScreenshot', {
+        'id': id,
+        // Viewport in logical pixels (the replay's coordinate space).
+        'width': (view.physicalSize.width / dpr).round(),
+        'height': (view.physicalSize.height / dpr).round(),
+        'timestampMs': capturedAt,
+        'screen': screen,
+      });
+      _count++;
+      return true;
     } catch (e) {
       UnilitixLogger.e('Screenshot capture failed', e);
+      return false;
     } finally {
       _isCapturing = false;
     }
@@ -180,9 +188,7 @@ class ScreenshotCapture with WidgetsBindingObserver {
   static List<ui.Rect> padMasks(List<ui.Rect> masks) =>
       [for (final r in masks) r.inflate(maskPadding)];
 
-  /// Whether the masks read after a capture match those read before it: the
-  /// same regions, in the same order, none moved or resized by more than
-  /// [maskTolerance].
+  /// Whether the masks read after a capture match those read before it.
   @visibleForTesting
   static bool masksStable(List<ui.Rect> before, List<ui.Rect> after) {
     if (before.length != after.length) return false;
@@ -203,10 +209,10 @@ class ScreenshotCapture with WidgetsBindingObserver {
   /// every [UnilitixPrivate] subtree; every text input when [maskInputs] is
   /// on; every paragraph of text when [maskAllText] is on (minus
   /// [UnilitixUnmasked] subtrees); every image when [maskImages] is on;
-  /// every platform view (WebView, map, video) always.
-  ///
-  /// If collection fails the frame is dropped rather than sent unmasked.
-  List<ui.Rect>? _collectMasks() {
+  /// every platform view (WebView, map, video) always. Null when
+  /// collection failed: the frame is then not taken.
+  @visibleForTesting
+  List<ui.Rect>? collectMasks() {
     if (!maskScreenshots) return const [];
     try {
       final rects = <ui.Rect>[...PrivacyRegistry.privateRects()];
@@ -218,57 +224,6 @@ class ScreenshotCapture with WidgetsBindingObserver {
     } catch (e) {
       UnilitixLogger.w('Mask collection failed — frame skipped: $e');
       return null;
-    }
-  }
-
-  /// Native capture: PixelCopy on Android, drawHierarchy on iOS (through
-  /// UnilitixCore, which paints the masks while drawing the downscaled
-  /// frame). Either way the plugin returns JPEG.
-  Future<Uint8List?> _tryNativeCapture(List<ui.Rect> masks, double dpr) async {
-    try {
-      return await _nativeChannel.invokeMethod<Uint8List>('captureScreenshot', {
-        'maxWidth': maxWidth,
-        'quality': quality,
-        'scale': dpr,
-        'masks': masks.map((r) => [r.left, r.top, r.right, r.bottom]).toList(),
-      });
-    } catch (_) {
-      // MissingPluginException on unsupported platforms, or any native error.
-      return null;
-    }
-  }
-
-  /// RepaintBoundary → `ui.Image`, then downscale, occlusion and PNG encoding
-  /// with `dart:ui` alone. An [endOfFrame] barrier lets Impeller drain before
-  /// pixel readback.
-  Future<Uint8List?> _tryDartCapture(List<ui.Rect> masks) async {
-    final boundary =
-        repaintKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
-    if (boundary == null) return null;
-
-    ui.Image? uiImage;
-    try {
-      final view = SchedulerBinding.instance.platformDispatcher.views.first;
-      final captureRatio = (view.devicePixelRatio * 0.5).clamp(1.0, 2.0);
-      uiImage = await boundary.toImage(pixelRatio: captureRatio);
-      await SchedulerBinding.instance.endOfFrame;
-
-      // Masks are in logical px; the image is logical × captureRatio.
-      final scaledMasks = masks
-          .map((r) => ui.Rect.fromLTRB(
-                r.left * captureRatio,
-                r.top * captureRatio,
-                r.right * captureRatio,
-                r.bottom * captureRatio,
-              ))
-          .toList();
-      return await encodeFrameUi(uiImage,
-          maxWidth: maxWidth, masks: scaledMasks);
-    } catch (e) {
-      UnilitixLogger.e('Dart screenshot capture failed', e);
-      return null;
-    } finally {
-      uiImage?.dispose();
     }
   }
 }

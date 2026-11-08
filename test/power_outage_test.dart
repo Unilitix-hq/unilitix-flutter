@@ -6,12 +6,12 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:unilitix/src/config.dart';
-import 'package:unilitix/src/network/api_client.dart';
+import 'package:unilitix/src/consent.dart';
 import 'package:unilitix/src/power/h3.dart';
 import 'package:unilitix/src/power/power_contribution.dart';
 import 'package:unilitix/src/power/power_signals.dart';
+import 'package:unilitix/src/power/power_transport.dart';
 import 'package:unilitix/src/power/sha256.dart';
-import 'package:unilitix/src/privacy/opt_manager.dart';
 
 // 2025-10-09T08:53:20Z
 final DateTime _now = DateTime.utc(2025, 10, 9, 8, 53, 20);
@@ -85,7 +85,7 @@ class _Harness {
         // Round-trip through JSON so the test sees exactly the wire body.
         bodies.add(jsonDecode(jsonEncode(body)) as Map<String, dynamic>);
         final i = bodies.length - 1;
-        return ApiResult(status: i < statuses.length ? statuses[i] : 202);
+        return PowerPostResult(i < statuses.length ? statuses[i] : 202);
       },
       channel: channel,
       platform: platform,
@@ -339,20 +339,20 @@ void main() {
     });
   });
 
-  group('ApiClient.postPowerSignals', () {
+  group('PowerTransport.post', () {
     test('one gzip POST to /v1/signals/power with the key header', () async {
       late http.Request seen;
       final client = MockClient((req) async {
         seen = req;
         return http.Response('', 202);
       });
-      final api = ApiClient(
+      final api = PowerTransport(
           apiKey: 'k',
           apiUrl: 'https://api.example',
           sdkVersion: '2.2.0',
           client: client);
-      final r = await api.postPowerSignals(powerRequestBody('87589c984ffffff',
-          'abc', const [PowerSignal.connect(1760000000000)]));
+      final r = await api.post(powerRequestBody('87589c984ffffff', 'abc',
+          const [PowerSignal.connect(1760000000000)]));
       expect(r.ok, isTrue);
       expect(seen.method, 'POST');
       expect(seen.url.toString(), 'https://api.example/v1/signals/power');

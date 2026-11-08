@@ -1,0 +1,723 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://unilitix.com/schemas/sdk-behaviour-1.json",
+  "title": "Unilitix SDK behaviour fixtures",
+  "description": "One file of behaviour conformance cases, or the index (index.json). See README.md for the runner contract.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/fixtureFile"
+    },
+    {
+      "$ref": "#/$defs/indexFile"
+    }
+  ],
+  "$defs": {
+    "indexFile": {
+      "type": "object",
+      "required": [
+        "kind",
+        "contractVersion",
+        "schemaVersion",
+        "files",
+        "harness"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "index"
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        },
+        "schemaVersion": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9_-]+\\.json$"
+          }
+        },
+        "harness": {
+          "type": "object",
+          "required": [
+            "apiKey",
+            "apiUrl",
+            "config",
+            "device",
+            "clock",
+            "defaultResponse",
+            "ignoredPaths"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "apiKey": {
+              "type": "string",
+              "minLength": 1
+            },
+            "apiUrl": {
+              "type": "string",
+              "minLength": 1
+            },
+            "config": {
+              "$ref": "#/$defs/config"
+            },
+            "device": {
+              "$ref": "#/$defs/device"
+            },
+            "clock": {
+              "$ref": "#/$defs/instant"
+            },
+            "defaultResponse": {
+              "$ref": "#/$defs/response"
+            },
+            "ignoredPaths": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^/"
+              }
+            }
+          }
+        }
+      }
+    },
+    "fixtureFile": {
+      "type": "object",
+      "required": [
+        "kind",
+        "area",
+        "description",
+        "cases"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "behaviour"
+        },
+        "area": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "cases": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/case"
+          }
+        }
+      }
+    },
+    "case": {
+      "type": "object",
+      "required": [
+        "id",
+        "description",
+        "steps"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*\\.[a-z0-9][a-z0-9-]*$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "platforms": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "enum": [
+              "android",
+              "ios",
+              "flutter",
+              "react-native"
+            ]
+          }
+        },
+        "contract": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "config": {
+          "$ref": "#/$defs/config"
+        },
+        "clock": {
+          "$ref": "#/$defs/instant"
+        },
+        "device": {
+          "$ref": "#/$defs/device"
+        },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/step"
+          }
+        }
+      }
+    },
+    "instant": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?Z$"
+    },
+    "config": {
+      "description": "Overrides of the contract's configuration options, by canonical key (sdk-contract.json options[].key). The runner maps each key to its platform name.",
+      "type": "object",
+      "additionalProperties": {
+        "type": [
+          "boolean",
+          "integer",
+          "number",
+          "string"
+        ]
+      }
+    },
+    "device": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "network": {
+          "$ref": "#/$defs/network"
+        },
+        "randomRolls": {
+          "description": "Values in [0,1) returned, in order, for each per-session replay sampling roll.",
+          "type": "array",
+          "items": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        }
+      }
+    },
+    "network": {
+      "type": "object",
+      "required": [
+        "type",
+        "online"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "enum": [
+            "wifi",
+            "ethernet",
+            "cellular",
+            "none",
+            "other"
+          ]
+        },
+        "generation": {
+          "enum": [
+            "2g",
+            "3g",
+            "4g",
+            "5g",
+            "unknown"
+          ]
+        },
+        "online": {
+          "type": "boolean"
+        }
+      }
+    },
+    "response": {
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 599
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "times": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "empty": {
+      "type": "object",
+      "additionalProperties": false
+    },
+    "step": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 1,
+      "oneOf": [
+        {
+          "required": [
+            "init"
+          ],
+          "properties": {
+            "init": {
+              "$ref": "#/$defs/empty"
+            }
+          }
+        },
+        {
+          "required": [
+            "track"
+          ],
+          "properties": {
+            "track": {
+              "type": "object",
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "$ref": "#/$defs/inputString"
+                },
+                "properties": {
+                  "$ref": "#/$defs/inputObject"
+                }
+              }
+            }
+          }
+        },
+        {
+          "required": [
+            "screen"
+          ],
+          "properties": {
+            "screen": {
+              "type": "object",
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "$ref": "#/$defs/inputString"
+                }
+              }
+            }
+          }
+        },
+        {
+          "required": [
+            "identify"
+          ],
+          "properties": {
+            "identify": {
+              "type": "object",
+              "required": [
+                "userId"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "userId": {
+                  "$ref": "#/$defs/inputString"
+                },
+                "traits": {
+                  "$ref": "#/$defs/inputObject"
+                }
+              }
+            }
+          }
+        },
+        {
+          "required": [
+            "reset"
+          ],
+          "properties": {
+            "reset": {
+              "$ref": "#/$defs/empty"
+            }
+          }
+        },
+        {
+          "required": [
+            "setConsent"
+          ],
+          "properties": {
+            "setConsent": {
+              "type": "object",
+              "required": [
+                "state"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "state": {
+                  "enum": [
+                    "granted",
+                    "pending",
+                    "denied"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "required": [
+            "advanceTime"
+          ],
+          "properties": {
+            "advanceTime": {
+              "type": "object",
+              "required": [
+                "ms"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "ms": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "required": [
+            "setNetwork"
+          ],
+          "properties": {
+            "setNetwork": {
+              "$ref": "#/$defs/network"
+            }
+          }
+        },
+        {
+          "required": [
+            "background"
+          ],
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/empty"
+            }
+          }
+        },
+        {
+          "required": [
+            "foreground"
+          ],
+          "properties": {
+            "foreground": {
+              "$ref": "#/$defs/empty"
+            }
+          }
+        },
+        {
+          "required": [
+            "flush"
+          ],
+          "properties": {
+            "flush": {
+              "$ref": "#/$defs/empty"
+            }
+          }
+        },
+        {
+          "required": [
+            "recordError"
+          ],
+          "properties": {
+            "recordError": {
+              "type": "object",
+              "required": [
+                "type",
+                "message",
+                "fatal"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "message": {
+                  "type": "string"
+                },
+                "stack": {
+                  "type": "string"
+                },
+                "fatal": {
+                  "type": "boolean"
+                },
+                "platform": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        {
+          "required": [
+            "crashNextLaunch"
+          ],
+          "properties": {
+            "crashNextLaunch": {
+              "type": "object",
+              "required": [
+                "exceptionType",
+                "platform"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "exceptionType": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "signal": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "message": {
+                  "type": "string"
+                },
+                "stack": {
+                  "type": "string"
+                },
+                "platform": {
+                  "enum": [
+                    "android",
+                    "ios"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "required": [
+            "restart"
+          ],
+          "properties": {
+            "restart": {
+              "$ref": "#/$defs/empty"
+            }
+          }
+        },
+        {
+          "required": [
+            "serverResponds"
+          ],
+          "properties": {
+            "serverResponds": {
+              "$ref": "#/$defs/response"
+            }
+          }
+        },
+        {
+          "required": [
+            "repeat"
+          ],
+          "properties": {
+            "repeat": {
+              "type": "object",
+              "required": [
+                "times",
+                "steps"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "times": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "steps": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "$ref": "#/$defs/step"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "required": [
+            "expectRequests"
+          ],
+          "properties": {
+            "expectRequests": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/requestMatcher"
+              }
+            }
+          }
+        },
+        {
+          "required": [
+            "expectEvents"
+          ],
+          "properties": {
+            "expectEvents": {
+              "type": "object",
+              "required": [
+                "mode",
+                "events"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "mode": {
+                  "enum": [
+                    "exact",
+                    "contains"
+                  ]
+                },
+                "events": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/matcher"
+                  }
+                },
+                "absent": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/matcher"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "required": [
+            "expectState"
+          ],
+          "properties": {
+            "expectState": {
+              "$ref": "#/$defs/stateMatcher"
+            }
+          }
+        }
+      ]
+    },
+    "inputString": {
+      "description": "A string, or {\"$repeat\": {\"string\", \"count\"}}.",
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/$defs/repeatGen"
+        }
+      ]
+    },
+    "inputObject": {
+      "type": "object"
+    },
+    "repeatGen": {
+      "type": "object",
+      "required": [
+        "$repeat"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "$repeat": {
+          "type": "object",
+          "required": [
+            "string",
+            "count"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "string": {
+              "type": "string",
+              "minLength": 1
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+    "requestMatcher": {
+      "type": "object",
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "enum": [
+            "/v1/ingest/session",
+            "/v1/ingest/identify"
+          ]
+        },
+        "status": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 599
+        },
+        "body": {
+          "$ref": "#/$defs/matcher"
+        }
+      }
+    },
+    "stateMatcher": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "anonymousId": {
+          "$ref": "#/$defs/matcher"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/matcher"
+        },
+        "userId": {
+          "$ref": "#/$defs/matcher"
+        },
+        "consent": {
+          "$ref": "#/$defs/matcher"
+        },
+        "queueLength": {
+          "$ref": "#/$defs/matcher"
+        },
+        "uploadsPaused": {
+          "$ref": "#/$defs/matcher"
+        },
+        "replaySampled": {
+          "$ref": "#/$defs/matcher"
+        },
+        "screen": {
+          "$ref": "#/$defs/matcher"
+        }
+      }
+    },
+    "matcher": {
+      "description": "Any JSON value; strings in <angle brackets> and objects whose keys start with $ are operators (README: Matchers).",
+      "type": [
+        "object",
+        "array",
+        "string",
+        "number",
+        "integer",
+        "boolean",
+        "null"
+      ]
+    }
+  }
+}

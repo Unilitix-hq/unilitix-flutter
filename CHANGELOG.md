@@ -1,3 +1,92 @@
+## 3.0.0
+
+**The Flutter SDK is now a thin wrapper over the native Unilitix SDKs**
+(Android `com.unilitix:unilitix-android` 1.11.1, iOS UnilitixCore 0.8.0),
+like Sentry's and Datadog's Flutter SDKs. Until 2.7.4 the SDK re-implemented
+the engine in Dart (sessions, queue, uploads, retry), so Flutter apps
+behaved slightly differently from native ones (the 2.x rows of the contract's
+DIVERGENCES.md). Now there is one engine per platform and a Flutter app
+behaves exactly like a native app. Upgrading: see [MIGRATION.md](MIGRATION.md).
+
+### Architecture
+- **Native:** sessions and session timeout, anonymous/user identity and
+  `/v1/ingest/identify`, consent (persisted natively), the offline queue,
+  batching, upload, retry and backoff (contract 1.4.0 retry table, including
+  408 retryable and 402 clamping), property normalisation, network type
+  (5G, ETHERNET, ...), device and app context, native crashes (JVM, NDK
+  signals, NSException, Mach/POSIX signals) with app-frame grouping, Android
+  ANRs, iOS app hangs, iOS taps, replay sampling and storage.
+- **Dart:** Dart/Flutter error capture (`FlutterError.onError`,
+  `PlatformDispatcher.onError`, `captureException`) sent to the native
+  `recordExternalError` with `platform: "dart"` and the contract
+  fingerprint; route names from `UnilitixObserver`; Android taps and rage
+  taps (with `UnilitixPrivate` positions hidden); widget-tree masking;
+  wireframe snapshots (sliced walk, `addExternalSnapshot`); screenshot
+  scheduling and masks (frames drawn natively and handed to
+  `captureExternalScreenshot` without crossing to Dart); power-outage
+  contribution (Flutter-only feature, unchanged).
+- The plugin reports itself to the native SDK with
+  `setWrapper("flutter", "3.0.0")` and turns on external screen capture
+  (`setExternalScreenCapture(true)`) before the native init.
+- Calls made before `init` completes are buffered in Dart (200, oldest
+  dropped) and sent in order right after the native init (contract
+  `preInitBufferSize`); 2.x dropped them.
+
+### Breaking changes
+- **Web and desktop are no longer supported.** The web plugin is a stub: the
+  SDK compiles but does nothing (a debug warning at `init`).
+- **New anonymous id on upgrade; user id forgotten.** Identity now lives in
+  the native SDK; 2.x's Dart-stored ids are not carried over. Call
+  `identify()` again after login. The consent decision **is** carried over
+  (a 2.x denial stays a denial).
+- Removed: `UnilitixMaterialApp` and `UnilitixApp` (deprecated since 2.0;
+  use `MaterialApp(navigatorObservers: [Unilitix.observer], builder: ...
+  UnilitixWidget)`), the public `UnilitixEvent` / `EventTypes` classes, and
+  `SCROLL` events (they were only sent by `UnilitixMaterialApp`).
+- An uncaught Dart error (`PlatformDispatcher.onError`) is now a `CRASH`
+  with `fatal: true` (2.x: `fatal: false`); it still marks the session
+  crashed, as before.
+- `addBreadcrumb(data:)` is appended to the message as JSON (the native
+  breadcrumb has no data field).
+- Screenshots on Android 5–7.1 (API 21–25) are no longer taken (the Dart
+  PNG fallback is gone); wireframes still are.
+- iOS taps are recorded by UnilitixCore (it sees Flutter's touches), on the
+  route names from `UnilitixObserver`; a tap inside `UnilitixPrivate` keeps
+  its position on iOS (Android hides it as before).
+- Options are applied (and clamped) by the native SDK. `appHangTimeoutMs` is
+  UnilitixCore's; `uploadScreenshotsOnWifiOnly`, `maxOfflineEvents` and the
+  other delivery options mean what they mean natively.
+- Dependencies: `sqflite` removed (and `sqflite_common_ffi` from dev
+  dependencies). `http` stays for the symbol upload CLI and the iOS
+  power-outage upload, `shared_preferences` for power-outage state and the
+  consent carry-over. Android depends on `com.unilitix:unilitix-android`
+  (Maven Central).
+
+### Added
+- `Unilitix.recordException(type, message, {stackTrace, fatal})`: report an
+  error described by its parts (same as the native SDKs' `recordException`).
+
+### Removed (moved to the native SDKs)
+- Dart engine: flush scheduler, SQLite event database and write-ahead log,
+  API client, retry policy, session manager, identity, network monitor,
+  device info, performance monitor, Africa context.
+- Android plugin: the JVM crash handler, the NDK signal handler
+  (`libunilitix-flutter-native.so`, `android/src/main/cpp`) and the
+  exit-info/ANR reader; the Android SDK reports those once, so nothing is
+  double-reported. iOS plugin: its own `CrashFile` install and app-hang
+  monitor (UnilitixCore's are used).
+
+### Size
+- The size gate baseline (`.github/size-baseline.txt`) was reset to 0: the
+  Dart engine and sqflite are gone, the native Android SDK and its
+  dependencies came in. It is re-measured on the first green 3.0.0 build.
+
+### Release order
+1. `com.unilitix:unilitix-android:1.11.1` on Maven Central.
+2. UnilitixCore 0.8.0 vendored with `scripts/sync-ios-core.sh` (the script
+   now vendors the public facade too).
+3. Tag `v3.0.0` here.
+
 ## 2.7.4
 
 Performance and safety fixes for host apps, from a go-live audit. No API

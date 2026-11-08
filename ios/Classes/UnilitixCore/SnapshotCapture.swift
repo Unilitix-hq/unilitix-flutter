@@ -1,4 +1,4 @@
-// VENDORED from UnilitixCore 0.7.2 (SnapshotCapture.swift) by scripts/sync-ios-core.sh.
+// VENDORED from UnilitixCore 0.8.0 (SnapshotCapture.swift) by scripts/sync-ios-core.sh.
 // Do not edit here; change UnilitixCore and re-run the script.
 
 #if canImport(UIKit) && os(iOS)
@@ -47,7 +47,7 @@ enum SnapshotCapture {
 
     fileprivate static func tick() {
         guard let e = engine else { return }
-        let active = UIApplication.shared.applicationState == .active
+        let active = AppContext.application?.applicationState == .active
         defer { wasActive = active }
         guard active else { return }
         if !wasActive { scheduler.markNavigation() }  // back from the background

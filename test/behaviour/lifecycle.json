@@ -1,0 +1,298 @@
+{
+  "kind": "behaviour",
+  "area": "lifecycle",
+  "description": "Init, the pre-init buffer, persistence across restarts, timestamps and seq.",
+  "cases": [
+    {
+      "id": "lifecycle.init-starts-session",
+      "description": "init starts a session whose first event is SESSION_START (seq 0, timestamp = fake clock, network at capture). Nothing is uploaded until a flush trigger; flush sends one /v1/ingest/session request carrying the anonymous id and the event.",
+      "contract": [
+        "eventTypes.SESSION_START",
+        "options.flushIntervalSeconds"
+      ],
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "expectState": {
+            "sessionId": {
+              "$capture": "s1",
+              "$match": "<uuid>"
+            },
+            "anonymousId": {
+              "$capture": "a1",
+              "$match": "<uuid>"
+            },
+            "consent": "granted",
+            "userId": null
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/session",
+              "status": 202,
+              "body": {
+                "sessionId": {
+                  "$eq": "s1"
+                },
+                "anonymousId": {
+                  "$eq": "a1"
+                },
+                "customUserId": "<empty>",
+                "events": [
+                  {
+                    "type": "SESSION_START",
+                    "eventId": "<uuid>",
+                    "seq": 0,
+                    "timestamp": {
+                      "$time": "2026-01-05T09:00:00.000Z"
+                    },
+                    "networkAtCapture": "WIFI",
+                    "capturedOffline": false
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "expectState": {
+            "queueLength": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "lifecycle.pre-init-calls-replayed-in-order",
+      "description": "track/screen/identify made before init are buffered and replayed after init, in call order, after SESSION_START.",
+      "contract": [
+        "limits.preInitBufferSize"
+      ],
+      "steps": [
+        {
+          "track": {
+            "name": "a"
+          }
+        },
+        {
+          "screen": {
+            "name": "Home"
+          }
+        },
+        {
+          "identify": {
+            "userId": "u1"
+          }
+        },
+        {
+          "track": {
+            "name": "b"
+          }
+        },
+        {
+          "init": {}
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectRequests": [
+            {
+              "path": "/v1/ingest/identify",
+              "body": {
+                "anonymousId": "<uuid>",
+                "customUserId": "u1"
+              }
+            },
+            {
+              "path": "/v1/ingest/session",
+              "body": {
+                "customUserId": "u1",
+                "events": [
+                  {
+                    "type": "SESSION_START",
+                    "seq": 0
+                  },
+                  {
+                    "type": "CUSTOM",
+                    "seq": 1,
+                    "metadata": {
+                      "name": "a"
+                    }
+                  },
+                  {
+                    "type": "NAVIGATE",
+                    "seq": 2,
+                    "screen": "Home"
+                  },
+                  {
+                    "type": "CUSTOM",
+                    "seq": 3,
+                    "metadata": {
+                      "name": "b"
+                    },
+                    "screen": "Home"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "lifecycle.pre-init-buffer-cap",
+      "description": "At most preInitBufferSize (200) calls are buffered before init; the oldest are dropped first.",
+      "contract": [
+        "limits.preInitBufferSize"
+      ],
+      "steps": [
+        {
+          "repeat": {
+            "times": 205,
+            "steps": [
+              {
+                "track": {
+                  "name": "e${i}"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "init": {}
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectEvents": {
+            "mode": "exact",
+            "events": [
+              {
+                "type": "SESSION_START"
+              },
+              {
+                "$each": {
+                  "from": 5,
+                  "to": 204,
+                  "match": {
+                    "type": "CUSTOM",
+                    "metadata": {
+                      "name": "e${i}"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "lifecycle.queue-survives-restart",
+      "description": "Events queued but not uploaded when the process dies are on disk and uploaded after the next init, with their original session id and event id.",
+      "contract": [
+        "options.maxOfflineEvents"
+      ],
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "expectState": {
+            "sessionId": {
+              "$capture": "s1"
+            }
+          }
+        },
+        {
+          "track": {
+            "name": "before-restart"
+          }
+        },
+        {
+          "restart": {}
+        },
+        {
+          "init": {}
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectEvents": {
+            "mode": "contains",
+            "events": [
+              {
+                "type": "CUSTOM",
+                "metadata": {
+                  "name": "before-restart"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "expectState": {
+            "queueLength": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "lifecycle.timestamps-follow-clock",
+      "description": "Event timestamps are the wall clock at capture (RFC 3339), not at upload.",
+      "steps": [
+        {
+          "init": {}
+        },
+        {
+          "advanceTime": {
+            "ms": 1500
+          }
+        },
+        {
+          "track": {
+            "name": "a"
+          }
+        },
+        {
+          "advanceTime": {
+            "ms": 60000
+          }
+        },
+        {
+          "flush": {}
+        },
+        {
+          "expectEvents": {
+            "mode": "exact",
+            "events": [
+              {
+                "type": "SESSION_START",
+                "timestamp": {
+                  "$time": "2026-01-05T09:00:00.000Z"
+                }
+              },
+              {
+                "type": "CUSTOM",
+                "metadata": {
+                  "name": "a"
+                },
+                "timestamp": {
+                  "$time": "2026-01-05T09:00:01.500Z"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

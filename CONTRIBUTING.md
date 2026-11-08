@@ -24,56 +24,57 @@ cd example && flutter pub get && cd ..
 3. Run the full check suite before opening a PR:
 
 ```bash
-dart format lib/                     # auto-format
-flutter analyze                      # static analysis
-flutter test                         # unit tests
+dart format lib test                 # auto-format
+dart analyze --fatal-infos --fatal-warnings
+flutter test                         # unit, widget and behaviour tests
 flutter pub publish --dry-run        # publish sanity check
 ```
 
 4. All four commands must exit 0.
 
-## iOS native code (UnilitixCore)
+## Architecture (3.0.0)
 
-`ios/Classes/UnilitixCore/` is vendored from
-[UnilitixCore](https://github.com/Unilitix-hq/unilitix-ios), the Swift core
-the native iOS and React Native SDKs share (crash capture, screenshot
-drawing and encoding, device info). Do not edit it here: change UnilitixCore,
-then re-sync from a checkout next to this repo and commit the result:
+The SDK is a thin wrapper over the native Unilitix SDKs. Behaviour that is
+not Flutter-specific (sessions, identity, consent, queue, uploads, retry,
+context, native crashes, ANRs, app hangs) belongs in the native SDKs and is
+fixed there, not here. This repo holds only:
+
+- `lib/`: Dart error capture, the navigator observer, Android taps,
+  widget-tree masking, wireframe walk, screenshot scheduling, the pre-init
+  buffer (`lib/src/core/native_bridge.dart`) and power-outage contribution;
+- `android/`: the bridge to `com.unilitix:unilitix-android` (Maven Central),
+  PixelCopy capture and the power-outage glue;
+- `ios/Classes/UnilitixFlutterPlugin.swift`: the bridge to UnilitixCore.
+
+The channel protocol (`com.unilitix/sdk`) is documented on each plugin
+class; `test/support/fake_native.dart` is the fake both the unit tests and
+the behaviour runner use.
+
+## Native SDK versions
+
+- **Android:** the version is in `android/build.gradle`
+  (`com.unilitix:unilitix-android:<version>`) and README "Native SDK
+  versions". It must be on Maven Central before a release is tagged.
+- **iOS:** `ios/Classes/UnilitixCore/` is vendored from
+  [UnilitixCore](https://github.com/Unilitix-hq/unilitix-ios), public facade
+  included. Do not edit it here: change UnilitixCore, then re-sync from a
+  checkout next to this repo and commit the result:
 
 ```bash
 scripts/sync-ios-core.sh            # default source: ../unilitix-ios/UnilitixCore
 scripts/sync-ios-core.sh path/to/UnilitixCore
 ```
 
-## Android native crash capture (unilitix-android)
+## Contract fixtures
 
-The Android plugin's native (NDK) crash capture is vendored from the
-[Android SDK](https://github.com/Unilitix-hq/unilitix-android) (1.7.0+):
+`lib/src/generated/sdk_contract.dart`, `test/behaviour_fixtures.dart` and
+`test/behaviour/*.json` are copied from the api repo (`api/sdk/dart/`,
+`api/sdk/behaviour/`); never edit them by hand. After a contract change,
+copy them again and update `test/behaviour/COVERAGE.md`.
 
-- `android/src/main/cpp/` — the C signal handler (API 21–29) and its
-  `CMakeLists.txt`, built as `libunilitix-flutter-native.so`;
-- `android/src/main/kotlin/io/unilitix/flutter/nativecrash/` — the record
-  format, the `ApplicationExitInfo` scan with its watermark and tombstone
-  parser (API 30+), the JNI wrapper, and the fingerprint.
-
-Each vendored file starts with a `VENDORED from unilitix-android` header. The
-script rewrites only the package (`io.unilitix.flutter.nativecrash`), the
-library name and the matching JNI symbol names, so an app can ship this
-plugin and the Android SDK side by side. Do not edit those files here: change
-the Android SDK, then re-sync and commit the result (a fresh sync of the same
-SDK version must leave `git status` clean):
-
-```bash
-scripts/sync-android-native.sh                     # default source: ../Downloads/tazama-android
-scripts/sync-android-native.sh path/to/unilitix-android
-```
-
-Plugin-owned glue, never touched by the script:
-`nativecrash/PluginSupport.kt` (the SDK's `KeyValueStore` and `Logger`) and
-`com/unilitix/unilitix_flutter/NativeCrashBridge.kt` (install, exit-info
-scan, the records `readNativeCrash` hands to Dart). Its unit tests are in
-`android/src/test/kotlin/.../NativeCrashBridgeTest.kt`; from `example/android`:
-`./gradlew :unilitix_flutter:testDebugUnitTest`.
+Plugin unit tests (JUnit), from `example/android`:
+`./gradlew :unilitix:testDebugUnitTest`. Integration test on a device or
+emulator: `cd example && flutter test integration_test`.
 
 ## Dart style
 
@@ -108,8 +109,8 @@ check suite and publishes to pub.dev.
 
 ```bash
 # After merging your PR — replace X.Y.Z with the new version
-git tag v2.0.32
-git push origin v2.0.32
+git tag vX.Y.Z
+git push origin vX.Y.Z
 ```
 
 ## Reporting bugs

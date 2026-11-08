@@ -1,4 +1,4 @@
-// VENDORED from UnilitixCore 0.7.2 (Config.swift) by scripts/sync-ios-core.sh.
+// VENDORED from UnilitixCore 0.8.0 (Config.swift) by scripts/sync-ios-core.sh.
 // Do not edit here; change UnilitixCore and re-run the script.
 
 import Foundation
@@ -21,7 +21,10 @@ public struct UnilitixConfig {
     /// Report uncaught Objective-C exceptions and fatal signals (SIGABRT,
     /// SIGBUS, SIGFPE, SIGILL, SIGSEGV, SIGTRAP) as CRASH events. A signal is
     /// reported on the next launch, against the session that crashed.
-    /// Also turns on app-hang (`ANR`) detection; see `appHangTimeoutMs`.
+    /// Also turns on app-hang (`ANR`) detection (see `appHangTimeoutMs`)
+    /// and, in apps, out-of-memory termination inference: a run that ended
+    /// in the foreground without a crash or a clean exit is reported on the
+    /// next launch as a non-fatal `OutOfMemory` (or `WatchdogTermination`).
     public var autoTrackCrashes: Bool = true
     /// With `autoTrackCrashes`, report an app hang (`ANR`) when the main
     /// thread does not respond for this long, in milliseconds, while the app
@@ -121,6 +124,7 @@ final class Preferences {
         static let anonymousId = "unilitix_anonymous_id"
         static let installId = "unilitix_install_id"
         static let customUserId = "unilitix_custom_user_id"
+        static let pendingIdentifies = "unilitix_pending_identifies"
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -144,6 +148,21 @@ final class Preferences {
     var customUserId: String? {
         get { defaults.string(forKey: Key.customUserId) }
         set { defaults.set(newValue, forKey: Key.customUserId) }
+    }
+
+    /// Identify requests not yet answered by the API, oldest first.
+    var pendingIdentifies: [IdentifyRequest] {
+        get {
+            guard let data = defaults.data(forKey: Key.pendingIdentifies) else { return [] }
+            return (try? JSONDecoder().decode([IdentifyRequest].self, from: data)) ?? []
+        }
+        set {
+            if newValue.isEmpty {
+                defaults.removeObject(forKey: Key.pendingIdentifies)
+            } else if let data = try? JSONEncoder().encode(newValue) {
+                defaults.set(data, forKey: Key.pendingIdentifies)
+            }
+        }
     }
 
     private func stableId(_ key: String) -> String {

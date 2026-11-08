@@ -1,4 +1,4 @@
-// VENDORED from UnilitixCore 0.7.2 (BinaryImages.swift) by scripts/sync-ios-core.sh.
+// VENDORED from UnilitixCore 0.8.0 (BinaryImages.swift) by scripts/sync-ios-core.sh.
 // Do not edit here; change UnilitixCore and re-run the script.
 
 #if canImport(Darwin)
