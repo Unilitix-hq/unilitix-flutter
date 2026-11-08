@@ -29,7 +29,7 @@ and masked replay of the widget tree. Upgrading from 2.x? Read
 
 | unilitix (Flutter) | Android SDK (Maven Central) | iOS (UnilitixCore, vendored in the pod) |
 |---|---|---|
-| 3.0.0 | `com.unilitix:unilitix-android:1.11.1` | 0.8.0 |
+| 3.0.0 | `com.unilitix:unilitix-android:1.11.2` | 0.8.0 |
 
 The Android SDK comes from Maven Central through Gradle; nothing to add if
 your project already lists `mavenCentral()` (Flutter's template does).

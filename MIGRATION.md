@@ -1,7 +1,7 @@
 # Migrating from 2.x to 3.0
 
 3.0.0 turns the Flutter SDK into a thin wrapper over the native Unilitix
-SDKs (Android `com.unilitix:unilitix-android` 1.11.1, iOS UnilitixCore
+SDKs (Android `com.unilitix:unilitix-android` 1.11.2, iOS UnilitixCore
 0.8.0). Most apps upgrade by changing the version; read the list below for
 what behaves differently.
 

@@ -1,7 +1,7 @@
 ## 3.0.0
 
 **The Flutter SDK is now a thin wrapper over the native Unilitix SDKs**
-(Android `com.unilitix:unilitix-android` 1.11.1, iOS UnilitixCore 0.8.0),
+(Android `com.unilitix:unilitix-android` 1.11.2, iOS UnilitixCore 0.8.0),
 like Sentry's and Datadog's Flutter SDKs. Until 2.7.4 the SDK re-implemented
 the engine in Dart (sessions, queue, uploads, retry), so Flutter apps
 behaved slightly differently from native ones (the 2.x rows of the contract's
@@ -82,7 +82,7 @@ behaves exactly like a native app. Upgrading: see [MIGRATION.md](MIGRATION.md).
   dependencies came in. It is re-measured on the first green 3.0.0 build.
 
 ### Release order
-1. `com.unilitix:unilitix-android:1.11.1` on Maven Central.
+1. `com.unilitix:unilitix-android:1.11.2` on Maven Central.
 2. UnilitixCore 0.8.0 vendored with `scripts/sync-ios-core.sh` (the script
    now vendors the public facade too).
 3. Tag `v3.0.0` here.

@@ -45,7 +45,7 @@ dependencies {
     // retries, device/network context, JVM + NDK crashes and ANRs. The plugin
     // only bridges Dart to it (see UnilitixPlugin.kt). Keep in step with
     // the version in README.md "Native SDK versions".
-    implementation 'com.unilitix:unilitix-android:1.11.1'
+    implementation 'com.unilitix:unilitix-android:1.11.2'
 
     // Periodic upload of the power-outage log (only scheduled when the app
     // opts in). Plain work-runtime rather than -ktx: the worker is a plain
